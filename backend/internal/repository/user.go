@@ -126,6 +126,11 @@ func (r *UserRepo) CountSuperusers(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+// SoftDelete 软删除用户。
+func (r *UserRepo) SoftDelete(ctx context.Context, id uint) error {
+	return conn(ctx, r.db).Delete(&model.User{}, id).Error
+}
+
 // ListFilter 用户列表筛选条件。
 type ListFilter struct {
 	Keyword string
@@ -160,7 +165,8 @@ func (r *UserRepo) List(ctx context.Context, f ListFilter, limit, offset int) ([
 	}
 
 	var list []model.User
-	err := q.Order("id ASC").Limit(limit).Offset(offset).Find(&list).Error
+	err := q.Preload("Memberships").Preload("Memberships.Subject").
+		Order("id ASC").Limit(limit).Offset(offset).Find(&list).Error
 	if err != nil {
 		return nil, 0, err
 	}

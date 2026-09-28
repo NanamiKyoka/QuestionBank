@@ -96,8 +96,9 @@ func NewSubjectResponse(s *model.Subject, role model.SubjectRole) SubjectRespons
 }
 
 // MemberUpsertRequest 添加或修改学科成员。
+// UserID 由路由路径提供，handler 在绑定后覆写，因此不参与请求体校验。
 type MemberUpsertRequest struct {
-	UserID uint              `json:"user_id" binding:"required"`
+	UserID uint              `json:"user_id"`
 	Role   model.SubjectRole `json:"role" binding:"required,oneof=viewer editor manager"`
 }
 

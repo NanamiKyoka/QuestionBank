@@ -29,6 +29,7 @@ type Deps struct {
 	KnowledgePoints *service.KnowledgePointService
 	Tags            *service.TagService
 	Questions       *service.QuestionService
+	Users           *service.UserService
 }
 
 const apiPrefix = "/api/v1"
@@ -75,6 +76,7 @@ func New(d Deps) *gin.Engine {
 	registerKnowledgePointRoutes(v1, d)
 	registerTagRoutes(v1, d)
 	registerQuestionRoutes(v1, d)
+	registerUserRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -201,5 +203,24 @@ func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
 		q.POST("/:id/submit", h.Submit)
 		q.POST("/:id/review", h.Review)
 		q.GET("/:id/review-logs", h.ReviewLogs)
+	}
+}
+
+func registerUserRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewUserHandler(d.Users)
+
+	// 权限自查询挂在 /auth/me 下，既语义正确，也避免与 /users/:id 的
+	// 通配符在同一层冲突。
+	g.GET("/auth/me/permissions", middleware.RequireAuth(), h.Permissions)
+
+	users := g.Group("/users")
+	users.Use(middleware.RequireAuth(), middleware.RequireSuperuser())
+	{
+		users.GET("", h.List)
+		users.POST("", h.Create)
+		users.GET("/:id", h.Get)
+		users.PUT("/:id", h.Update)
+		users.DELETE("/:id", h.Delete)
+		users.POST("/:id/password", h.ResetPassword)
 	}
 }

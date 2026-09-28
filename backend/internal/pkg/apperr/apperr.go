@@ -21,11 +21,9 @@ const (
 	CodeOK Code = 0
 
 	// 400 参数/请求错误
-	CodeInvalidParam   Code = 40001
-	CodeBindingFailed  Code = 40002
-	CodeWeakPassword   Code = 40003
-	CodeUsernameTaken  Code = 40004
-	CodeCannotSelfLock Code = 40005
+	CodeInvalidParam  Code = 40001
+	CodeBindingFailed Code = 40002
+	CodeWeakPassword  Code = 40003
 
 	// 401 未认证
 	CodeUnauthorized    Code = 40101
@@ -44,6 +42,8 @@ const (
 	CodeRevisionConflict Code = 40901
 	CodeFolderNotEmpty   Code = 40902
 	CodeDuplicateName    Code = 40903
+	CodeUsernameTaken    Code = 40904
+	CodeCannotSelfLock   Code = 40905
 
 	// 422 语义错误
 	CodeUnprocessable  Code = 42201

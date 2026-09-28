@@ -159,14 +159,17 @@ const (
 )
 
 // rolePermissions 唯一的角色→权限映射表。
+//
+// 三个角色刻意保持职责分离：录入（editor）与审核（manager）不是同一个人。
+// 如果把 review_question 也给 editor，那么最常见的编辑角色录入的题会直接发布，
+// 审核流程就被架空了——所以这里只给 manager。
 var rolePermissions = map[SubjectRole]map[Permission]bool{
 	SubjectRoleViewer: {
 		PermViewQuestion: true,
 	},
 	SubjectRoleEditor: {
-		PermViewQuestion:   true,
-		PermEditQuestion:   true,
-		PermReviewQuestion: true,
+		PermViewQuestion: true,
+		PermEditQuestion: true,
 	},
 	SubjectRoleManager: {
 		PermViewQuestion:   true,
