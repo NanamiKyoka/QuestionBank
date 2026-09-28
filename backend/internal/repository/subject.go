@@ -170,3 +170,36 @@ func (r *SubjectRepo) SetLastSubject(ctx context.Context, userID uint, subjectID
 		Where("id = ?", userID).
 		Update("last_subject_id", subjectID).Error
 }
+
+// SubjectDependents 学科的从属数据统计。
+type SubjectDependents struct {
+	Questions       int64
+	KnowledgePoints int64
+	Papers          int64
+	Members         int64
+}
+
+// CountDependents 统计学科下挂了多少数据，用于删除前的安全检查。
+func (r *SubjectRepo) CountDependents(ctx context.Context, subjectID uint) (SubjectDependents, error) {
+	var d SubjectDependents
+	db := conn(ctx, r.db)
+
+	if err := db.Model(&model.Question{}).Where("subject_id = ?", subjectID).Count(&d.Questions).Error; err != nil {
+		return d, err
+	}
+	if err := db.Model(&model.KnowledgePoint{}).Where("subject_id = ?", subjectID).Count(&d.KnowledgePoints).Error; err != nil {
+		return d, err
+	}
+	if err := db.Model(&model.Paper{}).Where("subject_id = ?", subjectID).Count(&d.Papers).Error; err != nil {
+		return d, err
+	}
+	if err := db.Model(&model.SubjectMember{}).Where("subject_id = ?", subjectID).Count(&d.Members).Error; err != nil {
+		return d, err
+	}
+	return d, nil
+}
+
+// SoftDelete 软删除学科。
+func (r *SubjectRepo) SoftDelete(ctx context.Context, id uint) error {
+	return conn(ctx, r.db).Delete(&model.Subject{}, id).Error
+}

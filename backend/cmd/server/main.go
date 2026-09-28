@@ -81,10 +81,13 @@ func run() error {
 	authSvc := service.NewAuthService(repos, tokens, cfg.App.Name, state)
 
 	engine := router.New(router.Deps{
-		Config: cfg,
-		DB:     gdb,
-		Auth:   authSvc,
-		Tokens: tokens,
+		Config:          cfg,
+		DB:              gdb,
+		Tokens:          tokens,
+		Auth:            authSvc,
+		Subjects:        service.NewSubjectService(repos),
+		KnowledgePoints: service.NewKnowledgePointService(repos),
+		Tags:            service.NewTagService(repos),
 	})
 
 	srv := &http.Server{

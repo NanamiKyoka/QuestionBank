@@ -22,15 +22,17 @@ import (
 type Deps struct {
 	Config *config.Config
 	DB     *gorm.DB
-	Auth   *service.AuthService
 	Tokens *jwtx.Manager
+
+	Auth            *service.AuthService
+	Subjects        *service.SubjectService
+	KnowledgePoints *service.KnowledgePointService
+	Tags            *service.TagService
 }
 
-// API 前缀。
 const apiPrefix = "/api/v1"
 
-// setupExemptPaths 未初始化时也必须放行的路径。
-// 否则前端无法探测状态、也无法完成初始化。
+// setupExemptPaths 未初始化时也必须放行的路径，否则前端既探测不到状态也完不成初始化。
 var setupExemptPaths = []string{
 	apiPrefix + "/system/health",
 	apiPrefix + "/system/version",
@@ -50,28 +52,27 @@ func New(d Deps) *gin.Engine {
 	r := gin.New()
 	r.RedirectTrailingSlash = false
 
-	// 中间件顺序即执行顺序，不要随意调整。
 	r.Use(
 		middleware.RequestID(),
 		middleware.Recovery(),
 		middleware.AccessLog(),
 		middleware.CORS(d.Config.Server.CORSAllowOrigins),
 	)
-
-	userRepo := repository.NewUserRepo(d.DB)
-	r.Use(middleware.Auth(userRepo, d.Tokens))
+	r.Use(middleware.Auth(repository.NewUserRepo(d.DB), d.Tokens))
 
 	system := handler.NewSystemHandler(d.Auth, d.DB, d.Config.App.Name)
-	auth := handler.NewAuthHandler(d.Auth, d.Config.JWT.AccessTTL, d.Config.IsProduction())
 
-	// 容器探活不放在 /api 下，避免被 setup 门禁拦住。
+	// 容器探活放在 /api 之外，避免被 setup 门禁拦住。
 	r.GET("/healthz", system.Health)
 
 	v1 := r.Group(apiPrefix)
 	v1.Use(setupGuard(d.Auth.State()))
 
 	registerSystemRoutes(v1, system)
-	registerAuthRoutes(v1, auth)
+	registerAuthRoutes(v1, handler.NewAuthHandler(d.Auth, d.Config.JWT.AccessTTL, d.Config.IsProduction()))
+	registerSubjectRoutes(v1, d)
+	registerKnowledgePointRoutes(v1, d)
+	registerTagRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -91,9 +92,8 @@ func setupGuard(state *service.SetupState) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		path := c.Request.URL.Path
 		for _, exempt := range setupExemptPaths {
-			if path == exempt {
+			if c.Request.URL.Path == exempt {
 				c.Next()
 				return
 			}
@@ -104,29 +104,78 @@ func setupGuard(state *service.SetupState) gin.HandlerFunc {
 
 func registerSystemRoutes(g *gin.RouterGroup, h *handler.SystemHandler) {
 	sys := g.Group("/system")
-	{
-		sys.GET("/health", h.Health)
-		sys.GET("/version", h.Version)
-		sys.GET("/setup-status", h.SetupStatus)
-	}
+	sys.GET("/health", h.Health)
+	sys.GET("/version", h.Version)
+	sys.GET("/setup-status", h.SetupStatus)
 }
 
 func registerAuthRoutes(g *gin.RouterGroup, h *handler.AuthHandler) {
 	auth := g.Group("/auth")
-	{
-		// 无需登录
-		auth.POST("/setup", h.Setup)
-		auth.POST("/login", h.Login)
+	auth.POST("/setup", h.Setup)
+	auth.POST("/login", h.Login)
 
-		// 需要登录
-		me := auth.Group("")
-		me.Use(middleware.RequireAuth())
-		{
-			me.POST("/logout", h.Logout)
-			me.GET("/me", h.Me)
-			me.PATCH("/me", h.UpdateMe)
-			me.POST("/me/password", h.ChangePassword)
-			me.POST("/me/last-subject", h.UpdateLastSubject)
-		}
+	me := auth.Group("")
+	me.Use(middleware.RequireAuth())
+	me.POST("/logout", h.Logout)
+	me.GET("/me", h.Me)
+	me.PATCH("/me", h.UpdateMe)
+	me.POST("/me/password", h.ChangePassword)
+	me.POST("/me/last-subject", h.UpdateLastSubject)
+}
+
+func registerSubjectRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewSubjectHandler(d.Subjects)
+
+	subjects := g.Group("/subjects")
+	subjects.Use(middleware.RequireAuth())
+	{
+		subjects.GET("", h.List)
+		subjects.POST("", h.Create)
+		subjects.GET("/:subject_id", h.Get)
+		subjects.PUT("/:subject_id", h.Update)
+		subjects.DELETE("/:subject_id", h.Delete)
+		subjects.GET("/:subject_id/members", h.ListMembers)
+		subjects.PUT("/:subject_id/members/:user_id", h.UpsertMember)
+		subjects.DELETE("/:subject_id/members/:user_id", h.RemoveMember)
+	}
+}
+
+func registerKnowledgePointRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewKnowledgePointHandler(d.KnowledgePoints)
+
+	// 列表与新建挂在学科下；按 id 的操作放在顶层，避免与 /subjects 的通配符冲突。
+	g.GET("/subjects/:subject_id/knowledge-points", middleware.RequireAuth(), h.Tree)
+	g.POST("/subjects/:subject_id/knowledge-points", middleware.RequireAuth(), h.Create)
+
+	kps := g.Group("/knowledge-points")
+	kps.Use(middleware.RequireAuth())
+	{
+		kps.PUT("/:id", h.Update)
+		kps.PATCH("/:id/move", h.Move)
+		kps.DELETE("/:id", h.Delete)
+	}
+}
+
+func registerTagRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewTagHandler(d.Tags)
+
+	g.GET("/subjects/:subject_id/tag-categories", middleware.RequireAuth(), h.ListCategories)
+	g.POST("/subjects/:subject_id/tag-categories", middleware.RequireAuth(), h.CreateCategory)
+
+	cats := g.Group("/tag-categories")
+	cats.Use(middleware.RequireAuth())
+	{
+		cats.PUT("/:id", h.UpdateCategory)
+		cats.DELETE("/:id", h.DeleteCategory)
+	}
+
+	g.GET("/subjects/:subject_id/tags", middleware.RequireAuth(), h.List)
+	g.POST("/subjects/:subject_id/tags", middleware.RequireAuth(), h.Create)
+
+	tags := g.Group("/tags")
+	tags.Use(middleware.RequireAuth())
+	{
+		tags.PUT("/:id", h.Update)
+		tags.DELETE("/:id", h.Delete)
 	}
 }
