@@ -88,6 +88,9 @@ func run() error {
 		slog.Warn("系统尚未初始化，所有业务接口将返回 503，请访问安装向导")
 	}
 
+	activitySvc := service.NewActivityService(repos)
+	activitySvc.Start(context.Background())
+
 	authSvc := service.NewAuthService(repos, tokens, cfg.App.Name, state)
 	aiConfigSvc := service.NewAIConfigService(repos, cipher,
 		cfg.AI.RequestTimeout, cfg.AI.MaxRetries)
@@ -130,7 +133,9 @@ func run() error {
 				MaxToolCalls: cfg.AI.MaxToolCalls,
 				WallClock:    cfg.AI.WallClock,
 			}),
-		Vectors: vectorSvc,
+		Vectors:    vectorSvc,
+		Stats:      service.NewStatsService(repos),
+		Activities: activitySvc,
 	})
 
 	srv := &http.Server{

@@ -30,6 +30,8 @@ type Repos struct {
 	ChatSessions    *repository.ChatSessionRepo
 	ChatMessages    *repository.ChatMessageRepo
 	Vectors         *repository.VectorRepo
+	Stats           *repository.StatsRepo
+	Activities      *repository.ActivityRepo
 	Tx              *repository.TxManager
 }
 
@@ -51,6 +53,8 @@ func NewRepos(db *gorm.DB) *Repos {
 		ChatSessions:    repository.NewChatSessionRepo(db),
 		ChatMessages:    repository.NewChatMessageRepo(db),
 		Vectors:         repository.NewVectorRepo(db),
+		Stats:           repository.NewStatsRepo(db),
+		Activities:      repository.NewActivityRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }

@@ -36,6 +36,8 @@ type Deps struct {
 	Imports         *service.ImportService
 	Chat            *service.ChatService
 	Vectors         *service.VectorService
+	Stats           *service.StatsService
+	Activities      *service.ActivityService
 }
 
 const apiPrefix = "/api/v1"
@@ -68,6 +70,14 @@ func New(d Deps) *gin.Engine {
 	)
 	r.Use(middleware.Auth(repository.NewUserRepo(d.DB), d.Tokens))
 
+	// 审计日志记录写操作。放在 Auth 之后，才能拿到当前用户。
+	// 排除登录与初始化：这两条要么还没有用户身份，要么会记录密码相关操作。
+	r.Use(middleware.ActivityLogger(d.Activities, []string{
+		apiPrefix + "/auth/login",
+		apiPrefix + "/auth/setup",
+		apiPrefix + "/setup",
+	}))
+
 	system := handler.NewSystemHandler(d.Auth, d.DB, d.Config.App.Name)
 
 	// 容器探活放在 /api 之外，避免被 setup 门禁拦住。
@@ -88,6 +98,8 @@ func New(d Deps) *gin.Engine {
 	registerImportRoutes(v1, d)
 	registerChatRoutes(v1, d)
 	registerVectorRoutes(v1, d)
+	registerStatsRoutes(v1, d)
+	registerActivityRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -329,6 +341,19 @@ func registerChatRoutes(g *gin.RouterGroup, d Deps) {
 		// 前端执行完客户端工具后回传，唤醒等待中的运行。
 		chat.POST("/runs/:run_id/tool-result", h.ResolveClientTool)
 	}
+}
+
+func registerActivityRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewActivityHandler(d.Activities)
+	// 审计日志含全部用户的操作记录，仅管理员可见。
+	g.GET("/activity-logs", middleware.RequireAuth(), h.List)
+}
+
+func registerStatsRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewStatsHandler(d.Stats)
+
+	g.GET("/subjects/:subject_id/stats", middleware.RequireAuth(), h.Subject)
+	g.GET("/stats/overview", middleware.RequireAuth(), h.Global)
 }
 
 func registerVectorRoutes(g *gin.RouterGroup, d Deps) {

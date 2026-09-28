@@ -42,9 +42,15 @@ type ActivityLog struct {
 	IP        string `gorm:"size:64" json:"ip"`
 	UserAgent string `gorm:"size:255" json:"user_agent"`
 
-	StatusCode int  `json:"status_code"`
-	DurationMs int  `json:"duration_ms"`
-	Success    bool `gorm:"not null;default:true" json:"success"`
+	StatusCode int `json:"status_code"`
+	DurationMs int `json:"duration_ms"`
+	// Success 刻意**不设 default**。
+	//
+	// ⚠️ GORM 的坑：带 default 标签的字段在插入时会跳过零值，
+	// 让数据库去填默认值。于是 success=false 会被丢掉、落库成 true——
+	// 审计日志就会声称每一次失败的操作都成功了，而且完全静默。
+	// 这个字段的唯一写入方（审计中间件）总是显式赋值，因此不需要默认值。
+	Success bool `gorm:"not null" json:"success"`
 
 	// Detail 额外上下文（错误信息、变更字段名等）。
 	Detail JSON `json:"detail,omitempty"`
