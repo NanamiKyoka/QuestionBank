@@ -67,7 +67,7 @@ func NewRuntime(provider ai.Provider, registry *Registry, channel *Channel, budg
 		provider: provider,
 		registry: registry,
 		channel:  channel,
-		budget:   budget.normalize(),
+		budget:   budget.Normalize(),
 	}
 }
 
@@ -152,7 +152,13 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest, emit func(Event) erro
 	}
 
 	var (
-		fullText      string
+		// fullText 整轮对话累计的文本，仅用于日志与预算耗尽时的兜底展示。
+		fullText string
+		// finalText 最后一轮的文本，也就是"最终回答"。
+		//
+		// 必须与 fullText 分开：中间的带工具调用轮已经通过 AssistantTurn
+		// 单独落库了，如果 RunFinished 再带上累计文本，调用方会重复保存一遍。
+		finalText     string
 		stopReason    = StopCompleted
 		toolCallsUsed int
 		stepIdx       int
@@ -213,11 +219,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest, emit func(Event) erro
 				return nil
 			}
 			finish(model.AgentRunFailed, err.Error())
-			_ = emit(&RunFailed{RunID: req.RunID, Error: humanize(err)})
+			_ = emit(&RunFailed{RunID: req.RunID, Error: HumanizeError(err)})
 			return err
 		}
 
 		fullText += turnText
+		finalText = turnText
 		usage.PromptTokens += turnUsage.PromptTokens
 		usage.CompletionTokens += turnUsage.CompletionTokens
 
@@ -289,7 +296,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest, emit func(Event) erro
 	}
 
 	finish(model.AgentRunDone, "")
-	return emit(&RunFinished{RunID: req.RunID, Text: fullText, StopReason: stopReason})
+	return emit(&RunFinished{RunID: req.RunID, Text: finalText, StopReason: stopReason})
 }
 
 // streamTurn 跑一轮模型调用，收集文本与工具调用。
@@ -367,7 +374,7 @@ func (r *Runtime) dispatch(ctx context.Context, req RunRequest, tc ai.ToolCall, 
 	result, err := tool.Handler(ctx, call)
 	if err != nil {
 		// 领域错误对用户是"没有权限"这类信息，对模型则是明确的纠正信号。
-		return ErrorResult("%s", humanize(err))
+		return ErrorResult("%s", HumanizeError(err))
 	}
 	return result
 }
@@ -390,7 +397,7 @@ func (r *Runtime) dispatchClientTool(
 	if tool.Prepare != nil {
 		out, err := tool.Prepare(ctx, call)
 		if err != nil {
-			return ErrorResult("参数校验未通过：%s", humanize(err))
+			return ErrorResult("参数校验未通过：%s", HumanizeError(err))
 		}
 		prepared = out
 	}
@@ -490,13 +497,16 @@ func truncate(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// humanize 把错误翻译成模型或用户能理解的话。
-func humanize(err error) string {
+// HumanizeError 把错误翻译成模型或用户能理解的话。
+//
+// 导出给传输层复用：运行期错误既可能来自领域层（可读文案），
+// 也可能来自模型供应商（英文原文）。两处各写一套会造成
+// 同一个错误在事件帧与响应体里说法不一致。
+func HumanizeError(err error) string {
 	if err == nil {
 		return ""
 	}
-	// 领域错误（无权限、找不到、校验失败）本身已经是可读文案，
-	// 直接回喂给模型，它据此换个做法或告诉用户。
+	// 领域错误（无权限、找不到、校验失败）本身已经是可读文案。
 	var de *apperr.Error
 	if errors.As(err, &de) {
 		if de.Detail != "" {
@@ -516,5 +526,7 @@ func humanize(err error) string {
 	case errors.Is(err, ai.ErrCanceled):
 		return "已取消"
 	}
-	return err.Error()
+	// 其它错误（多为供应商返回的英文原文）截断后原样透出，
+	// 至少能让用户看到"是哪一步出的问题"。
+	return truncate(err.Error(), 300)
 }

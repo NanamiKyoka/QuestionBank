@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/NanamiKyoka/questionmind/internal/aiagent"
 	"github.com/NanamiKyoka/questionmind/internal/config"
 	"github.com/NanamiKyoka/questionmind/internal/db"
 	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
@@ -107,6 +108,16 @@ func run() error {
 			cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)),
 		AIConfig: aiConfigSvc,
 		Imports:  service.NewImportService(repos, aiConfigSvc, questionSvc),
+		Chat: service.NewChatService(repos, aiConfigSvc, questionSvc,
+			service.NewKnowledgePointService(repos),
+			service.NewTagService(repos),
+			service.NewPaperService(repos),
+			aiagent.NewChannel(0),
+			aiagent.Budget{
+				MaxTurns:     cfg.AI.MaxTurns,
+				MaxToolCalls: cfg.AI.MaxToolCalls,
+				WallClock:    cfg.AI.WallClock,
+			}),
 	})
 
 	srv := &http.Server{

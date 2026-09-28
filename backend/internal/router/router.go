@@ -34,6 +34,7 @@ type Deps struct {
 	Exports         *service.ExportService
 	AIConfig        *service.AIConfigService
 	Imports         *service.ImportService
+	Chat            *service.ChatService
 }
 
 const apiPrefix = "/api/v1"
@@ -84,6 +85,7 @@ func New(d Deps) *gin.Engine {
 	registerPaperRoutes(v1, d)
 	registerAIConfigRoutes(v1, d)
 	registerImportRoutes(v1, d)
+	registerChatRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -304,5 +306,25 @@ func registerImportRoutes(g *gin.RouterGroup, d Deps) {
 		imports.POST("/extract", h.Extract)
 		imports.POST("/commit", h.Commit)
 		imports.GET("", h.ListTasks)
+	}
+}
+
+func registerChatRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewChatHandler(d.Chat)
+
+	chat := g.Group("/chat")
+	chat.Use(middleware.RequireAuth())
+	{
+		chat.GET("/sessions", h.ListSessions)
+		chat.POST("/sessions", h.CreateSession)
+		chat.GET("/sessions/:id", h.GetSession)
+		chat.PATCH("/sessions/:id", h.UpdateSession)
+		chat.DELETE("/sessions/:id", h.DeleteSession)
+		chat.GET("/sessions/:id/messages", h.ListMessages)
+		// 这条以 SSE 流式返回。
+		chat.POST("/sessions/:id/messages", h.SendMessage)
+
+		// 前端执行完客户端工具后回传，唤醒等待中的运行。
+		chat.POST("/runs/:run_id/tool-result", h.ResolveClientTool)
 	}
 }

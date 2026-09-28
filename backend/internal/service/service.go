@@ -27,6 +27,8 @@ type Repos struct {
 	AIProviders     *repository.AIProviderRepo
 	AIModels        *repository.AIModelRepo
 	ImportTasks     *repository.ImportTaskRepo
+	ChatSessions    *repository.ChatSessionRepo
+	ChatMessages    *repository.ChatMessageRepo
 	Tx              *repository.TxManager
 }
 
@@ -45,6 +47,8 @@ func NewRepos(db *gorm.DB) *Repos {
 		AIProviders:     repository.NewAIProviderRepo(db),
 		AIModels:        repository.NewAIModelRepo(db),
 		ImportTasks:     repository.NewImportTaskRepo(db),
+		ChatSessions:    repository.NewChatSessionRepo(db),
+		ChatMessages:    repository.NewChatMessageRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }

@@ -56,12 +56,16 @@ const (
 	CodeTooManyRequests Code = 42901
 
 	// 500 服务端
-	CodeInternal      Code = 50001
-	CodeAIUnavailable Code = 50002
-	CodeExportFailed  Code = 50003
+	CodeInternal     Code = 50001
+	CodeExportFailed Code = 50003
 
-	// 503 未初始化
+	// 503 依赖未就绪 / 未初始化
+	//
+	// AI 未配置属于"服务暂时不可用"而不是"服务器内部错误"：
+	// 它是一个可预期的配置状态，返回 500 会让人以为是程序 bug，
+	// 也会让前端的错误处理走到"请联系管理员"这种无用的分支上。
 	CodeSetupRequired Code = 50301
+	CodeAIUnavailable Code = 50302
 )
 
 // httpStatus 错误码 → HTTP 状态码。取错误码的前三位。

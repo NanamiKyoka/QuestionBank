@@ -140,8 +140,8 @@ func DefaultBudget() Budget {
 	return Budget{MaxTurns: 5, MaxToolCalls: 20, WallClock: 3 * time.Minute}
 }
 
-// normalize 补齐未设置的限制，避免 0 值导致"一次都跑不了"。
-func (b Budget) normalize() Budget {
+// Normalize 补齐未设置的限制，避免 0 值导致"一次都跑不了"。
+func (b Budget) Normalize() Budget {
 	if b.MaxTurns <= 0 {
 		b.MaxTurns = 5
 	}
