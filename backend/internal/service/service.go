@@ -21,6 +21,7 @@ type Repos struct {
 	KnowledgePoints *repository.KnowledgePointRepo
 	Tags            *repository.TagRepo
 	TagCategories   *repository.TagCategoryRepo
+	Questions       *repository.QuestionRepo
 	Tx              *repository.TxManager
 }
 
@@ -33,6 +34,7 @@ func NewRepos(db *gorm.DB) *Repos {
 		KnowledgePoints: repository.NewKnowledgePointRepo(db),
 		Tags:            repository.NewTagRepo(db),
 		TagCategories:   repository.NewTagCategoryRepo(db),
+		Questions:       repository.NewQuestionRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }

@@ -1,0 +1,382 @@
+package service
+
+import (
+	"context"
+
+	"github.com/NanamiKyoka/questionmind/internal/model"
+	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
+	"github.com/NanamiKyoka/questionmind/internal/schema"
+)
+
+// Update 更新题目。
+//
+// 只有"影响题目呈现"的字段变化才递增 content_revision：
+// 试卷节点记着这个值用来判断是否需要同步分数等内容。
+// 如果改来源、改可见性也递增，所有引用了这道题的试卷都会误报"已更新"。
+func (s *QuestionService) Update(ctx context.Context, user *model.User, id uint, req *schema.QuestionUpdateRequest) (*schema.QuestionDetail, error) {
+	current, err := s.repos.Questions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorize(user, model.PermEditQuestion, current.SubjectID); err != nil {
+		return nil, err
+	}
+
+	// 先合并出"更新后"的完整状态，再整体校验一次。
+	// 这样"只改选项没改答案"这类局部请求也能被正确拦截。
+	qtype := current.QuestionType
+	if req.QuestionType != nil {
+		qtype = *req.QuestionType
+	}
+
+	stem := current.Stem
+	if !req.Stem.IsEmpty() {
+		stem = req.Stem
+	}
+
+	var currentOptions []model.Option
+	if !current.Options.IsEmpty() {
+		_ = current.Options.Into(&currentOptions)
+	}
+	var answer model.AnswerSpec
+	if !current.Answer.IsEmpty() {
+		_ = current.Answer.Into(&answer)
+	}
+	if req.Answer != nil {
+		answer = *req.Answer
+	}
+
+	optionInputs := make([]schema.OptionInput, 0, len(currentOptions))
+	if req.Options != nil {
+		optionInputs = *req.Options
+	} else {
+		for i := range currentOptions {
+			optionInputs = append(optionInputs, schema.OptionInput{
+				Label:   currentOptions[i].Label,
+				Content: currentOptions[i].Content,
+			})
+		}
+	}
+
+	tagIDs := req.TagIDs
+	if tagIDs == nil {
+		tags, err := s.repos.Questions.TagsForQuestions(ctx, []uint{id})
+		if err != nil {
+			return nil, apperr.ErrInternal.WithCause(err)
+		}
+		ids := make([]uint, 0, len(tags[id]))
+		for _, t := range tags[id] {
+			ids = append(ids, t.ID)
+		}
+		tagIDs = &ids
+	}
+	kpIDs := req.KnowledgePointIDs
+	if kpIDs == nil {
+		kps, err := s.repos.Questions.KnowledgePointsForQuestions(ctx, []uint{id})
+		if err != nil {
+			return nil, apperr.ErrInternal.WithCause(err)
+		}
+		ids := make([]uint, 0, len(kps[id]))
+		for _, k := range kps[id] {
+			ids = append(ids, k.ID)
+		}
+		kpIDs = &ids
+	}
+
+	prep, err := s.prepare(ctx, current.SubjectID, current.ParentID, qtype, stem,
+		optionInputs, answer, *tagIDs, *kpIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	fields := map[string]any{
+		"updated_by":    user.ID,
+		"question_type": qtype,
+		"stem":          stem,
+		"stem_text":     prep.stemText,
+	}
+	if req.QuestionType != nil || req.Options != nil || req.Answer != nil || !req.Stem.IsEmpty() {
+		fields["options"] = prep.optionsJSON
+		fields["answer"] = prep.answerJSON
+	}
+	if req.Analysis != nil && !req.Analysis.IsEmpty() {
+		fields["analysis"] = req.Analysis
+	}
+	if req.Solution != nil && !req.Solution.IsEmpty() {
+		fields["solution"] = req.Solution
+	}
+	if req.Summary != nil && !req.Summary.IsEmpty() {
+		fields["summary"] = req.Summary
+	}
+	if req.Difficulty != nil {
+		fields["difficulty"] = *req.Difficulty
+	}
+	if req.Visibility != nil && req.Visibility.Valid() {
+		fields["visibility"] = *req.Visibility
+	}
+	if req.Source != nil {
+		fields["source"] = *req.Source
+	}
+
+	contentChanged := req.Stem != nil || req.Options != nil || req.Answer != nil ||
+		req.QuestionType != nil || req.Analysis != nil || req.Solution != nil || req.Summary != nil
+
+	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
+		if err := s.repos.Questions.UpdateFields(ctx, id, fields); err != nil {
+			return apperr.From(err)
+		}
+		if req.TagIDs != nil {
+			if err := s.repos.Questions.SetTags(ctx, id, *req.TagIDs); err != nil {
+				return apperr.ErrInternal.WithCause(err)
+			}
+		}
+		if req.KnowledgePointIDs != nil {
+			if err := s.repos.Questions.SetKnowledgePoints(ctx, id, *req.KnowledgePointIDs); err != nil {
+				return apperr.ErrInternal.WithCause(err)
+			}
+		}
+		if contentChanged {
+			return s.repos.Questions.BumpContentRevision(ctx, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return s.Get(ctx, user, id)
+}
+
+// Delete 批量软删除。同时删除其子题，避免留下孤儿数据。
+//
+// 无权删除的条目会被**跳过**而不是整体报错：批量操作里有一条不满足条件
+// 就全部失败，用户体验很差，而且用户往往无法判断是哪一条。
+// 返回实际删除的 id，前端可以提示"已删除 N 条，跳过 M 条"。
+func (s *QuestionService) Delete(ctx context.Context, user *model.User, ids []uint) (deleted []uint, skipped []uint, err error) {
+	allowed := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		q, err := s.repos.Questions.Get(ctx, id)
+		if err != nil {
+			if apperr.Is(err, apperr.CodeNotFound) {
+				skipped = append(skipped, id)
+				continue
+			}
+			return nil, nil, err
+		}
+		if !s.canDelete(user, q) {
+			skipped = append(skipped, id)
+			continue
+		}
+		allowed = append(allowed, id)
+	}
+	if len(allowed) == 0 {
+		return nil, skipped, nil
+	}
+
+	var targets []uint
+	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
+		var err error
+		targets, err = s.repos.Questions.ChildIDs(ctx, allowed)
+		if err != nil {
+			return apperr.ErrInternal.WithCause(err)
+		}
+		return s.repos.Questions.SoftDelete(ctx, targets)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return allowed, skipped, nil
+}
+
+// Restore 从回收站恢复。
+func (s *QuestionService) Restore(ctx context.Context, user *model.User, id uint) error {
+	q, err := s.repos.Questions.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := authorize(user, model.PermEditQuestion, q.SubjectID); err != nil {
+		return err
+	}
+	if err := s.repos.Questions.Restore(ctx, []uint{id}); err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	return nil
+}
+
+// Submit 提交审核：草稿 → 待审。
+func (s *QuestionService) Submit(ctx context.Context, user *model.User, id uint) (*schema.QuestionDetail, error) {
+	q, err := s.repos.Questions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorize(user, model.PermEditQuestion, q.SubjectID); err != nil {
+		return nil, err
+	}
+	if q.Status != model.QuestionStatusDraft {
+		return nil, apperr.New(apperr.CodeConflict, "只有草稿状态才能提交审核").
+			WithDetail("当前状态 %s", q.Status)
+	}
+	if err := s.repos.Questions.UpdateFields(ctx, id, map[string]any{
+		"status":     model.QuestionStatusPending,
+		"updated_by": user.ID,
+	}); err != nil {
+		return nil, apperr.From(err)
+	}
+	return s.Get(ctx, user, id)
+}
+
+// Review 审核题目。
+//
+// 通过时累加审核次数；达到学科配置的阈值才发布，否则继续留在待审队列等下一次审核。
+// 这样"重要学科要求两人复核"可以只通过配置表达，无需改代码。
+func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint, req *schema.ReviewRequest) (*schema.QuestionDetail, error) {
+	q, err := s.repos.Questions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorize(user, model.PermReviewQuestion, q.SubjectID); err != nil {
+		return nil, err
+	}
+	if q.Status != model.QuestionStatusDraft && q.Status != model.QuestionStatusPending {
+		return nil, apperr.New(apperr.CodeConflict, "该状态下的题目无需审核").
+			WithDetail("当前状态 %s", q.Status)
+	}
+
+	from := q.Status
+	to := model.QuestionStatusDraft
+
+	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
+		switch req.Action {
+		case "approve":
+			if err := s.repos.Questions.IncrementReviewCount(ctx, id); err != nil {
+				return apperr.ErrInternal.WithCause(err)
+			}
+			subject, err := s.repos.Subjects.Get(ctx, q.SubjectID)
+			if err != nil {
+				return err
+			}
+			// q.ReviewCount 是本次审核前的值，因此 +1 后再与阈值比较。
+			if q.ReviewCount+1 >= subject.ReviewThreshold {
+				to = model.QuestionStatusPublished
+			} else {
+				to = model.QuestionStatusPending
+			}
+		case "reject":
+			to = model.QuestionStatusDraft
+		default:
+			return apperr.New(apperr.CodeInvalidParam, "不支持的审核动作")
+		}
+
+		if err := s.repos.Questions.UpdateFields(ctx, id, map[string]any{
+			"status":     to,
+			"updated_by": user.ID,
+		}); err != nil {
+			return apperr.From(err)
+		}
+
+		return s.repos.Questions.AddReviewLog(ctx, &model.ReviewLog{
+			QuestionID: id,
+			ReviewerID: user.ID,
+			Action:     req.Action,
+			FromStatus: from,
+			ToStatus:   to,
+			Comment:    req.Comment,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return s.Get(ctx, user, id)
+}
+
+// ReviewLogs 返回题目的审核历史。
+func (s *QuestionService) ReviewLogs(ctx context.Context, user *model.User, id uint, limit int) ([]schema.ReviewLogResponse, error) {
+	q, err := s.repos.Questions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRead(user, q.SubjectID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+
+	logs, err := s.repos.Questions.ListReviewLogs(ctx, id, limit)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+
+	out := make([]schema.ReviewLogResponse, 0, len(logs))
+	for i := range logs {
+		l := &logs[i]
+		item := schema.ReviewLogResponse{
+			ID:         l.ID,
+			Action:     l.Action,
+			FromStatus: l.FromStatus,
+			ToStatus:   l.ToStatus,
+			Comment:    l.Comment,
+			ReviewerID: l.ReviewerID,
+			CreatedAt:  l.CreatedAt,
+		}
+		if l.Reviewer != nil {
+			item.Reviewer = l.Reviewer.DisplayName()
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// BatchUpdateSource 批量修改来源。无权修改的条目跳过。
+func (s *QuestionService) BatchUpdateSource(ctx context.Context, user *model.User, ids []uint, source string) (updated int, skipped []uint, err error) {
+	for _, id := range ids {
+		q, err := s.repos.Questions.Get(ctx, id)
+		if err != nil {
+			skipped = append(skipped, id)
+			continue
+		}
+		if !user.Can(model.PermEditQuestion, q.SubjectID) {
+			skipped = append(skipped, id)
+			continue
+		}
+		// 来源不影响题目呈现，因此不递增 content_revision。
+		if err := s.repos.Questions.UpdateFields(ctx, id, map[string]any{
+			"source":     source,
+			"updated_by": user.ID,
+		}); err != nil {
+			return updated, skipped, apperr.From(err)
+		}
+		updated++
+	}
+	return updated, skipped, nil
+}
+
+// Stats 学科题库统计，供仪表盘使用。
+type Stats struct {
+	Total    int64                          `json:"total"`
+	ByStatus map[model.QuestionStatus]int64 `json:"by_status"`
+	ByType   map[model.QuestionType]int64   `json:"by_type"`
+}
+
+// Stats 返回学科题目统计。
+func (s *QuestionService) Stats(ctx context.Context, user *model.User, subjectID uint) (*Stats, error) {
+	if err := authorizeRead(user, subjectID); err != nil {
+		return nil, err
+	}
+
+	byStatus, err := s.repos.Questions.StatusCounts(ctx, subjectID)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	byType, err := s.repos.Questions.TypeCounts(ctx, subjectID)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+
+	var total int64
+	for _, n := range byStatus {
+		total += n
+	}
+	return &Stats{Total: total, ByStatus: byStatus, ByType: byType}, nil
+}

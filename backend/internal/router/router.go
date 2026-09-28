@@ -28,6 +28,7 @@ type Deps struct {
 	Subjects        *service.SubjectService
 	KnowledgePoints *service.KnowledgePointService
 	Tags            *service.TagService
+	Questions       *service.QuestionService
 }
 
 const apiPrefix = "/api/v1"
@@ -73,6 +74,7 @@ func New(d Deps) *gin.Engine {
 	registerSubjectRoutes(v1, d)
 	registerKnowledgePointRoutes(v1, d)
 	registerTagRoutes(v1, d)
+	registerQuestionRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -177,5 +179,27 @@ func registerTagRoutes(g *gin.RouterGroup, d Deps) {
 	{
 		tags.PUT("/:id", h.Update)
 		tags.DELETE("/:id", h.Delete)
+	}
+}
+
+func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewQuestionHandler(d.Questions)
+
+	// 列表、新建、统计挂在学科下（统计路径更具体，需先注册）。
+	g.GET("/subjects/:subject_id/questions/stats", middleware.RequireAuth(), h.Stats)
+	g.GET("/subjects/:subject_id/questions", middleware.RequireAuth(), h.List)
+	g.POST("/subjects/:subject_id/questions", middleware.RequireAuth(), h.Create)
+
+	q := g.Group("/questions")
+	q.Use(middleware.RequireAuth())
+	{
+		q.POST("/batch-delete", h.BatchDelete)
+		q.POST("/batch-source", h.BatchUpdateSource)
+		q.GET("/:id", h.Get)
+		q.PUT("/:id", h.Update)
+		q.POST("/:id/restore", h.Restore)
+		q.POST("/:id/submit", h.Submit)
+		q.POST("/:id/review", h.Review)
+		q.GET("/:id/review-logs", h.ReviewLogs)
 	}
 }

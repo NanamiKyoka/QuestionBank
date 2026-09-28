@@ -88,6 +88,7 @@ func run() error {
 		Subjects:        service.NewSubjectService(repos),
 		KnowledgePoints: service.NewKnowledgePointService(repos),
 		Tags:            service.NewTagService(repos),
+		Questions:       service.NewQuestionService(repos),
 	})
 
 	srv := &http.Server{

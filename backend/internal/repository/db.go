@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -69,6 +70,16 @@ func (t *TxManager) Within(ctx context.Context, fn func(ctx context.Context) err
 	return nil
 }
 
-// DB 暴露底层连接，仅供需要方言判断等少数场景使用（如 SQLite 的 UPSERT 语法）。
-// service 层不应直接使用它。
+// DB 暴露底层连接，仅供需要方言判断等少数场景使用。service 层不应直接使用。
 func (t *TxManager) DB() *gorm.DB { return t.db }
+
+// escapeLike 转义 LIKE 通配符。
+//
+// 不转义的话，用户在搜索框里输入 "%" 就变成了"匹配一切"：
+// 既是正确性问题（搜索结果不对），也是一条廉价的性能攻击路径（全表扫描）。
+func escapeLike(s string) string {
+	if !strings.ContainsAny(s, `%_\`) {
+		return s
+	}
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}

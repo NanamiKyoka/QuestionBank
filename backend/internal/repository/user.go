@@ -178,18 +178,3 @@ func (r *UserRepo) Get(ctx context.Context, id uint) (*model.User, error) {
 	}
 	return &u, nil
 }
-
-// escapeLike 转义 LIKE 通配符，防止用户输入的 % 与 _ 变成通配符
-// 造成意外的全表匹配（既是正确性问题，也能被用来做性能攻击）。
-func escapeLike(s string) string {
-	out := make([]rune, 0, len(s))
-	for _, r := range s {
-		switch r {
-		case '%', '_', '\\':
-			out = append(out, '\\', r)
-		default:
-			out = append(out, r)
-		}
-	}
-	return string(out)
-}

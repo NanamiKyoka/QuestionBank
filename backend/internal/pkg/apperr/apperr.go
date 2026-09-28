@@ -40,6 +40,7 @@ const (
 	CodeNotFound Code = 40401
 
 	// 409 状态冲突
+	CodeConflict         Code = 40900
 	CodeRevisionConflict Code = 40901
 	CodeFolderNotEmpty   Code = 40902
 	CodeDuplicateName    Code = 40903

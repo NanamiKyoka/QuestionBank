@@ -153,19 +153,27 @@ type QuestionFilter struct {
 	Status     QuestionStatus
 	Difficulty int
 
-	KnowledgePointID uint
-	// KnowledgePointID 命中时是否包含其子知识点。
-	IncludeSubKnowledge bool
+	// KnowledgePointIDs 由 service 解析后的知识点 id 集合
+	// （含子树的展开结果），repository 只按集合过滤。
+	KnowledgePointIDs []uint
 
 	TagIDs []uint
-	// TagIDs 多个标签之间的关系：and（同时具备） / or（任一具备）
+	// TagMatch 多个标签之间的关系：and（同时具备）/ or（任一具备）
 	TagMatch string
 
 	CreatedBy uint
 	// RootOnly 只返回独立题（不含子题）。
 	RootOnly bool
-	// IncludeDeleted 是否包含已软删除的题目。
+	// IncludeDeleted 是否包含已软删除的题目（回收站）。
 	IncludeDeleted bool
+
+	// ---- 可见性 ----
+	// ViewerID 私有题判定：私有题仅创建者可见。
+	ViewerID uint
+	// CanViewPrivateAll 拥有 view_private_any 权限（管理员）可看他人私有题。
+	CanViewPrivateAll bool
+	// SubjectIDs 非 nil 时把结果限制在这些学科内；nil 表示不限制。
+	SubjectIDs map[uint]bool
 }
 
 // QuestionSort 排序方式。
