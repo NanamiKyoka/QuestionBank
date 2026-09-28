@@ -24,6 +24,8 @@ type Repos struct {
 	Questions       *repository.QuestionRepo
 	Papers          *repository.PaperRepo
 	PaperFolders    *repository.PaperFolderRepo
+	AIProviders     *repository.AIProviderRepo
+	AIModels        *repository.AIModelRepo
 	Tx              *repository.TxManager
 }
 
@@ -39,6 +41,8 @@ func NewRepos(db *gorm.DB) *Repos {
 		Questions:       repository.NewQuestionRepo(db),
 		Papers:          repository.NewPaperRepo(db),
 		PaperFolders:    repository.NewPaperFolderRepo(db),
+		AIProviders:     repository.NewAIProviderRepo(db),
+		AIModels:        repository.NewAIModelRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }

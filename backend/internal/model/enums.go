@@ -325,4 +325,17 @@ const (
 	SettingAISolvePrompt    = "ai_solve_prompt"
 	SettingRegistrationOpen = "registration_enabled"
 	SettingReviewThreshold  = "default_review_threshold"
+
+	// 当前生效的模型。存 model id 而不是模型名：模型名可能重复，
+	// 而 id 能唯一定位到"哪个供应商的哪个模型"。
+	SettingAITextModelID      = "ai_text_model_id"
+	SettingAIVisionModelID    = "ai_vision_model_id"
+	SettingAIEmbeddingModelID = "ai_embedding_model_id"
 )
+
+// SettingAIKeys 全部 AI 相关设置键，用于批量读取。
+var SettingAIKeys = []string{
+	SettingAITextModelID,
+	SettingAIVisionModelID,
+	SettingAIEmbeddingModelID,
+}

@@ -32,6 +32,7 @@ type Deps struct {
 	Users           *service.UserService
 	Papers          *service.PaperService
 	Exports         *service.ExportService
+	AIConfig        *service.AIConfigService
 }
 
 const apiPrefix = "/api/v1"
@@ -80,6 +81,7 @@ func New(d Deps) *gin.Engine {
 	registerQuestionRoutes(v1, d)
 	registerUserRoutes(v1, d)
 	registerPaperRoutes(v1, d)
+	registerAIConfigRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -265,4 +267,27 @@ func registerPaperRoutes(g *gin.RouterGroup, d Deps) {
 	ex := handler.NewExportHandler(d.Exports)
 	papers.GET("/:id/export", ex.ExportPaper)
 	papers.GET("/:id/versions/:version_no/export", ex.ExportVersion)
+}
+
+func registerAIConfigRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewAIConfigHandler(d.AIConfig)
+
+	// AI 配置涉及密钥与额度，整组仅管理员可用。
+	aiGroup := g.Group("/ai")
+	aiGroup.Use(middleware.RequireAuth(), middleware.RequireSuperuser())
+	{
+		aiGroup.GET("/providers", h.ListProviders)
+		aiGroup.POST("/providers", h.CreateProvider)
+		aiGroup.PUT("/providers/:id", h.UpdateProvider)
+		aiGroup.DELETE("/providers/:id", h.DeleteProvider)
+		aiGroup.POST("/providers/:id/test", h.TestProvider)
+
+		aiGroup.POST("/models", h.CreateModel)
+		aiGroup.PUT("/models/:id", h.UpdateModel)
+		aiGroup.DELETE("/models/:id", h.DeleteModel)
+
+		aiGroup.GET("/active-config", h.GetActiveConfig)
+		aiGroup.PUT("/active-config", h.SetActiveConfig)
+		aiGroup.GET("/interface-types", h.InterfaceTypes)
+	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/NanamiKyoka/questionmind/internal/config"
 	"github.com/NanamiKyoka/questionmind/internal/db"
 	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
+	"github.com/NanamiKyoka/questionmind/internal/pkg/cryptox"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/jwtx"
 	"github.com/NanamiKyoka/questionmind/internal/router"
 	"github.com/NanamiKyoka/questionmind/internal/service"
@@ -70,6 +71,13 @@ func run() error {
 	repos := service.NewRepos(gdb)
 	tokens := jwtx.NewManager(cfg.JWT.Secret, cfg.JWT.Issuer, cfg.JWT.AccessTTL)
 
+	// 字段加密器用 JWT 主密钥派生，因此不需要额外配置项；
+	// 但它对密钥做了不同的盐，两者不会互相削弱。
+	cipher, err := cryptox.NewCipher(cfg.JWT.Secret)
+	if err != nil {
+		return err
+	}
+
 	state := service.NewSetupState()
 	if err := state.Refresh(context.Background(), repos.Users); err != nil {
 		// 判定失败不阻断启动：中间件会保守地按"未初始化"处理。
@@ -94,6 +102,8 @@ func run() error {
 		Papers:          service.NewPaperService(repos),
 		Exports: service.NewExportService(repos, storage.NewLocal(
 			cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)),
+		AIConfig: service.NewAIConfigService(repos, cipher,
+			cfg.AI.RequestTimeout, cfg.AI.MaxRetries),
 	})
 
 	srv := &http.Server{
