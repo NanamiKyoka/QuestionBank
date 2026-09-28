@@ -88,6 +88,9 @@ func run() error {
 	}
 
 	authSvc := service.NewAuthService(repos, tokens, cfg.App.Name, state)
+	aiConfigSvc := service.NewAIConfigService(repos, cipher,
+		cfg.AI.RequestTimeout, cfg.AI.MaxRetries)
+	questionSvc := service.NewQuestionService(repos)
 
 	engine := router.New(router.Deps{
 		Config:          cfg,
@@ -97,13 +100,13 @@ func run() error {
 		Subjects:        service.NewSubjectService(repos),
 		KnowledgePoints: service.NewKnowledgePointService(repos),
 		Tags:            service.NewTagService(repos),
-		Questions:       service.NewQuestionService(repos),
+		Questions:       questionSvc,
 		Users:           service.NewUserService(repos),
 		Papers:          service.NewPaperService(repos),
 		Exports: service.NewExportService(repos, storage.NewLocal(
 			cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)),
-		AIConfig: service.NewAIConfigService(repos, cipher,
-			cfg.AI.RequestTimeout, cfg.AI.MaxRetries),
+		AIConfig: aiConfigSvc,
+		Imports:  service.NewImportService(repos, aiConfigSvc, questionSvc),
 	})
 
 	srv := &http.Server{

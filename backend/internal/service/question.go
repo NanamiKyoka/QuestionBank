@@ -402,7 +402,7 @@ func (s *QuestionService) checkKPOwnership(ctx context.Context, subjectID uint, 
 	if len(kpIDs) == 0 {
 		return nil
 	}
-	valid, err := s.repos.KnowledgePoints.IDBySubject(ctx, subjectID)
+	valid, err := s.repos.KnowledgePoints.IDsBySubject(ctx, subjectID)
 	if err != nil {
 		return apperr.ErrInternal.WithCause(err)
 	}

@@ -165,8 +165,8 @@ func (r *KnowledgePointRepo) RewriteSubtreePath(ctx context.Context, subjectID u
 		}).Error
 }
 
-// IDBySubject 返回某学科下全部知识点 ID，供批量校验引用合法性。
-func (r *KnowledgePointRepo) IDBySubject(ctx context.Context, subjectID uint) (map[uint]bool, error) {
+// IDsBySubject 返回某学科下全部知识点 ID，供批量校验引用合法性。
+func (r *KnowledgePointRepo) IDsBySubject(ctx context.Context, subjectID uint) (map[uint]bool, error) {
 	var ids []uint
 	err := conn(ctx, r.db).
 		Model(&model.KnowledgePoint{}).
@@ -180,4 +180,43 @@ func (r *KnowledgePointRepo) IDBySubject(ctx context.Context, subjectID uint) (m
 		set[id] = true
 	}
 	return set, nil
+}
+
+// NamesBySubject 返回学科下全部知识点名称，供拼进 AI 提示词。
+func (r *KnowledgePointRepo) NamesBySubject(ctx context.Context, subjectID uint) ([]string, error) {
+	var names []string
+	err := conn(ctx, r.db).
+		Model(&model.KnowledgePoint{}).
+		Where("subject_id = ?", subjectID).
+		Order("path ASC").
+		Pluck("name", &names).Error
+	return names, err
+}
+
+// IDsByNames 按名称批量查 id，返回 名称→id 映射。
+//
+// 名称匹配是**精确匹配**（区分大小写与否取决于数据库排序规则）。
+// 不做模糊匹配是刻意的：模糊匹配会把"单调性"错配到"函数单调性"上，
+// 这类错误在导入时很难被发现，却会长期污染题目的知识点归属。
+func (r *KnowledgePointRepo) IDsByNames(ctx context.Context, subjectID uint, names []string) (map[string]uint, error) {
+	out := make(map[string]uint, len(names))
+	if len(names) == 0 {
+		return out, nil
+	}
+	type row struct {
+		ID   uint
+		Name string
+	}
+	var rows []row
+	err := conn(ctx, r.db).Model(&model.KnowledgePoint{}).
+		Select("id, name").
+		Where("subject_id = ? AND name IN ?", subjectID, names).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.Name] = r.ID
+	}
+	return out, nil
 }

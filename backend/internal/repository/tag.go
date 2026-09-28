@@ -218,3 +218,38 @@ func (r *TagRepo) IDsBySubject(ctx context.Context, subjectID uint) (map[uint]bo
 	}
 	return set, nil
 }
+
+// NamesBySubject 返回学科下全部标签名称，供拼进 AI 提示词。
+func (r *TagRepo) NamesBySubject(ctx context.Context, subjectID uint) ([]string, error) {
+	var names []string
+	err := conn(ctx, r.db).
+		Model(&model.Tag{}).
+		Where("subject_id = ?", subjectID).
+		Order("sort_order ASC, id ASC").
+		Pluck("name", &names).Error
+	return names, err
+}
+
+// IDsByNames 按名称批量查标签 id（精确匹配，理由同知识点）。
+func (r *TagRepo) IDsByNames(ctx context.Context, subjectID uint, names []string) (map[string]uint, error) {
+	out := make(map[string]uint, len(names))
+	if len(names) == 0 {
+		return out, nil
+	}
+	type row struct {
+		ID   uint
+		Name string
+	}
+	var rows []row
+	err := conn(ctx, r.db).Model(&model.Tag{}).
+		Select("id, name").
+		Where("subject_id = ? AND name IN ?", subjectID, names).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.Name] = r.ID
+	}
+	return out, nil
+}

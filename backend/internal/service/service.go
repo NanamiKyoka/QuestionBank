@@ -26,6 +26,7 @@ type Repos struct {
 	PaperFolders    *repository.PaperFolderRepo
 	AIProviders     *repository.AIProviderRepo
 	AIModels        *repository.AIModelRepo
+	ImportTasks     *repository.ImportTaskRepo
 	Tx              *repository.TxManager
 }
 
@@ -43,6 +44,7 @@ func NewRepos(db *gorm.DB) *Repos {
 		PaperFolders:    repository.NewPaperFolderRepo(db),
 		AIProviders:     repository.NewAIProviderRepo(db),
 		AIModels:        repository.NewAIModelRepo(db),
+		ImportTasks:     repository.NewImportTaskRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }

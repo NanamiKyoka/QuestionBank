@@ -33,6 +33,7 @@ type Deps struct {
 	Papers          *service.PaperService
 	Exports         *service.ExportService
 	AIConfig        *service.AIConfigService
+	Imports         *service.ImportService
 }
 
 const apiPrefix = "/api/v1"
@@ -82,6 +83,7 @@ func New(d Deps) *gin.Engine {
 	registerUserRoutes(v1, d)
 	registerPaperRoutes(v1, d)
 	registerAIConfigRoutes(v1, d)
+	registerImportRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -289,5 +291,18 @@ func registerAIConfigRoutes(g *gin.RouterGroup, d Deps) {
 		aiGroup.GET("/active-config", h.GetActiveConfig)
 		aiGroup.PUT("/active-config", h.SetActiveConfig)
 		aiGroup.GET("/interface-types", h.InterfaceTypes)
+	}
+}
+
+func registerImportRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewImportHandler(d.Imports)
+
+	// 智能录题挂在学科下：抽取与入库都需要学科的编辑权限，由 service 层判定。
+	imports := g.Group("/subjects/:subject_id/imports")
+	imports.Use(middleware.RequireAuth())
+	{
+		imports.POST("/extract", h.Extract)
+		imports.POST("/commit", h.Commit)
+		imports.GET("", h.ListTasks)
 	}
 }
