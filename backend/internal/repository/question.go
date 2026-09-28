@@ -222,6 +222,44 @@ func (r *QuestionRepo) buildQuery(ctx context.Context, f model.QuestionFilter) *
 	return q
 }
 
+// ListByIDs 按 id 集合批量取题目，用于试卷内容投影。
+func (r *QuestionRepo) ListByIDs(ctx context.Context, ids []uint) ([]model.Question, error) {
+	if len(ids) == 0 {
+		return []model.Question{}, nil
+	}
+	var out []model.Question
+	err := conn(ctx, r.db).Where("id IN ?", ids).Find(&out).Error
+	return out, err
+}
+
+// ExistingIDs 返回这些 id 中真实存在（含已软删除）的集合。
+//
+// 用 Unscoped 是刻意的：试卷里引用的题目若被删除，我们要能区分
+// "题目被删了"与"题目从来不存在"——前者提示"引用已失效"，
+// 后者说明数据被外部改过。
+func (r *QuestionRepo) ExistingIDs(ctx context.Context, ids []uint) (map[uint]int64, error) {
+	out := make(map[uint]int64)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	type row struct {
+		ID              uint
+		ContentRevision int64
+	}
+	var rows []row
+	err := conn(ctx, r.db).Unscoped().Model(&model.Question{}).
+		Select("id, content_revision").
+		Where("id IN ?", ids).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ID] = r.ContentRevision
+	}
+	return out, nil
+}
+
 // ChildIDs 返回这些题目的全部子孙 id（含自身），用于级联软删除。
 func (r *QuestionRepo) ChildIDs(ctx context.Context, rootIDs []uint) ([]uint, error) {
 	if len(rootIDs) == 0 {

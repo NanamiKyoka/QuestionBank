@@ -90,6 +90,7 @@ func run() error {
 		Tags:            service.NewTagService(repos),
 		Questions:       service.NewQuestionService(repos),
 		Users:           service.NewUserService(repos),
+		Papers:          service.NewPaperService(repos),
 	})
 
 	srv := &http.Server{

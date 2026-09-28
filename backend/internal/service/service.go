@@ -22,6 +22,8 @@ type Repos struct {
 	Tags            *repository.TagRepo
 	TagCategories   *repository.TagCategoryRepo
 	Questions       *repository.QuestionRepo
+	Papers          *repository.PaperRepo
+	PaperFolders    *repository.PaperFolderRepo
 	Tx              *repository.TxManager
 }
 
@@ -35,6 +37,8 @@ func NewRepos(db *gorm.DB) *Repos {
 		Tags:            repository.NewTagRepo(db),
 		TagCategories:   repository.NewTagCategoryRepo(db),
 		Questions:       repository.NewQuestionRepo(db),
+		Papers:          repository.NewPaperRepo(db),
+		PaperFolders:    repository.NewPaperFolderRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }

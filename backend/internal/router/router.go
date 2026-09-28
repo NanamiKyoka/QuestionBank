@@ -30,6 +30,7 @@ type Deps struct {
 	Tags            *service.TagService
 	Questions       *service.QuestionService
 	Users           *service.UserService
+	Papers          *service.PaperService
 }
 
 const apiPrefix = "/api/v1"
@@ -77,6 +78,7 @@ func New(d Deps) *gin.Engine {
 	registerTagRoutes(v1, d)
 	registerQuestionRoutes(v1, d)
 	registerUserRoutes(v1, d)
+	registerPaperRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -222,5 +224,39 @@ func registerUserRoutes(g *gin.RouterGroup, d Deps) {
 		users.PUT("/:id", h.Update)
 		users.DELETE("/:id", h.Delete)
 		users.POST("/:id/password", h.ResetPassword)
+	}
+}
+
+func registerPaperRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewPaperHandler(d.Papers)
+
+	// 目录与试卷列表挂在学科下；按 id 的操作放在 /papers 顶层。
+	g.GET("/subjects/:subject_id/paper-folders", middleware.RequireAuth(), h.FolderTree)
+	g.POST("/subjects/:subject_id/paper-folders", middleware.RequireAuth(), h.CreateFolder)
+	g.GET("/subjects/:subject_id/papers", middleware.RequireAuth(), h.List)
+	g.POST("/subjects/:subject_id/papers", middleware.RequireAuth(), h.Create)
+
+	folders := g.Group("/paper-folders")
+	folders.Use(middleware.RequireAuth())
+	{
+		folders.PUT("/:id", h.UpdateFolder)
+		folders.DELETE("/:id", h.DeleteFolder)
+	}
+
+	papers := g.Group("/papers")
+	papers.Use(middleware.RequireAuth())
+	{
+		papers.GET("/:id", h.Get)
+		papers.PUT("/:id", h.Update)
+		papers.DELETE("/:id", h.Delete)
+		papers.POST("/:id/restore", h.Restore)
+		papers.POST("/:id/duplicate", h.Duplicate)
+		papers.PUT("/:id/nodes", h.ReplaceNodes)
+		papers.GET("/:id/question-revisions", h.QuestionRevisions)
+		papers.POST("/:id/question-nodes/sync", h.SyncQuestionNodes)
+		papers.GET("/:id/versions", h.ListVersions)
+		papers.POST("/:id/versions", h.Finalize)
+		papers.GET("/:id/versions/:version_no", h.GetVersion)
+		papers.GET("/:id/events", h.ListEvents)
 	}
 }

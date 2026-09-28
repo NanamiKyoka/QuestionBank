@@ -1,9 +1,17 @@
 package service
 
 import (
+	"github.com/google/uuid"
+
 	"github.com/NanamiKyoka/questionmind/internal/model"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 )
+
+// newUUID 生成节点 id。
+//
+// 文档节点的 id 由客户端生成并作为主键，服务端只在"派生新节点"时
+// （如新增解析条目、复制试卷）才需要自己造 id。
+func newUUID() string { return uuid.NewString() }
 
 // authorize 数据级鉴权。
 //
