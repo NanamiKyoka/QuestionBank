@@ -16,6 +16,7 @@ import (
 
 	"github.com/NanamiKyoka/questionmind/internal/config"
 	"github.com/NanamiKyoka/questionmind/internal/db"
+	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/jwtx"
 	"github.com/NanamiKyoka/questionmind/internal/router"
 	"github.com/NanamiKyoka/questionmind/internal/service"
@@ -91,6 +92,8 @@ func run() error {
 		Questions:       service.NewQuestionService(repos),
 		Users:           service.NewUserService(repos),
 		Papers:          service.NewPaperService(repos),
+		Exports: service.NewExportService(repos, storage.NewLocal(
+			cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)),
 	})
 
 	srv := &http.Server{

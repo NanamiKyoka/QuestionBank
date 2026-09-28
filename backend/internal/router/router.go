@@ -31,6 +31,7 @@ type Deps struct {
 	Questions       *service.QuestionService
 	Users           *service.UserService
 	Papers          *service.PaperService
+	Exports         *service.ExportService
 }
 
 const apiPrefix = "/api/v1"
@@ -259,4 +260,9 @@ func registerPaperRoutes(g *gin.RouterGroup, d Deps) {
 		papers.GET("/:id/versions/:version_no", h.GetVersion)
 		papers.GET("/:id/events", h.ListEvents)
 	}
+
+	// 导出返回二进制附件，因此单独挂一个 handler。
+	ex := handler.NewExportHandler(d.Exports)
+	papers.GET("/:id/export", ex.ExportPaper)
+	papers.GET("/:id/versions/:version_no/export", ex.ExportVersion)
 }
