@@ -1,0 +1,13 @@
+# 统一换行符：源码一律 LF，避免 Windows 下 CRLF 造成的无意义 diff。
+* text=auto eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+*.exe  binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.zip  binary
+*.db   binary
