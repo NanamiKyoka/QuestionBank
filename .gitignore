@@ -1,0 +1,33 @@
+# 参考项目（仅用于阅读，不入库）
+reference/
+
+# Go
+backend/build/
+backend/.smoke/
+*.exe
+*.test
+*.out
+
+# 运行期数据
+backend/data/
+backend/uploads/
+backend/media/
+*.db
+*.db-wal
+*.db-shm
+secret.key
+config.yaml
+
+# Node / 前端
+node_modules/
+frontend/.nuxt/
+frontend/.output/
+frontend/dist/
+.pnpm-store/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
