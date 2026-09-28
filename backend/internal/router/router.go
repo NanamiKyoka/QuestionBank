@@ -35,6 +35,7 @@ type Deps struct {
 	AIConfig        *service.AIConfigService
 	Imports         *service.ImportService
 	Chat            *service.ChatService
+	Vectors         *service.VectorService
 }
 
 const apiPrefix = "/api/v1"
@@ -86,6 +87,7 @@ func New(d Deps) *gin.Engine {
 	registerAIConfigRoutes(v1, d)
 	registerImportRoutes(v1, d)
 	registerChatRoutes(v1, d)
+	registerVectorRoutes(v1, d)
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
@@ -327,4 +329,13 @@ func registerChatRoutes(g *gin.RouterGroup, d Deps) {
 		// 前端执行完客户端工具后回传，唤醒等待中的运行。
 		chat.POST("/runs/:run_id/tool-result", h.ResolveClientTool)
 	}
+}
+
+func registerVectorRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewVectorHandler(d.Vectors)
+
+	// 挂在知识点路径下：这几条都是针对某个学科的知识点索引。
+	g.GET("/subjects/:subject_id/knowledge-points/vector-status", middleware.RequireAuth(), h.Status)
+	g.POST("/subjects/:subject_id/knowledge-points/reindex", middleware.RequireAuth(), h.Reindex)
+	g.POST("/subjects/:subject_id/knowledge-points/search", middleware.RequireAuth(), h.Search)
 }

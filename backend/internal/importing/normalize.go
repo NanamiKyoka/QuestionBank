@@ -37,9 +37,25 @@ type Draft struct {
 	KnowledgePoints []string `json:"knowledge_points"`
 	Tags            []string `json:"tags"`
 
+	// SuggestedKnowledgePoints 向量检索给出的知识点建议。
+	//
+	// 与 KnowledgePoints 的区别：后者是**模型自己说**的，前者是
+	// 用题干做语义检索从现有知识点里**找出来**的候选。
+	// 两者都只是建议，用户确认后才会真正关联——知识点归属错乱
+	// 比没有知识点更麻烦，事后清理成本很高。
+	SuggestedKnowledgePoints []KnowledgeSuggestion `json:"suggested_knowledge_points,omitempty"`
+
 	// Warnings 归一化过程中发现的问题。审核界面据此高亮提示，
 	// 让用户知道"哪一题需要重点看"。
 	Warnings []string `json:"warnings"`
+}
+
+// KnowledgeSuggestion 知识点匹配建议。
+type KnowledgeSuggestion struct {
+	KnowledgePointID uint    `json:"knowledge_point_id"`
+	Name             string  `json:"name"`
+	Path             string  `json:"path"`
+	Score            float32 `json:"score"`
 }
 
 // Normalize 把模型抽取结果转换为结构化草稿。

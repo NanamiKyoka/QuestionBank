@@ -92,6 +92,18 @@ func run() error {
 	aiConfigSvc := service.NewAIConfigService(repos, cipher,
 		cfg.AI.RequestTimeout, cfg.AI.MaxRetries)
 	questionSvc := service.NewQuestionService(repos)
+	vectorSvc := service.NewVectorService(repos, aiConfigSvc)
+	kpSvc := service.NewKnowledgePointService(repos)
+	// 知识点变更后同步向量索引。索引失败不影响知识点本身——
+	// 用户后续可以整体重建索引来补上。
+	kpSvc.SetIndexHook(func(subjectID uint, kpIDs []uint) {
+		for _, id := range kpIDs {
+			vectorSvc.IndexKnowledgePoint(context.Background(), subjectID, id)
+		}
+	})
+	kpSvc.SetDeleteHook(func(kpIDs []uint) {
+		vectorSvc.DeleteKnowledgePointVectors(context.Background(), kpIDs)
+	})
 
 	engine := router.New(router.Deps{
 		Config:          cfg,
@@ -99,7 +111,7 @@ func run() error {
 		Tokens:          tokens,
 		Auth:            authSvc,
 		Subjects:        service.NewSubjectService(repos),
-		KnowledgePoints: service.NewKnowledgePointService(repos),
+		KnowledgePoints: kpSvc,
 		Tags:            service.NewTagService(repos),
 		Questions:       questionSvc,
 		Users:           service.NewUserService(repos),
@@ -107,9 +119,9 @@ func run() error {
 		Exports: service.NewExportService(repos, storage.NewLocal(
 			cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)),
 		AIConfig: aiConfigSvc,
-		Imports:  service.NewImportService(repos, aiConfigSvc, questionSvc),
+		Imports:  service.NewImportService(repos, aiConfigSvc, questionSvc).WithVectors(vectorSvc),
 		Chat: service.NewChatService(repos, aiConfigSvc, questionSvc,
-			service.NewKnowledgePointService(repos),
+			kpSvc,
 			service.NewTagService(repos),
 			service.NewPaperService(repos),
 			aiagent.NewChannel(0),
@@ -118,6 +130,7 @@ func run() error {
 				MaxToolCalls: cfg.AI.MaxToolCalls,
 				WallClock:    cfg.AI.WallClock,
 			}),
+		Vectors: vectorSvc,
 	})
 
 	srv := &http.Server{

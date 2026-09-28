@@ -51,11 +51,16 @@ type AIModel struct {
 
 func (AIModel) TableName() string { return "ai_models" }
 
-// VectorDoc 知识点向量索引的元数据。
+// VectorDoc 知识点向量索引。
 //
-// 向量本身存在向量库里，这张表只做"账本"：记录哪些知识点已经索引、
-// 用的哪个 embedding 模型、内容的哈希是多少。
-// 有了它才能判断"换了个 embedding 模型，需要重建索引"。
+// 定位是"账本 + 存储"：既记录哪些知识点已索引、用的哪个模型、
+// 内容哈希是多少，也直接存向量本身。
+//
+// 把向量放在关系库里而不是引入独立的向量数据库，是有意的取舍：
+// 一个学科的知识点通常几百到几千个，这个规模下进程内暴力算余弦
+// 只要几毫秒；而引入 ChromaDB 意味着多一个必须独立部署的服务，
+// 会直接破坏"单二进制、零外部依赖"这个目标（也是桌面版成立的前提）。
+// 向量以 float32 二进制存储，比 JSON 省约 5 倍空间且免去解析开销。
 type VectorDoc struct {
 	Base
 
@@ -68,6 +73,8 @@ type VectorDoc struct {
 	ContentHash string `gorm:"size:64;not null" json:"content_hash"`
 	// Dim 向量维度，用于校验一致性。
 	Dim int `gorm:"not null" json:"dim"`
+	// Embedding 向量本体，小端 float32 字节序。
+	Embedding []byte `gorm:"not null" json:"-"`
 }
 
 func (VectorDoc) TableName() string { return "vector_docs" }

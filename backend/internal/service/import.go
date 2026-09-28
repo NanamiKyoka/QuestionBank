@@ -24,10 +24,23 @@ type ImportService struct {
 	repos     *Repos
 	aiConfig  *AIConfigService
 	questions *QuestionService
+	// vectors 可选：为草稿提供知识点语义匹配建议。
+	vectors *VectorService
 }
 
 func NewImportService(repos *Repos, aiConfig *AIConfigService, questions *QuestionService) *ImportService {
 	return &ImportService{repos: repos, aiConfig: aiConfig, questions: questions}
+}
+
+// WithVectors 注入向量服务。未注入时跳过知识点语义匹配。
+func (s *ImportService) WithVectors(v *VectorService) *ImportService {
+	s.vectors = v
+	return s
+}
+
+// ctxErr 判断上下文是否已取消，用于在长循环里及时退出。
+func (s *ImportService) ctxErr(ctx context.Context) bool {
+	return ctx.Err() != nil
 }
 
 // Extract 从文本或图片中抽取题目。
@@ -118,6 +131,32 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	}
 
 	drafts := importing.Normalize(extracted)
+
+	// 用题干做一次语义检索，给出知识点候选。
+	//
+	// 向量能力是"有更好"而不是"必须有"：没配向量模型、索引为空、
+	// 或调用失败时都静默跳过，不影响录题主流程。
+	if s.vectors != nil {
+		for i := range drafts {
+			if s.ctxErr(ctx) {
+				break
+			}
+			query := drafts[i].StemText
+			if query == "" {
+				query = drafts[i].StemMarkdown
+			}
+			suggestions := s.vectors.SuggestKnowledgePoints(ctx, subjectID, query, 3)
+			for _, sg := range suggestions {
+				drafts[i].SuggestedKnowledgePoints = append(drafts[i].SuggestedKnowledgePoints,
+					importing.KnowledgeSuggestion{
+						KnowledgePointID: sg.KnowledgePointID,
+						Name:             sg.Name,
+						Path:             sg.Path,
+						Score:            sg.Score,
+					})
+			}
+		}
+	}
 
 	task.TotalCount = len(drafts)
 	task.SavedCount = 0 // 还没入库

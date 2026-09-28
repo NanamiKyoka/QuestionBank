@@ -13,10 +13,43 @@ import (
 // KnowledgePointService 知识点树用例。
 type KnowledgePointService struct {
 	repos *Repos
+	// onIndexed 知识点新增/修改/移动后的回调，用于（重新）建立向量索引。
+	// 移动也要触发：层级路径变了，用于向量化的文本随之变化。
+	//
+	// 用回调而不是直接依赖 VectorService：向量检索是可选能力，
+	// 不该让知识点这个核心域反向依赖它——否则没配向量模型时
+	// 连知识点都建不了，那就本末倒置了。
+	onIndexed func(subjectID uint, kpIDs []uint)
+	// onDeleted 知识点被删除后的回调，用于清理索引。
+	onDeleted func(kpIDs []uint)
 }
 
 func NewKnowledgePointService(repos *Repos) *KnowledgePointService {
 	return &KnowledgePointService{repos: repos}
+}
+
+// SetIndexHook 注册"需要（重新）索引"的回调。
+func (s *KnowledgePointService) SetIndexHook(fn func(subjectID uint, kpIDs []uint)) {
+	s.onIndexed = fn
+}
+
+// SetDeleteHook 注册"已删除、需清理索引"的回调。
+func (s *KnowledgePointService) SetDeleteHook(fn func(kpIDs []uint)) {
+	s.onDeleted = fn
+}
+
+func (s *KnowledgePointService) notifyIndexed(subjectID uint, kpIDs []uint) {
+	if s.onIndexed == nil || len(kpIDs) == 0 {
+		return
+	}
+	s.onIndexed(subjectID, kpIDs)
+}
+
+func (s *KnowledgePointService) notifyDeleted(kpIDs []uint) {
+	if s.onDeleted == nil || len(kpIDs) == 0 {
+		return
+	}
+	s.onDeleted(kpIDs)
 }
 
 // Tree 返回学科的完整知识点树，并附带各节点的关联题目数。
@@ -108,6 +141,9 @@ func (s *KnowledgePointService) Create(ctx context.Context, user *model.User, su
 		return nil, err
 	}
 
+	// 索引维护是"尽力而为"：失败不影响知识点本身。
+	s.notifyIndexed(subjectID, []uint{created.ID})
+
 	resp := schema.NewKnowledgePointResponse(created)
 	return &resp, nil
 }
@@ -143,6 +179,8 @@ func (s *KnowledgePointService) Update(ctx context.Context, user *model.User, id
 	if err := s.repos.KnowledgePoints.UpdateFields(ctx, id, fields); err != nil {
 		return nil, apperr.From(err)
 	}
+
+	s.notifyIndexed(kp.SubjectID, []uint{id})
 
 	updated, err := s.repos.KnowledgePoints.Get(ctx, id)
 	if err != nil {
@@ -206,6 +244,17 @@ func (s *KnowledgePointService) Move(ctx context.Context, user *model.User, id u
 		return nil, err
 	}
 
+	// 移动会改变整棵子树的层级路径，而路径参与了向量化的文本，
+	// 因此整棵子树都要重建索引。
+	subtree, err := s.repos.KnowledgePoints.Subtree(ctx, node.SubjectID, newPath)
+	if err == nil {
+		ids := make([]uint, 0, len(subtree))
+		for i := range subtree {
+			ids = append(ids, subtree[i].ID)
+		}
+		s.notifyIndexed(node.SubjectID, ids)
+	}
+
 	updated, err := s.repos.KnowledgePoints.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -224,7 +273,10 @@ func (s *KnowledgePointService) Delete(ctx context.Context, user *model.User, id
 		return err
 	}
 
-	return s.repos.Tx.Within(ctx, func(ctx context.Context) error {
+	// toClean 收集被删除的知识点 id，事务提交后再清理向量索引。
+	var toClean []uint
+
+	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
 		subtree, err := s.repos.KnowledgePoints.Subtree(ctx, node.SubjectID, node.Path)
 		if err != nil {
 			return apperr.ErrInternal.WithCause(err)
@@ -240,6 +292,17 @@ func (s *KnowledgePointService) Delete(ctx context.Context, user *model.User, id
 		if err := s.repos.KnowledgePoints.SoftDeleteByIDs(ctx, ids); err != nil {
 			return apperr.ErrInternal.WithCause(err)
 		}
+
+		// 在事务内取一次待删除的 id，供事务提交后清理向量索引。
+		toClean = append(toClean, ids...)
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// 索引清理放在事务之外：向量是可选能力，它的失败不该回滚
+	// 已经成功的知识点删除——那会让用户看到"删了又回来"。
+	s.notifyDeleted(toClean)
+	return nil
 }

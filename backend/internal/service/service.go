@@ -29,6 +29,7 @@ type Repos struct {
 	ImportTasks     *repository.ImportTaskRepo
 	ChatSessions    *repository.ChatSessionRepo
 	ChatMessages    *repository.ChatMessageRepo
+	Vectors         *repository.VectorRepo
 	Tx              *repository.TxManager
 }
 
@@ -49,6 +50,7 @@ func NewRepos(db *gorm.DB) *Repos {
 		ImportTasks:     repository.NewImportTaskRepo(db),
 		ChatSessions:    repository.NewChatSessionRepo(db),
 		ChatMessages:    repository.NewChatMessageRepo(db),
+		Vectors:         repository.NewVectorRepo(db),
 		Tx:              repository.NewTxManager(db),
 	}
 }
