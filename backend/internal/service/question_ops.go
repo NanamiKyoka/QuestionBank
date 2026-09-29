@@ -10,6 +10,17 @@ import (
 
 // Update 更新题目。
 //
+// 关于「已发布的题目能不能改」：**能，这是刻意的**。
+// 界面此前把编辑按钮锁在 status === 'draft'，而这里从来没有状态守卫，
+// 两边对同一件事的说法不一致——按钮在骗人，正确的做法是让界面说实话，
+// 而不是把一条明显好用的能力砍掉。改一个错别字就删除重建会丢掉题目 id，
+// 连带打断所有引用它的试卷。
+//
+// 代价由 content_revision 承担：内容一旦变更就 +1，试卷节点据此提示
+// 「题目已被改动」并支持一键同步（见 paper node sync），
+// 已发布内容被悄悄改掉这件事因此始终是**可见**的。
+// 为了让它可追溯，已发布题目的内容修改还会写一条审核日志（action=edit）。
+//
 // 只有"影响题目呈现"的字段变化才递增 content_revision：
 // 试卷节点记着这个值用来判断是否需要同步分数等内容。
 // 如果改来源、改可见性也递增，所有引用了这道题的试卷都会误报"已更新"。
@@ -83,7 +94,24 @@ func (s *QuestionService) Update(ctx context.Context, user *model.User, id uint,
 		kpIDs = &ids
 	}
 
-	prep, err := s.prepare(ctx, current.SubjectID, current.ParentID, qtype, stem,
+	// 结构字段（题干/选项/答案）要按"改挂之后"的母题重新校验一遍，
+	// 否则会出现"挂到别的小学科的母题下"这种绕过同学科约束的写入。
+	parentID := current.ParentID
+	if req.ParentID != nil {
+		parentID, err = resolveParentID(*req.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		// 环检测必须在写库之前：parent_id 一旦落成环，递归展开子树的
+		// 级联软删就会在该环上永远转下去。
+		if parentID != nil {
+			if err := s.checkParentLink(ctx, id, current.SubjectID, parentID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	prep, err := s.prepare(ctx, current.SubjectID, parentID, qtype, stem,
 		optionInputs, answer, *tagIDs, *kpIDs)
 	if err != nil {
 		return nil, err
@@ -94,6 +122,9 @@ func (s *QuestionService) Update(ctx context.Context, user *model.User, id uint,
 		"question_type": qtype,
 		"stem":          stem,
 		"stem_text":     prep.stemText,
+	}
+	if req.ParentID != nil {
+		fields["parent_id"] = parentID
 	}
 	if req.QuestionType != nil || req.Options != nil || req.Answer != nil || !req.Stem.IsEmpty() {
 		fields["options"] = prep.optionsJSON
@@ -142,6 +173,22 @@ func (s *QuestionService) Update(ctx context.Context, user *model.User, id uint,
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// 已发布题目的内容被改动，是最需要留痕的一类变更：题面已经在卷子里了。
+	// 草稿/待审的修改在审核记录里本来就看得到（谁提交、谁驳回），
+	// 只有"改一个错别字"这种绕过审核的路径此前完全不留痕迹。
+	if contentChanged && current.Status == model.QuestionStatusPublished {
+		if err := s.repos.Questions.AddReviewLog(ctx, &model.ReviewLog{
+			QuestionID: id,
+			ReviewerID: user.ID,
+			Action:     model.ReviewActionEdit,
+			FromStatus: model.QuestionStatusPublished,
+			ToStatus:   model.QuestionStatusPublished,
+			Comment:    req.ChangeNote,
+		}); err != nil {
+			return nil, apperr.ErrInternal.WithCause(err)
+		}
 	}
 
 	return s.Get(ctx, user, id)
@@ -214,20 +261,29 @@ func (s *QuestionService) Submit(ctx context.Context, user *model.User, id uint)
 	if err != nil {
 		return nil, err
 	}
-	if err := authorize(user, model.PermEditQuestion, q.SubjectID); err != nil {
+	if err := s.submitOnce(ctx, user, q); err != nil {
 		return nil, err
 	}
+	return s.Get(ctx, user, id)
+}
+
+// submitOnce 单条提交审核的状态流转。单题与批量共用，
+// 避免两条路径的守卫条件日后各自漂移。
+func (s *QuestionService) submitOnce(ctx context.Context, user *model.User, q *model.Question) error {
+	if err := authorize(user, model.PermEditQuestion, q.SubjectID); err != nil {
+		return err
+	}
 	if q.Status != model.QuestionStatusDraft {
-		return nil, apperr.New(apperr.CodeConflict, "只有草稿状态才能提交审核").
+		return apperr.New(apperr.CodeConflict, "只有草稿状态才能提交审核").
 			WithDetail("当前状态 %s", q.Status)
 	}
-	if err := s.repos.Questions.UpdateFields(ctx, id, map[string]any{
+	if err := s.repos.Questions.UpdateFields(ctx, q.ID, map[string]any{
 		"status":     model.QuestionStatusPending,
 		"updated_by": user.ID,
 	}); err != nil {
-		return nil, apperr.From(err)
+		return apperr.From(err)
 	}
-	return s.Get(ctx, user, id)
+	return nil
 }
 
 // Review 审核题目。
@@ -246,11 +302,19 @@ func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint,
 	if err != nil {
 		return nil, err
 	}
-	if err := authorize(user, model.PermReviewQuestion, q.SubjectID); err != nil {
+	if err := s.reviewOnce(ctx, user, q, req.Action, req.Comment); err != nil {
 		return nil, err
 	}
+	return s.Get(ctx, user, id)
+}
+
+// reviewOnce 单条审核的状态流转 + 审核日志，单题与批量共用。
+func (s *QuestionService) reviewOnce(ctx context.Context, user *model.User, q *model.Question, action, comment string) error {
+	if err := authorize(user, model.PermReviewQuestion, q.SubjectID); err != nil {
+		return err
+	}
 	if q.Status != model.QuestionStatusDraft && q.Status != model.QuestionStatusPending {
-		return nil, apperr.New(apperr.CodeConflict, "该状态下的题目无需审核").
+		return apperr.New(apperr.CodeConflict, "该状态下的题目无需审核").
 			WithDetail("当前状态 %s", q.Status)
 	}
 
@@ -260,10 +324,10 @@ func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint,
 	// UpdateFields 里落库，避免出现"状态已退回草稿、计数还是旧的"的中间态。
 	resetReview := false
 
-	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
-		switch req.Action {
-		case "approve":
-			if err := s.repos.Questions.IncrementReviewCount(ctx, id); err != nil {
+	return s.repos.Tx.Within(ctx, func(ctx context.Context) error {
+		switch action {
+		case model.ReviewActionApprove:
+			if err := s.repos.Questions.IncrementReviewCount(ctx, q.ID); err != nil {
 				return apperr.ErrInternal.WithCause(err)
 			}
 			subject, err := s.repos.Subjects.Get(ctx, q.SubjectID)
@@ -276,7 +340,7 @@ func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint,
 			} else {
 				to = model.QuestionStatusPending
 			}
-		case "reject":
+		case model.ReviewActionReject:
 			to = model.QuestionStatusDraft
 			resetReview = true
 		default:
@@ -290,23 +354,118 @@ func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint,
 		if resetReview {
 			fields["review_count"] = 0
 		}
-		if err := s.repos.Questions.UpdateFields(ctx, id, fields); err != nil {
+		if err := s.repos.Questions.UpdateFields(ctx, q.ID, fields); err != nil {
 			return apperr.From(err)
 		}
 
 		return s.repos.Questions.AddReviewLog(ctx, &model.ReviewLog{
-			QuestionID: id,
+			QuestionID: q.ID,
 			ReviewerID: user.ID,
-			Action:     req.Action,
+			Action:     action,
 			FromStatus: from,
 			ToStatus:   to,
-			Comment:    req.Comment,
+			Comment:    comment,
+		})
+	})
+}
+
+// BatchReview 批量提交审核 / 批量通过 / 批量驳回。
+//
+// 语义与权限完全复用单题的 submitOnce / reviewOnce，学科阈值也照常生效：
+// 一次批量通过并不会绕过"两次复核"的要求，只是把两次点击合成了一次。
+//
+// 逐条独立处理、逐条跳过而不是整体失败：批量选中的题天然是混的
+// （混进了已发布的、混进了别的学科的），让整批因为一条失败而回滚，
+// 用户既看不到结果也说不清是哪一条出了问题。
+func (s *QuestionService) BatchReview(ctx context.Context, user *model.User, ids []uint, action, comment string) (handled []uint, skipped []uint, err error) {
+	for _, id := range ids {
+		q, getErr := s.repos.Questions.Get(ctx, id)
+		if getErr != nil {
+			if apperr.Is(getErr, apperr.CodeNotFound) {
+				skipped = append(skipped, id)
+				continue
+			}
+			return handled, skipped, getErr
+		}
+		var actionErr error
+		switch action {
+		case "submit":
+			actionErr = s.submitOnce(ctx, user, q)
+		case model.ReviewActionApprove, model.ReviewActionReject:
+			actionErr = s.reviewOnce(ctx, user, q, action, comment)
+		default:
+			return handled, skipped, apperr.New(apperr.CodeInvalidParam, "不支持的批量审核动作")
+		}
+		if actionErr != nil {
+			// 权限/状态类错误是"这一条不行"，不是"整个请求不行"；
+			// 但仓储或事务层面的故障必须立刻冒泡，不能假装跳过。
+			if apperr.Is(actionErr, apperr.CodeForbidden) ||
+				apperr.Is(actionErr, apperr.CodeConflict) ||
+				apperr.Is(actionErr, apperr.CodeUnprocessable) ||
+				apperr.Is(actionErr, apperr.CodeInvalidParam) {
+				skipped = append(skipped, id)
+				continue
+			}
+			return handled, skipped, actionErr
+		}
+		handled = append(handled, id)
+	}
+	return handled, skipped, nil
+}
+
+// SetArchived 归档 / 取消归档。
+//
+// 权限用 review_question 而不是 edit_question：归档是状态机上的管控动作，
+// 改错别字和下架一道已经进了试卷的题不是一回事。后者会影响所有引用它的试卷，
+// 必须落在与"审核发布"同一档的权限上。
+//
+// 状态机刻意收得很窄：只有已发布的题能被归档。
+// 待审/草稿本来就没对外，去"归档"它们只会让归档筛选里混进从未上线的题；
+// 取消归档则一律回到已发布，因为归档之前它就是已发布的。
+func (s *QuestionService) SetArchived(ctx context.Context, user *model.User, id uint, archived bool, comment string) (*schema.QuestionDetail, error) {
+	q, err := s.repos.Questions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorize(user, model.PermReviewQuestion, q.SubjectID); err != nil {
+		return nil, err
+	}
+
+	from, to := q.Status, model.QuestionStatusPublished
+	action := model.ReviewActionRestore
+	if archived {
+		from, to, action = q.Status, model.QuestionStatusArchived, model.ReviewActionArchive
+		if q.Status != model.QuestionStatusPublished {
+			return nil, apperr.New(apperr.CodeConflict, "只有已发布的题目才能归档").
+				WithDetail("当前状态 %s", q.Status)
+		}
+	} else if q.Status != model.QuestionStatusArchived {
+		return nil, apperr.New(apperr.CodeConflict, "该题目未处于归档状态").
+			WithDetail("当前状态 %s", q.Status)
+	}
+
+	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
+		if err := s.repos.Questions.UpdateFields(ctx, id, map[string]any{
+			"status":     to,
+			"updated_by": user.ID,
+		}); err != nil {
+			return apperr.From(err)
+		}
+		return s.repos.Questions.AddReviewLog(ctx, &model.ReviewLog{
+			QuestionID: id,
+			ReviewerID: user.ID,
+			Action:     action,
+			FromStatus: from,
+			ToStatus:   to,
+			Comment:    comment,
 		})
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	// 归档只改状态、不改内容，因此**不能**碰 content_revision：
+	// 递增会让所有引用它的试卷误报"题目已更新"，逼着老师去同步一个没变过的题面。
 	return s.Get(ctx, user, id)
 }
 

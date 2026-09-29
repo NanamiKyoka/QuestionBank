@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
 	"github.com/NanamiKyoka/questionmind/internal/importing"
+	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
 	"github.com/NanamiKyoka/questionmind/internal/model"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 	"github.com/NanamiKyoka/questionmind/internal/repository"
@@ -27,6 +30,12 @@ type ImportService struct {
 	questions *QuestionService
 	// vectors 可选：为草稿提供知识点语义匹配建议。
 	vectors *VectorService
+	// storage 可选：删除导入任务时清理落盘的原始文件。
+	//
+	// 目前导入还没有文件上传入口（只有粘贴与拍照），FilePath 通常为空；
+	// 注入它是为了让"删除任务顺手删掉磁盘上的文件"这件事在文件上传落地时
+	// 不必再改一遍调用方。
+	storage *storage.Local
 }
 
 func NewImportService(repos *Repos, aiConfig *AIConfigService, questions *QuestionService) *ImportService {
@@ -36,6 +45,12 @@ func NewImportService(repos *Repos, aiConfig *AIConfigService, questions *Questi
 // WithVectors 注入向量服务。未注入时跳过知识点语义匹配。
 func (s *ImportService) WithVectors(v *VectorService) *ImportService {
 	s.vectors = v
+	return s
+}
+
+// WithStorage 注入媒体存储。未注入时删除任务不会清理磁盘文件。
+func (s *ImportService) WithStorage(st *storage.Local) *ImportService {
+	s.storage = st
 	return s
 }
 
@@ -118,6 +133,29 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	callCtx, cancel := context.WithTimeout(ctx, extractTimeout)
 	defer cancel()
 
+	// 任务先落库，再干活。
+	//
+	// 抽取要跑 30 秒到 3 分钟。如果只在跑完之后补一行记录，
+	// 等待期间用户在历史页看到的是一片空白，进程被重启更是彻底无痕——
+	// 用户会问"我刚才那次导入到底算不算数"。
+	// 先建行 → processing → 终态，也让 pending/processing 两个状态第一次真正可达。
+	task := &model.ImportTask{
+		SubjectID:        &subjectID,
+		UserID:           user.ID,
+		Source:           model.ImportSourceAIAssist,
+		Status:           model.ImportStatusPending,
+		FileType:         fileTypeOf(req, mode),
+		Mode:             string(mode),
+		OriginalFilename: extractSourceLabel(req, mode),
+	}
+	if err := s.repos.ImportTasks.Create(ctx, task); err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	task.MarkProcessing()
+	if err := s.saveTaskState(ctx, task); err != nil {
+		return nil, err
+	}
+
 	started := time.Now()
 	extracted, err := resolved.Provider.ExtractQuestions(callCtx, ai.ExtractRequest{
 		Model:   resolved.ModelName,
@@ -129,18 +167,12 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	elapsed := time.Since(started)
 
 	// 抽取失败也要留痕：用户会问"为什么没结果"。
-	task := &model.ImportTask{
-		SubjectID: &subjectID,
-		UserID:    user.ID,
-		Source:    model.ImportSourceAIAssist,
-		Status:    model.ImportStatusCompleted,
-		FileType:  fileTypeOf(req, mode),
-		Mode:      string(mode),
-	}
 	if err != nil {
-		task.Status = model.ImportStatusFailed
-		task.ErrorMsg = humanizeAIError(err)
-		_ = s.repos.ImportTasks.Create(ctx, task)
+		task.MarkFailed(humanizeAIError(err))
+		// 留痕失败不应盖掉真正的失败原因——用户需要知道的是模型为什么出错。
+		if saveErr := s.saveTaskState(ctx, task); saveErr != nil {
+			slog.Warn("写入导入任务失败状态出错", "task_id", task.ID, "error", saveErr)
+		}
 		return nil, apperr.New(apperr.CodeAIUnavailable, humanizeAIError(err)).WithCause(err)
 	}
 
@@ -174,10 +206,9 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 
 	task.TotalCount = len(drafts)
 	task.SavedCount = 0 // 还没入库
-	now := time.Now().UTC()
-	task.FinishedAt = &now
-	if err := s.repos.ImportTasks.Create(ctx, task); err != nil {
-		return nil, apperr.ErrInternal.WithCause(err)
+	task.MarkCompleted()
+	if err := s.saveTaskState(ctx, task); err != nil {
+		return nil, err
 	}
 
 	warnings := 0
@@ -231,6 +262,31 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 
 	failures := make([]schema.CommitFailure, 0)
 	unresolvedNames := map[string]bool{}
+
+	// 任务同样先落库。
+	//
+	// 不只是为了"看得见"：题目入库后要回填 questions.import_task_id 做溯源，
+	// 而那道任务的 id 必须在建题**之前**就存在。
+	// 以前任务行是入库结束后才补的，于是题目永远挂不回它来自的那次导入。
+	task := &model.ImportTask{
+		SubjectID:        &subjectID,
+		UserID:           user.ID,
+		Source:           model.ImportSourceAIAssist,
+		Status:           model.ImportStatusPending,
+		FileType:         "text",
+		Mode:             "commit",
+		TotalCount:       len(req.Drafts),
+		OriginalFilename: commitSourceLabel(req),
+	}
+	if err := s.repos.ImportTasks.Create(ctx, task); err != nil {
+		// 还没建任何题目，此刻失败就是整体失败，不需要"假装成功"。
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	resp.TaskID = task.ID
+	task.MarkProcessing()
+	if err := s.saveTaskState(ctx, task); err != nil {
+		return nil, err
+	}
 
 	// 母子题结构：模型用 temp_id / parent_temp_id 表达层级，而 parent_id 必须等
 	// 母题建出来才知道真实主键，所以按层级深度分批落库——母题永远排在子题前面。
@@ -296,6 +352,8 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 		}
 		createReq.KnowledgePointIDs = mergeIDs(kpIDs, req.DefaultKnowledgePointIDs)
 		createReq.TagIDs = mergeIDs(tagIDs, req.DefaultTagIDs)
+		// 溯源：请求里带上任务 id，真正写列的动作在下面统一回填。
+		createReq.ImportTaskID = &task.ID
 
 		created, err := s.questions.Create(ctx, user, createReq)
 		if err != nil {
@@ -319,29 +377,30 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 	resp.Failures = failures
 	resp.FailedCount = len(failures)
 
+	// 溯源回填：一次 UPDATE 把整批题目挂到任务上。
+	//
+	// 为什么放在循环之后而不是建题时写：题目要先有主键才能被更新，
+	// 而循环里每题一次 UPDATE 会让 200 道题的导入多出 200 次数据库往返。
+	//
+	// 失败只记日志不中断：题目此时**已经入库**，返回一个错误会让用户
+	// 以为"这批题没进去"从而重复导入一遍，那比缺少一个溯源标记糟糕得多。
+	if err := s.repos.Questions.SetImportTask(ctx, createdIDs, task.ID); err != nil {
+		slog.Warn("回填题目溯源失败",
+			"task_id", task.ID, "count", len(createdIDs), "error", err)
+	}
+
 	// 记录本次入库结果。
-	task := &model.ImportTask{
-		SubjectID:   &subjectID,
-		UserID:      user.ID,
-		Source:      model.ImportSourceAIAssist,
-		Status:      model.ImportStatusCompleted,
-		FileType:    "text",
-		Mode:        "commit",
-		TotalCount:  len(req.Drafts),
-		SavedCount:  len(createdIDs),
-		FailedCount: len(failures),
-	}
-	now := time.Now().UTC()
-	task.FinishedAt = &now
+	task.SavedCount = len(createdIDs)
+	task.FailedCount = len(failures)
 	if len(failures) > 0 && len(createdIDs) == 0 {
-		task.Status = model.ImportStatusFailed
-		task.ErrorMsg = "全部题目入库失败"
+		task.MarkFailed("全部题目入库失败")
+	} else {
+		task.MarkCompleted()
 	}
-	if err := s.repos.ImportTasks.Create(ctx, task); err != nil {
+	if err := s.saveTaskState(ctx, task); err != nil {
 		// 入库结果已经产生，审计记录失败不应让用户以为题目没进去。
-		task.ID = 0
+		slog.Warn("写入导入任务完成状态出错", "task_id", task.ID, "error", err)
 	}
-	resp.TaskID = task.ID
 
 	if len(unresolvedNames) > 0 {
 		// 未匹配的名称通过失败列表之外的方式提示不合适，
@@ -520,15 +579,34 @@ func (s *ImportService) resolveNames(ctx context.Context, subjectID uint, kpName
 }
 
 // ListTasks 导入历史。
-func (s *ImportService) ListTasks(ctx context.Context, user *model.User, subjectID uint, status model.ImportTaskStatus, limit, offset int) ([]schema.ImportTaskResponse, int64, error) {
+//
+// **可见范围按人隔离**：默认只返回当前用户自己的导入记录。
+// 导入记录里带的是"谁在什么时候把哪份卷子导进来了"，
+// 而原实现只按学科过滤，于是任何能读该学科的成员都能看到同事的导入历史
+// （包括 filename 与失败原因）。超级管理员保持"能看到全部"，与全站其它地方的
+// 超级管理员语义一致；只有超级管理员才能用 userID 去筛别人的记录。
+//
+// 学科维度的过滤依然保留：它是外层边界，userID 只能在这个边界内再收窄。
+func (s *ImportService) ListTasks(ctx context.Context, user *model.User, subjectID uint, status model.ImportTaskStatus, userID uint, limit, offset int) ([]schema.ImportTaskResponse, int64, error) {
 	if err := authorizeRead(user, subjectID); err != nil {
 		return nil, 0, err
 	}
 
-	list, total, err := s.repos.ImportTasks.List(ctx, repository.ImportTaskListFilter{
+	filter := repository.ImportTaskListFilter{
 		SubjectID: subjectID,
 		Status:    status,
-	}, limit, offset)
+	}
+	switch {
+	case user.IsSuperuser:
+		// 管理员不传 userID 就是"看全部"，传了就是"只看这个人"。
+		if userID > 0 {
+			filter.UserID = userID
+		}
+	default:
+		filter.UserID = user.ID
+	}
+
+	list, total, err := s.repos.ImportTasks.List(ctx, filter, limit, offset)
 	if err != nil {
 		return nil, 0, apperr.ErrInternal.WithCause(err)
 	}
@@ -538,6 +616,281 @@ func (s *ImportService) ListTasks(ctx context.Context, user *model.User, subject
 		out = append(out, schema.NewImportTaskResponse(&list[i]))
 	}
 	return out, total, nil
+}
+
+// activeStatuses 可以被"放弃"的前置状态。
+// 与 model.ImportTask.IsActive 保持一致，放在一起是为了让"允许的状态集合"只有一个出处。
+var activeStatuses = []model.ImportTaskStatus{
+	model.ImportStatusPending,
+	model.ImportStatusProcessing,
+}
+
+// CancelTask 放弃一个导入任务。
+//
+// ⚠️ 语义边界（当前没有后台 worker）：
+// 抽取是**同步**执行的——用户点下"开始识别"之后，那次 HTTP 请求在服务端
+// 一路跑到模型返回为止，服务端没有可以抢占的执行体。
+// 因此"取消"能做到的是：**把这条任务记录标记为已放弃**，
+// 让它离开队列、将来也不会被 worker 认领；它**不会**中断任何正在进行的抽取，
+// 更不会退还已经花掉的模型调用。
+//
+// 真正的中断需要两样东西，都还没有：后台 worker（把执行体从请求里搬出去）
+// 与协作式取消（在抽取循环里检查一个标志位）。
+// 在那之前，与其假装能中断，不如把话说明白。
+func (s *ImportService) CancelTask(ctx context.Context, user *model.User, subjectID, taskID uint) (*schema.ImportTaskResponse, error) {
+	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
+		return nil, err
+	}
+	task, err := s.loadTask(ctx, subjectID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !task.IsActive() {
+		return nil, apperr.New(apperr.CodeConflict, "任务已经结束，无法取消").
+			WithDetail("当前状态：%s", task.Status)
+	}
+
+	task.MarkCancelled("用户已放弃该任务")
+	// 用 CAS 写入：并发的第二次取消必须失败，否则第一次的结果会被静默覆盖。
+	ok, err := s.repos.ImportTasks.SwapStatus(ctx, task.ID, activeStatuses, taskStateFields(task))
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	if !ok {
+		return nil, apperr.New(apperr.CodeConflict, "任务状态已被其他操作改变，请刷新后重试")
+	}
+	return ptrTo(schema.NewImportTaskResponse(task)), nil
+}
+
+// RetryTask 把失败、已放弃、或"已完成但一题都没抽出来"的任务重新放回队列。
+//
+// 同样要说清楚：没有 worker 的时候，重新排队**不会**自动重跑抽取。
+// 它把任务复位成 pending、清空上一轮的报错，让它排在队首等执行；
+// 要立刻重跑，用户需要回到智能录题页重新发起（原文仍在用户手里）。
+// 这条规则和队列面板上 worker_online=false 的提示是同一件事的两面。
+func (s *ImportService) RetryTask(ctx context.Context, user *model.User, subjectID, taskID uint) (*schema.ImportTaskResponse, error) {
+	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
+		return nil, err
+	}
+	task, err := s.loadTask(ctx, subjectID, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	from := []model.ImportTaskStatus{
+		model.ImportStatusFailed,
+		model.ImportStatusCancelled,
+	}
+	retryable := task.Retryable(model.MaxImportAttempt)
+	// "已完成但一题都没抽出来"也是允许重试的，但它不是终态机里的错误态，
+	// 因此单独放宽前置条件；上限依旧由 Retryable 判定。
+	if task.Status == model.ImportStatusCompleted && task.TotalCount == 0 {
+		from = append(from, model.ImportStatusCompleted)
+	}
+	if !retryable {
+		return nil, apperr.New(apperr.CodeConflict, "该任务当前状态不允许重试").
+			WithDetail("状态=%s，已执行 %d 次（上限 %d 次）",
+				task.Status, task.Attempt, model.MaxImportAttempt)
+	}
+
+	task.MarkRetried()
+	ok, err := s.repos.ImportTasks.SwapStatus(ctx, task.ID, from, taskStateFields(task))
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	if !ok {
+		return nil, apperr.New(apperr.CodeConflict, "任务状态已被其他操作改变，请刷新后重试")
+	}
+	return ptrTo(schema.NewImportTaskResponse(task)), nil
+}
+
+// DeleteTask 删除一条导入记录，并清理由它带来的落盘文件。
+//
+// 刻意**不**动题目：导入记录是一次操作的历史，题目是内容。
+// 用户删记录通常是因为"这次导错了、不想看见"，而不是想把已经录好的题也抹掉；
+// 真要删题有题库页的删除与回收站。删完之后题目上的 import_task_id 会指向
+// 一个不存在的任务——这是有意的：它仍然记录着"这道题曾由第 N 次导入产生"。
+func (s *ImportService) DeleteTask(ctx context.Context, user *model.User, subjectID, taskID uint) error {
+	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
+		return err
+	}
+	task, err := s.loadTask(ctx, subjectID, taskID)
+	if err != nil {
+		return err
+	}
+
+	// 先删记录再删文件：反过来的话，文件删不掉会留下"记录还在、文件没了"的
+	// 半截状态，而磁盘上的残留文件是人工就能清掉的东西。
+	if err := s.repos.ImportTasks.Delete(ctx, task.ID); err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	s.removeTaskFile(task)
+	return nil
+}
+
+// QueueStatus 队列状态：各状态计数 + 活动任务的 FIFO 位置。
+func (s *ImportService) QueueStatus(ctx context.Context, user *model.User, subjectID uint) (*schema.ImportQueueStatusResponse, error) {
+	if err := authorizeRead(user, subjectID); err != nil {
+		return nil, err
+	}
+
+	// 计数与列表共用同一个可见范围：否则"队列里有 3 个"却一个都列不出来，
+	// 用户会以为是自己筛错了。
+	filter := s.taskVisibility(user, subjectID)
+
+	counts, err := s.repos.ImportTasks.StatusCounts(ctx, filter)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	active, err := s.repos.ImportTasks.ListActive(ctx, filter, queuePreviewLimit)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+
+	stats := schema.ImportTaskStatusCounts{
+		Pending:    counts[model.ImportStatusPending],
+		Processing: counts[model.ImportStatusProcessing],
+		Completed:  counts[model.ImportStatusCompleted],
+		Failed:     counts[model.ImportStatusFailed],
+		Cancelled:  counts[model.ImportStatusCancelled],
+		Total: counts[model.ImportStatusPending] + counts[model.ImportStatusProcessing] +
+			counts[model.ImportStatusCompleted] + counts[model.ImportStatusFailed] +
+			counts[model.ImportStatusCancelled],
+	}
+
+	// 处理中的排在最前面：它已经占用了执行位，
+	// 让它显示成"队列第 3 位"会让人以为还得等两个任务。
+	sort.SliceStable(active, func(a, b int) bool {
+		return active[a].Status == model.ImportStatusProcessing &&
+			active[b].Status != model.ImportStatusProcessing
+	})
+
+	items := make([]schema.ImportQueueItem, 0, len(active))
+	for i := range active {
+		items = append(items, schema.ImportQueueItem{
+			TaskID:           active[i].ID,
+			OriginalFilename: active[i].OriginalFilename,
+			Status:           active[i].Status,
+			StatusLabel:      importStatusLabel(active[i].Status),
+			QueuePosition:    i + 1,
+			Attempt:          active[i].Attempt,
+			CreatedAt:        active[i].CreatedAt,
+		})
+	}
+
+	return &schema.ImportQueueStatusResponse{
+		Stats:        stats,
+		ActiveTasks:  items,
+		WorkerOnline: false,
+		Hint:         "抽取当前是同步执行的，队列中的任务不会自动开始；需要重跑请回到智能录题页重新发起。",
+	}, nil
+}
+
+// TaskQuestions 列出某次导入产生的题目。
+func (s *ImportService) TaskQuestions(ctx context.Context, user *model.User, subjectID, taskID uint, limit, offset int) ([]schema.QuestionBrief, int64, error) {
+	if err := authorizeRead(user, subjectID); err != nil {
+		return nil, 0, err
+	}
+	if _, err := s.loadTask(ctx, subjectID, taskID); err != nil {
+		return nil, 0, err
+	}
+
+	list, total, err := s.repos.Questions.ListByImportTask(ctx, model.QuestionFilter{
+		SubjectID:         subjectID,
+		ViewerID:          user.ID,
+		CanViewPrivateAll: user.Can(model.PermViewPrivateAny, subjectID),
+	}, taskID, model.SortByCreatedAsc, limit, offset)
+	if err != nil {
+		return nil, 0, apperr.ErrInternal.WithCause(err)
+	}
+	if len(list) == 0 {
+		return []schema.QuestionBrief{}, total, nil
+	}
+
+	// 复用题库列表的批量装载（标签/知识点/子题数各一条 SQL），
+	// 否则这里会退化成每题三次查询的老写法。
+	briefs, err := s.questions.toBriefs(ctx, list)
+	if err != nil {
+		return nil, 0, err
+	}
+	return briefs, total, nil
+}
+
+// queuePreviewLimit 队列面板最多预览多少个活动任务。
+// 计数是全量的，预览是给人看的——队列真排到几百个时，界面也不该被撑爆。
+const queuePreviewLimit = 20
+
+// taskVisibility 导入任务列表/队列的可见范围：与 ListTasks 同一套规则。
+func (s *ImportService) taskVisibility(user *model.User, subjectID uint) repository.ImportTaskListFilter {
+	f := repository.ImportTaskListFilter{SubjectID: subjectID}
+	if !user.IsSuperuser {
+		f.UserID = user.ID
+	}
+	return f
+}
+
+// loadTask 读取任务并确认它属于该学科。
+//
+// 跨学科一律按"不存在"处理（404 而不是 403）：告诉调用者
+// "这个 id 存在，但在另一个学科"等于提供了一台学科 id 探测器。
+func (s *ImportService) loadTask(ctx context.Context, subjectID, taskID uint) (*model.ImportTask, error) {
+	task, err := s.repos.ImportTasks.Get(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.SubjectID == nil || *task.SubjectID != subjectID {
+		return nil, apperr.ErrNotFound.WithDetail("导入任务 %d 不存在", taskID)
+	}
+	return task, nil
+}
+
+// removeTaskFile 清理任务附带的落盘文件。
+//
+// 只在注入了存储时才做，且交给 storage 层去解析路径：
+// 它会把解析结果限制在媒体目录内，因此即使 FilePath 里是
+// "../../../etc/passwd" 也只会解析成媒体目录下的一个不存在的相对路径。
+// 删不掉不是错误——磁盘上的残留文件由运维处理，不该让"删除记录"整体失败。
+func (s *ImportService) removeTaskFile(task *model.ImportTask) {
+	if s.storage == nil || strings.TrimSpace(task.FilePath) == "" {
+		return
+	}
+	if err := s.storage.Remove(task.FilePath); err != nil {
+		slog.Warn("删除导入任务附件失败", "task_id", task.ID, "error", err)
+	}
+}
+
+// saveTaskState 把任务的状态机字段与计数字段写回数据库。
+//
+// 集中在一处是为了避免"改了状态机却漏写某个字段"——
+// 这类遗漏不会报错，只会让历史页显示出一条自相矛盾的记录
+// （比如状态是已完成却没有结束时间）。
+func (s *ImportService) saveTaskState(ctx context.Context, task *model.ImportTask) error {
+	if err := s.repos.ImportTasks.UpdateFields(ctx, task.ID, taskStateFields(task)); err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	return nil
+}
+
+// taskStateFields 需要持久化的任务字段。
+//
+// 用 map 而不是 Save(struct)：GORM 的结构体更新会跳过零值，
+// 于是"重试时清空 error_msg / finished_at"会被静默丢掉。
+func taskStateFields(t *model.ImportTask) map[string]any {
+	return map[string]any{
+		"status":       t.Status,
+		"attempt":      t.Attempt,
+		"error_msg":    t.ErrorMsg,
+		"started_at":   t.StartedAt,
+		"finished_at":  t.FinishedAt,
+		"total_count":  t.TotalCount,
+		"saved_count":  t.SavedCount,
+		"failed_count": t.FailedCount,
+	}
+}
+
+// importStatusLabel 状态的中文名，与 schema 中的标签保持一致。
+func importStatusLabel(s model.ImportTaskStatus) string {
+	return schema.ImportStatusLabel(s)
 }
 
 // ---- 辅助 ----
@@ -621,4 +974,61 @@ func keysOf(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
+// extractSourceLabel 抽取记录的来源描述。
+//
+// 现状：还没有文件上传入口（粘贴文本 / 拍照识题是仅有的两条路），
+// 拿不到真实文件名。与其让历史列表一列空白，不如如实写清这次到底导了什么——
+// "图片识别（3 张）"对用户是有用信息，NULL 不是。
+// 接入文件上传之后，这里会优先返回用户上传时的原始文件名。
+func extractSourceLabel(req *schema.ExtractRequest, mode importing.Mode) string {
+	if name := sanitizeFilename(req.Filename); name != "" {
+		return name
+	}
+	switch {
+	case len(req.Images) > 0 && strings.TrimSpace(req.Content) == "":
+		return fmt.Sprintf("图片识别（%d 张）", len(req.Images))
+	case mode == importing.ModeSolve:
+		return "补写答案"
+	default:
+		return "粘贴文本"
+	}
+}
+
+// commitSourceLabel 入库记录的来源描述。
+func commitSourceLabel(req *schema.CommitRequest) string {
+	if name := sanitizeFilename(req.Filename); name != "" {
+		return name + "（入库）"
+	}
+	return fmt.Sprintf("入库审核（%d 题）", len(req.Drafts))
+}
+
+// sanitizeFilename 清洗调用方给的文件名：只保留路径末段，去掉控制字符。
+//
+// 它会落库并回显到历史列表，因此不能原样存——传 "../../etc/passwd"
+// 或一段 ANSI 转义序列都不该被接受。超过 200 字符的部分按**字符**截断，
+// 按字节切会把一个中文字劈成乱码。
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = strings.ReplaceAll(name, "\\", "/")
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	if runes := []rune(name); len(runes) > 200 {
+		name = string(runes[:200])
+	}
+	return name
 }

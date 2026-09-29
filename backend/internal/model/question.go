@@ -74,7 +74,7 @@ type ReviewLog struct {
 	QuestionID uint `gorm:"not null;index" json:"question_id"`
 	ReviewerID uint `gorm:"not null;index" json:"reviewer_id"`
 
-	// Action: approve | reject | archive | restore
+	// Action: approve | reject | archive | restore | edit
 	Action string `gorm:"size:16;not null" json:"action"`
 	// FromStatus / ToStatus 状态流转，便于画审核流程图。
 	FromStatus QuestionStatus `gorm:"size:16;not null" json:"from_status"`
@@ -86,6 +86,21 @@ type ReviewLog struct {
 }
 
 func (ReviewLog) TableName() string { return "review_logs" }
+
+// 审核日志的 action 取值全集。
+//
+// 之所以用常量而不是散落在 service 里的字面量：这个列同时被
+// 审核历史的界面、未来的统计报表和单题/批量两条写入路径消费，
+// 一旦某条路径拼错一个字母，历史里就会多出一个人类看不懂的动作。
+const (
+	ReviewActionApprove = "approve"
+	ReviewActionReject  = "reject"
+	ReviewActionArchive = "archive"
+	ReviewActionRestore = "restore"
+	// ReviewActionEdit 内容被直接修改（已发布题目的勘误）。
+	// 状态没有变化，因此 FromStatus == ToStatus，界面上要按 action 而非状态区分。
+	ReviewActionEdit = "edit"
+)
 
 // ---- 内容值对象（存进 JSON 列，不单独建表）----
 
@@ -164,6 +179,18 @@ type QuestionFilter struct {
 	TagMatch string
 
 	CreatedBy uint
+	// Source 来源模糊匹配（原始文件名等）。典型场景是"这批题是哪次录入带来的"。
+	Source string
+	// ReviewCount 精确匹配已通过的审核次数。用来定位"过了一道复核仍没发布"的题。
+	//
+	// 用指针而不是 int：0 本身是一个有意义的取值（"还没被任何人审过"），
+	// 裸 int 的零值同时又表示"不过滤"，两者无法区分。
+	ReviewCount *int
+	// ReviewerID 被此人审核过（repository 走 review_logs 子查询）。
+	//
+	// 为什么不用 questions 表上的列：谁审过一道题是多对多关系，
+	// 一次审核对应一行 review_logs 记录，凭空在题目上加一列会立刻失真。
+	ReviewerID uint
 	// RootOnly 只返回独立题（不含子题）。
 	RootOnly bool
 	// IncludeDeleted 是否包含已软删除的题目（回收站）。

@@ -141,8 +141,21 @@ func (r *QuestionRepo) GetDeleted(ctx context.Context, id uint) (*model.Question
 
 // List 按条件查询题目。
 func (r *QuestionRepo) List(ctx context.Context, f model.QuestionFilter, sort model.QuestionSort, limit, offset int) ([]model.Question, int64, error) {
-	q := r.buildQuery(ctx, f)
+	return r.list(ctx, r.buildQuery(ctx, f), sort, limit, offset)
+}
 
+// ListByImportTask 列出某次导入产生的题目。
+//
+// 复用 List 的**全部**筛选与可见性条件，只多一个 import_task_id 条件。
+// 刻意不另写一套 SQL：两边条件一旦不同源，就会出现
+// "历史页说这次导入了 20 道、按同一条件在题库页只搜到 18 道"这种对不上账的情况。
+func (r *QuestionRepo) ListByImportTask(ctx context.Context, f model.QuestionFilter, importTaskID uint, sort model.QuestionSort, limit, offset int) ([]model.Question, int64, error) {
+	return r.list(ctx, r.buildQuery(ctx, f).Where("questions.import_task_id = ?", importTaskID), sort, limit, offset)
+}
+
+// list 分页执行已构造好的查询。List 与 ListByImportTask 共用，
+// 保证"计数"与"取数"永远来自同一条 SQL。
+func (r *QuestionRepo) list(ctx context.Context, q *gorm.DB, sort model.QuestionSort, limit, offset int) ([]model.Question, int64, error) {
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("统计题目数量失败: %w", err)
@@ -160,6 +173,20 @@ func (r *QuestionRepo) List(ctx context.Context, f model.QuestionFilter, sort mo
 		return nil, 0, err
 	}
 	return list, total, nil
+}
+
+// SetImportTask 批量把题目挂到导入任务上（一条 UPDATE 覆盖整批）。
+//
+// 导入入库后要做一次溯源回填：题目必须先建出来才有主键，
+// 而同一批题目共享同一个导入任务 id，因此一次 IN 更新即可，
+// 不必在循环里给每道题补一条 UPDATE——200 道题的导入会因此少 200 次往返。
+func (r *QuestionRepo) SetImportTask(ctx context.Context, ids []uint, importTaskID uint) error {
+	if len(ids) == 0 || importTaskID == 0 {
+		return nil
+	}
+	return conn(ctx, r.db).Model(&model.Question{}).
+		Where("id IN ?", ids).
+		Update("import_task_id", importTaskID).Error
 }
 
 // buildQuery 构造筛选条件。列表与计数复用，保证两者结果一致。
@@ -204,6 +231,19 @@ func (r *QuestionRepo) buildQuery(ctx context.Context, f model.QuestionFilter) *
 	}
 	if f.CreatedBy > 0 {
 		q = q.Where("questions.created_by = ?", f.CreatedBy)
+	}
+	if f.Source != "" {
+		q = q.Where("questions.source LIKE ?", "%"+escapeLike(f.Source)+"%")
+	}
+	if f.ReviewCount != nil {
+		q = q.Where("questions.review_count = ?", *f.ReviewCount)
+	}
+	if f.ReviewerID > 0 {
+		// "被某人审核过"只能通过审核流水判定，questions 表上没有这一列。
+		sub := conn(ctx, r.db).Model(&model.ReviewLog{}).
+			Select("question_id").
+			Where("reviewer_id = ?", f.ReviewerID)
+		q = q.Where("questions.id IN (?)", sub)
 	}
 	if f.RootOnly {
 		q = q.Where("questions.parent_id IS NULL")

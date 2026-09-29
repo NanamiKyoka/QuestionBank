@@ -35,12 +35,26 @@ type QuestionCreateRequest struct {
 	KnowledgePointIDs []uint `json:"knowledge_point_ids"`
 
 	Source string `json:"source" binding:"omitempty,max=255"`
+	// ImportTaskID 溯源：这批题目来自哪一次导入。
+	//
+	// 由智能录题的入库流程填写，用来回答"这道题是哪次导入带进来的"。
+	// ⚠️ 当前的落库动作由导入用例在入库之后统一回填
+	//（repository.QuestionRepo.SetImportTask），因为题目必须先建出来才有主键；
+	// 本字段属于接口契约，QuestionService.Create 直接采纳它之后即可删掉那次回填。
+	ImportTaskID *uint `json:"import_task_id"`
 	// Status 仅管理员可指定；普通用户创建时一律为草稿。
 	Status model.QuestionStatus `json:"status" binding:"omitempty"`
 }
 
 // QuestionUpdateRequest 更新题目。未传的字段保持不变。
 type QuestionUpdateRequest struct {
+	// ParentID 改挂母题。
+	//
+	// 用 **uint 区分三种情形：nil（不动）、指向一题（改挂为子题）、
+	// 指向 0（提升为独立题）。裸指针表达不出"解除挂载"，
+	// 于是界面上就没法把一道子题从母题下摘出来。
+	ParentID *uint `json:"parent_id"`
+
 	QuestionType *model.QuestionType `json:"question_type"`
 	Difficulty   *int                `json:"difficulty" binding:"omitempty,min=1,max=5"`
 	Visibility   *model.Visibility   `json:"visibility" binding:"omitempty,oneof=public private"`
@@ -71,6 +85,26 @@ type QuestionBatchDeleteRequest struct {
 type QuestionBatchUpdateRequest struct {
 	IDs    []uint `json:"ids" binding:"required,min=1,max=200"`
 	Source string `json:"source" binding:"required,max=255"`
+}
+
+// QuestionBatchReviewRequest 批量提交审核 / 批量通过 / 批量驳回。
+//
+// Action 与单题的 Submit / Review 保持同一套语义：
+//
+//	submit  草稿 → 待审（需要 edit_question）
+//	approve 待审 → 通过一次，达标即发布（需要 review_question，学科阈值照常生效）
+//	reject  待审 → 退回草稿并清零审核次数（需要 review_question）
+type QuestionBatchReviewRequest struct {
+	IDs    []uint `json:"ids" binding:"required,min=1,max=200"`
+	Action string `json:"action" binding:"required,oneof=submit approve reject"`
+	// Comment 驳回原因。批量驳回时整批共用同一条原因。
+	Comment string `json:"comment" binding:"omitempty,max=512"`
+}
+
+// QuestionArchiveRequest 归档 / 取消归档。
+type QuestionArchiveRequest struct {
+	// Comment 归档理由，写入审核日志。取消归档时可留空。
+	Comment string `json:"comment" binding:"omitempty,max=512"`
 }
 
 // ReviewRequest 审核。
@@ -119,6 +153,10 @@ type QuestionBrief struct {
 	KnowledgePoints []KnowledgePointBrief `json:"knowledge_points"`
 
 	ChildCount int `json:"child_count"`
+
+	// ReviewCount 已通过的审核次数。列表页要靠它显示「还差几次复核」，
+	// 否则审核者只能逐题点开详情才能知道离学科阈值还差多少。
+	ReviewCount int `json:"review_count"`
 
 	Source    string    `json:"source"`
 	CreatedBy uint      `json:"created_by"`
@@ -201,6 +239,7 @@ func NewQuestionBrief(q *model.Question, tags []model.Tag, kps []model.Knowledge
 		Tags:              NewTagBriefs(tags),
 		KnowledgePoints:   NewKnowledgePointBriefs(kps),
 		ChildCount:        childCount,
+		ReviewCount:       q.ReviewCount,
 		Source:            q.Source,
 		CreatedBy:         q.CreatedBy,
 		CreatedAt:         q.CreatedAt,

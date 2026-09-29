@@ -24,12 +24,20 @@ type ListQuery struct {
 	Status     model.QuestionStatus
 	Difficulty int
 
-	KnowledgePointID uint
-	IncludeSub       bool
-	TagIDs           []uint
-	TagMatch         string
+	// KnowledgePointIDs 支持多选（?knowledge_point_ids=1&knowledge_point_ids=2）。
+	// 仓储层本来就是按集合过滤的，多选只是把 HTTP 层的单值绑定补齐。
+	KnowledgePointIDs []uint
+	IncludeSub        bool
+	TagIDs            []uint
+	TagMatch          string
 
-	CreatedBy      uint
+	CreatedBy uint
+	// Source 来源模糊匹配。
+	Source string
+	// ReviewCount 精确匹配审核次数；nil 表示不过滤。
+	ReviewCount *int
+	// ReviewerID 被此人审核过。
+	ReviewerID     uint
 	RootOnly       bool
 	IncludeDeleted bool
 	// OnlyDeleted 只返回已软删除的题目（回收站）。与 IncludeDeleted 互斥。
@@ -53,6 +61,9 @@ func (s *QuestionService) List(ctx context.Context, user *model.User, subjectID 
 		TagIDs:            q.TagIDs,
 		TagMatch:          q.TagMatch,
 		CreatedBy:         q.CreatedBy,
+		Source:            strings.TrimSpace(q.Source),
+		ReviewCount:       q.ReviewCount,
+		ReviewerID:        q.ReviewerID,
 		RootOnly:          q.RootOnly,
 		IncludeDeleted:    q.IncludeDeleted,
 		OnlyDeleted:       q.OnlyDeleted,
@@ -60,8 +71,8 @@ func (s *QuestionService) List(ctx context.Context, user *model.User, subjectID 
 		CanViewPrivateAll: user.Can(model.PermViewPrivateAny, subjectID),
 	}
 
-	if q.KnowledgePointID > 0 {
-		ids, err := s.resolveKnowledgePoints(ctx, q.KnowledgePointID, q.IncludeSub)
+	if len(q.KnowledgePointIDs) > 0 {
+		ids, err := s.resolveKnowledgePoints(ctx, q.KnowledgePointIDs, q.IncludeSub)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -83,24 +94,39 @@ func (s *QuestionService) List(ctx context.Context, user *model.User, subjectID 
 	return briefs, total, nil
 }
 
-// resolveKnowledgePoints 把"知识点 + 是否含子树"解析为 id 集合。
-func (s *QuestionService) resolveKnowledgePoints(ctx context.Context, kpID uint, includeSub bool) ([]uint, error) {
-	kp, err := s.repos.KnowledgePoints.Get(ctx, kpID)
-	if err != nil {
-		return nil, err
+// resolveKnowledgePoints 把"知识点（可多选）+ 是否含子树"解析为 id 集合。
+//
+// 多选时各子树取并集：筛选语义是"命中其中任意一个知识点"，
+// 因此两个父知识点各自的子树都要被展开，不能只展开其中一个。
+func (s *QuestionService) resolveKnowledgePoints(ctx context.Context, kpIDs []uint, includeSub bool) ([]uint, error) {
+	seen := make(map[uint]bool, len(kpIDs))
+	for _, kpID := range kpIDs {
+		if kpID == 0 {
+			continue
+		}
+		kp, err := s.repos.KnowledgePoints.Get(ctx, kpID)
+		if err != nil {
+			return nil, err
+		}
+		ids := []uint{kp.ID}
+		if includeSub {
+			subtree, err := s.repos.KnowledgePoints.Subtree(ctx, kp.SubjectID, kp.Path)
+			if err != nil {
+				return nil, apperr.ErrInternal.WithCause(err)
+			}
+			for i := range subtree {
+				ids = append(ids, subtree[i].ID)
+			}
+		}
+		for _, id := range ids {
+			seen[id] = true
+		}
 	}
-	if !includeSub {
-		return []uint{kp.ID}, nil
+	out := make([]uint, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
 	}
-	subtree, err := s.repos.KnowledgePoints.Subtree(ctx, kp.SubjectID, kp.Path)
-	if err != nil {
-		return nil, apperr.ErrInternal.WithCause(err)
-	}
-	ids := make([]uint, 0, len(subtree))
-	for i := range subtree {
-		ids = append(ids, subtree[i].ID)
-	}
-	return ids, nil
+	return out, nil
 }
 
 // toBriefs 把题目列表转换为响应对象，关联数据批量装载。
@@ -382,6 +408,59 @@ func (s *QuestionService) prepare(
 		answerJSON:  answerJSON,
 		stemText:    domain.PlainText(stemDoc),
 	}, nil
+}
+
+// checkParentLink 校验把题目挂到 parentID 下不会形成环。
+//
+// 为什么必须校验：parent_id 是自引用外键，而级联软删靠 ChildIDs 逐层向下展开。
+// 一旦 A→B→A 成环，那次展开就会在环上永远转下去——不是"删多了"，
+// 而是请求再也返回不了。前端下拉只列独立题因此天然不成环，
+// 但 API 是公开的，校验必须落在服务端。
+func (s *QuestionService) checkParentLink(ctx context.Context, id, subjectID uint, parentID *uint) error {
+	parent, err := s.repos.Questions.Get(ctx, *parentID)
+	if err != nil {
+		return err
+	}
+	if parent.SubjectID != subjectID {
+		return apperr.New(apperr.CodeCrossSubject, "母题不属于该学科")
+	}
+	if parent.ID == id {
+		return apperr.New(apperr.CodeInvalidParam, "题目不能挂到自己名下")
+	}
+
+	// 沿着候选母题向上走，看会不会绕回自己。
+	// 深度上限与 ChildIDs 的展开上限一致：正常数据只有两层，
+	// 走到上限仍未绕回就说明链上有一环（或脏数据），一律拒绝。
+	const maxDepth = 10
+	cursor := parent
+	for depth := 0; depth < maxDepth; depth++ {
+		if cursor.ParentID == nil {
+			return nil
+		}
+		if *cursor.ParentID == id {
+			return apperr.New(apperr.CodeInvalidParam, "不能挂到自己的子题下").
+				WithDetail("母题 %d 的祖先链上存在本题 %d", parent.ID, id)
+		}
+		next, err := s.repos.Questions.Get(ctx, *cursor.ParentID)
+		if err != nil {
+			// 链断在这里说明上游数据已经不一致，如实报出来而不是当作"没问题"。
+			return apperr.From(err)
+		}
+		cursor = next
+	}
+	return apperr.New(apperr.CodeConflict, "母题链层级过深或已存在环")
+}
+
+// resolveParentID 把请求里的 parent_id 归一化成"指针的指针"语义。
+//
+// 约定：JSON 里传 0 表示"解除挂载、变回独立题"，其他非零值表示挂到该题下。
+// 前端 el-select 清空时正好给出 null（= 不传 = 不动）与 0 两种截然不同的含义，
+// 这里把两者区分开。
+func resolveParentID(raw uint) (*uint, error) {
+	if raw == 0 {
+		return nil, nil
+	}
+	return &raw, nil
 }
 
 // checkTagOwnership 校验标签都属于该学科，防止把 A 学科的标签挂到 B 学科的题目上。

@@ -163,6 +163,7 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 		Vectors:    vectorSvc,
 		Stats:      service.NewStatsService(repos),
 		Activities: activitySvc,
+		Settings:   service.NewSettingsService(repos),
 		Uploads:    service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
 		Media:      mediaStore,
 	})

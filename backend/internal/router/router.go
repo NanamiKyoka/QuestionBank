@@ -40,6 +40,7 @@ type Deps struct {
 	Vectors         *service.VectorService
 	Stats           *service.StatsService
 	Activities      *service.ActivityService
+	Settings        *service.SettingsService
 	Uploads         *service.UploadService
 	Media           *storage.Local
 }
@@ -104,6 +105,7 @@ func New(d Deps) *gin.Engine {
 	registerVectorRoutes(v1, d)
 	registerStatsRoutes(v1, d)
 	registerActivityRoutes(v1, d)
+	registerSettingsRoutes(v1, d)
 	registerUploadRoutes(v1, d)
 
 	// 媒体文件（题目配图）直接由后端提供。
@@ -244,12 +246,15 @@ func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
 	{
 		q.POST("/batch-delete", h.BatchDelete)
 		q.POST("/batch-source", h.BatchUpdateSource)
+		q.POST("/batch-review", h.BatchReview)
 		q.GET("/:id", h.Get)
 		q.PUT("/:id", h.Update)
 		q.POST("/:id/restore", h.Restore)
 		q.POST("/:id/submit", h.Submit)
 		q.POST("/:id/review", h.Review)
 		q.GET("/:id/review-logs", h.ReviewLogs)
+		q.POST("/:id/archive", h.Archive)
+		q.POST("/:id/unarchive", h.Unarchive)
 	}
 }
 
@@ -344,6 +349,13 @@ func registerImportRoutes(g *gin.RouterGroup, d Deps) {
 		imports.POST("/extract", h.Extract)
 		imports.POST("/commit", h.Commit)
 		imports.GET("", h.ListTasks)
+		// queue-status 必须排在 :task_id 之前：gin 的路由树是按段匹配的，
+		// 反过来会让 "queue-status" 被 :task_id 接住，然后在 parseID 上 400。
+		imports.GET("/queue-status", h.QueueStatus)
+		imports.GET("/:task_id/questions", h.TaskQuestions)
+		imports.POST("/:task_id/cancel", h.CancelTask)
+		imports.POST("/:task_id/retry", h.RetryTask)
+		imports.DELETE("/:task_id", h.DeleteTask)
 	}
 }
 
@@ -371,6 +383,20 @@ func registerActivityRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewActivityHandler(d.Activities)
 	// 审计日志含全部用户的操作记录，仅管理员可见。
 	g.GET("/activity-logs", middleware.RequireAuth(), h.List)
+}
+
+// registerSettingsRoutes 系统设置读写。
+//
+// 仅管理员可用：这些键决定的是系统级行为（是否开放注册、审核默认阈值），
+// 而不是某个学科的偏好。
+func registerSettingsRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewSettingsHandler(d.Settings)
+	settings := g.Group("/settings")
+	settings.Use(middleware.RequireAuth(), middleware.RequireSuperuser())
+	{
+		settings.GET("", h.List)
+		settings.PUT("/:key", h.Update)
+	}
 }
 
 func registerUploadRoutes(g *gin.RouterGroup, d Deps) {
