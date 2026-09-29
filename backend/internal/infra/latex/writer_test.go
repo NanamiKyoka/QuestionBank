@@ -30,11 +30,38 @@ func TestWriteProducesCompilableSkeleton(t *testing.T) {
 		`\end{document}`,
 		`\section*{一、选择题}`,
 		`\newpage`,
-		`\maketitle`,
 	} {
 		if !strings.Contains(tex, want) {
 			t.Fatalf("应包含 %q，实际:\n%s", want, tex)
 		}
+	}
+}
+
+// 标题由 IR 里的标题块渲染，渲染器不能再额外注入一次。
+//
+// 曾经这里会同时输出 \title + \maketitle，而 assembler 也已经把标题
+// 作为第一个块放进 IR，导致导出的 LaTeX 里标题出现两遍。
+func TestWriteEmitsTitleExactlyOnce(t *testing.T) {
+	res, err := Write(&export.Document{
+		Title: "高一数学月考",
+		Blocks: []export.Block{
+			&export.Paragraph{
+				Runs:  []export.Inline{&export.Text{Value: "高一数学月考", Bold: true}},
+				Align: export.AlignCenter,
+			},
+			&export.Paragraph{Runs: []export.Inline{&export.Text{Value: "正文内容"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Write 失败: %v", err)
+	}
+	tex := string(res.TeX)
+
+	if strings.Contains(tex, `\maketitle`) {
+		t.Fatalf("不应输出 \\maketitle：标题已作为文档块存在，再输出会重复:\n%s", tex)
+	}
+	if got := strings.Count(tex, "高一数学月考"); got != 1 {
+		t.Fatalf("标题应恰好出现 1 次，实际 %d 次:\n%s", got, tex)
 	}
 }
 

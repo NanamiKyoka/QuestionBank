@@ -44,6 +44,19 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '知识点' },
       },
       {
+        path: 'papers',
+        name: 'papers',
+        component: () => import('@/views/PapersView.vue'),
+        meta: { title: '试卷' },
+      },
+      {
+        // 编辑台独占整页：组卷需要横向空间，塞进布局内容区会很挤。
+        path: 'papers/:id/edit',
+        name: 'paper-editor',
+        component: () => import('@/views/PaperEditorView.vue'),
+        meta: { title: '组卷工作台' },
+      },
+      {
         path: 'tags',
         name: 'tags',
         component: () => import('@/views/TagsView.vue'),

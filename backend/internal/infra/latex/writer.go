@@ -38,17 +38,17 @@ func Write(doc *export.Document) (*Result, error) {
 	sb.WriteString("\\usepackage{enumitem}\n")
 	sb.WriteString("\\setlist{nosep,leftmargin=2em}\n")
 
-	if title := firstNonEmpty(doc.Title, doc.Meta["title"]); title != "" {
-		sb.WriteString("\\title{" + escape(title) + "}\n")
-	}
 	if subject := doc.Meta["subject"]; subject != "" {
 		sb.WriteString("\\newcommand{\\QMSubject}{" + escape(subject) + "}\n")
 	}
 	sb.WriteString("\\begin{document}\n")
-	if doc.Title != "" {
-		sb.WriteString("\\maketitle\n")
-	}
 
+	// 刻意**不输出 \title / \maketitle**。
+	//
+	// 标题已经作为文档的第一个块存在于 IR 里，DOCX 与 LaTeX 都靠渲染
+	// 这个块来出标题。这里再 \maketitle 一次，导出的 LaTeX 里标题就
+	// 出现两遍。让两个渲染器消费同一份 IR 是这套导出的基本约定，
+	// 渲染器额外注入内容正是它要避免的那种差异。
 	for _, b := range doc.Blocks {
 		if err := writeBlock(&sb, r, b); err != nil {
 			return nil, err
@@ -210,15 +210,6 @@ func extOr(ext, def string) string {
 		ext = "jpeg"
 	}
 	return ext
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // trimMathDelims 去掉公式外层的 $ / \[ \] 。

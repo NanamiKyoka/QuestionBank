@@ -50,19 +50,22 @@ func Assemble(in Input, loader ImageLoader) *Document {
 		Blocks: []Block{},
 	}
 
-	if in.NumberingEnabled || in.ScoringEnabled {
+	// 标题始终输出。
+	//
+	// 曾经把它放在 "NumberingEnabled || ScoringEnabled" 条件下，理由是
+	// "两者都关就导出一份纯内容"。但标题是元信息而不是内容：
+	// 关掉编号后导出的试卷没有标题，打印出来根本认不出是哪份卷子。
+	doc.Blocks = append(doc.Blocks, &Paragraph{
+		Runs:       []Inline{&Text{Value: in.Title, Bold: true}},
+		Align:      AlignCenter,
+		SpaceAfter: 8,
+	})
+	if in.ScoringEnabled && in.TotalScore > 0 {
 		doc.Blocks = append(doc.Blocks, &Paragraph{
-			Runs:       []Inline{&Text{Value: in.Title, Bold: true}},
+			Runs:       []Inline{&Text{Value: fmt.Sprintf("（满分 %.0f 分）", in.TotalScore)}},
 			Align:      AlignCenter,
-			SpaceAfter: 8,
+			SpaceAfter: 10,
 		})
-		if in.ScoringEnabled && in.TotalScore > 0 {
-			doc.Blocks = append(doc.Blocks, &Paragraph{
-				Runs:       []Inline{&Text{Value: fmt.Sprintf("（满分 %.0f 分）", in.TotalScore)}},
-				Align:      AlignCenter,
-				SpaceAfter: 10,
-			})
-		}
 	}
 
 	// 建立父子索引，并按 position 排序。

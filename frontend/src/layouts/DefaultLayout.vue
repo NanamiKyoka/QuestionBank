@@ -26,6 +26,7 @@ interface MenuItem {
 const menus: MenuItem[] = [
   { name: 'dashboard', title: '总览', icon: 'DataBoard' },
   { name: 'questions', title: '题库', icon: 'Collection', permission: 'view_question' },
+  { name: 'papers', title: '试卷', icon: 'Document', permission: 'view_question' },
   { name: 'knowledge-points', title: '知识点', icon: 'Share', permission: 'view_question' },
   { name: 'tags', title: '标签', icon: 'PriceTag', permission: 'view_question' },
   { name: 'subjects', title: '学科管理', icon: 'School', admin: true },
@@ -40,7 +41,15 @@ const visibleMenus = computed(() =>
   }),
 )
 
-const activeMenu = computed(() => (route.name as string) ?? 'dashboard')
+/** 子页面（如组卷工作台）不在菜单里，但要让父菜单保持高亮。 */
+const menuAliases: Record<string, string> = {
+  'paper-editor': 'papers',
+}
+
+const activeMenu = computed(() => {
+  const current = (route.name as string) ?? 'dashboard'
+  return menuAliases[current] ?? current
+})
 
 onMounted(async () => {
   // 布局挂载时加载学科列表：几乎所有页面都依赖"当前学科"。
