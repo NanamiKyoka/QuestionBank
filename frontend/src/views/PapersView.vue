@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ApiError } from '@/api/http'
 import { paperApi, type PaperBrief, type PaperFolder, type PaperScope, type PaperStatus } from '@/api/paper'
 import { useSubjectStore } from '@/stores/subject'
 
@@ -35,6 +36,13 @@ const createForm = reactive({
 const folderVisible = ref(false)
 const folderName = ref('')
 const folderScope = ref<PaperScope>('personal')
+/** 新建目录的上级。侧栏菜单里选「新建子目录」时显式指定，否则跟随当前筛选。 */
+const folderParentId = ref<number | null>(null)
+
+/** 移动 / 重命名 / 删除的作用目标。 */
+const folderTarget = ref<PaperFolder | null>(null)
+const moveVisible = ref(false)
+const moveParentId = ref<number | null>(null)
 
 const canEdit = computed(() => subject.can('edit_question'))
 
@@ -92,6 +100,42 @@ const flatFolders = computed(() => {
   return out
 })
 
+function findFolder(id: number): PaperFolder | null {
+  for (const item of flatFolders.value) {
+    if (item.folder.id === id) return item.folder
+  }
+  return null
+}
+
+/** 某个目录的整棵子树 id。 */
+function subtreeIDs(folder: PaperFolder): number[] {
+  const out: number[] = []
+  const walk = (list: PaperFolder[]) => {
+    for (const child of list) {
+      out.push(child.id)
+      if (child.children?.length) walk(child.children)
+    }
+  }
+  walk(folder.children ?? [])
+  return out
+}
+
+/**
+ * 可选的上级目录。
+ *
+ * 剔掉自己与自己的整棵子树：移动到自己的后代里会让树成环，之后永远走不出来。
+ * 服务端也会拦（IsDescendant），但界面上先剔掉能少一次无谓的报错。
+ * 另外只列同空间的目录——空间不同的目录不能成为父子。
+ */
+const moveCandidates = computed(() => {
+  const target = folderTarget.value
+  if (!target) return []
+  const banned = new Set<number>([target.id, ...subtreeIDs(target)])
+  return flatFolders.value.filter(
+    (item) => !banned.has(item.folder.id) && item.folder.scope === target.scope,
+  )
+})
+
 function openCreate() {
   createForm.title = ''
   createForm.description = ''
@@ -122,6 +166,12 @@ async function submitCreate() {
   await router.push({ name: 'paper-editor', params: { id: paper.id } })
 }
 
+function openCreateFolder(parentID: number | null) {
+  folderName.value = ''
+  folderParentId.value = parentID
+  folderVisible.value = true
+}
+
 async function submitFolder() {
   if (!subject.currentId || !folderName.value.trim()) {
     ElMessage.warning('请输入目录名称')
@@ -130,11 +180,117 @@ async function submitFolder() {
   await paperApi.createFolder(subject.currentId, {
     name: folderName.value.trim(),
     scope: folderScope.value,
-    parent_id: query.folder_id,
+    parent_id: folderParentId.value,
   })
   ElMessage.success('已创建目录')
   folderVisible.value = false
   folderName.value = ''
+  await load()
+}
+
+type FolderCommand = 'child' | 'rename' | 'move' | 'delete'
+
+function onFolderCommand(command: FolderCommand, folder: PaperFolder) {
+  folderTarget.value = folder
+  switch (command) {
+    case 'child':
+      // 新建子目录沿用父目录的空间：跨空间的父子关系服务端直接拒绝。
+      folderScope.value = folder.scope
+      openCreateFolder(folder.id)
+      break
+    case 'rename':
+      void renameFolder(folder)
+      break
+    case 'move':
+      moveParentId.value = folder.parent_id
+      moveVisible.value = true
+      break
+    case 'delete':
+      void removeFolder(folder)
+      break
+  }
+}
+
+async function renameFolder(folder: PaperFolder) {
+  let name: string
+  try {
+    const { value } = await ElMessageBox.prompt('新的目录名称', '重命名目录', {
+      inputValue: folder.name,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v) => (v && v.trim() ? true : '目录名称不能为空'),
+    })
+    name = value.trim()
+  } catch {
+    return
+  }
+  if (name === folder.name) return
+  try {
+    await paperApi.updateFolder(folder.id, { name })
+  } catch (error) {
+    // 409 是"同级重名"，接口层按约定不弹提示，这里补上。
+    if (error instanceof ApiError && error.isConflict) ElMessage.warning('同级下已存在同名目录')
+    return
+  }
+  ElMessage.success('已重命名')
+  await load()
+}
+
+async function submitMoveFolder() {
+  const target = folderTarget.value
+  if (!target) return
+  const parentID = moveParentId.value
+  if (parentID === target.parent_id) {
+    moveVisible.value = false
+    return
+  }
+  // 移回根目录用 clear_parent 表达：parent_id 传 null 会被 cleanParams 丢掉，
+  // 结果就变成"什么都没改"。
+  const payload = parentID == null ? { clear_parent: true } : { parent_id: parentID }
+  try {
+    await paperApi.updateFolder(target.id, payload)
+  } catch (error) {
+    if (error instanceof ApiError && error.isConflict) ElMessage.warning('目标位置下已存在同名目录')
+    return
+  }
+  ElMessage.success('已移动目录')
+  moveVisible.value = false
+  await load()
+}
+
+/**
+ * 删除目录。
+ *
+ * 文案刻意不承诺恢复：后端只给题目和试卷提供了恢复接口
+ * （POST /questions/:id/restore、POST /papers/:id/restore），
+ * 目录没有 restore 路由，回收站也列不出已删除的目录——
+ * 删掉就是从界面上永久消失。说"可恢复"比不说更糟。
+ */
+async function removeFolder(folder: PaperFolder) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除目录「${folder.name}」吗？\n目录需要先清空（里面不能有试卷或子目录）才能删除，且删除后无法恢复。`,
+      '删除目录',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await paperApi.deleteFolder(folder.id)
+  } catch (error) {
+    if (error instanceof ApiError && error.isConflict) {
+      ElMessage.warning(
+        error.detail
+          ? `目录不为空，无法删除（${error.detail}）。请先把试卷与子目录移走。`
+          : '目录不为空，无法删除。请先把试卷与子目录移走。',
+      )
+    }
+    return
+  }
+  ElMessage.success('已删除目录')
+  // 选中的正是被删目录时回到"全部试卷"，否则列表会停在一个筛不到东西的视图上。
+  if (query.folder_id === folder.id) query.folder_id = null
   await load()
 }
 
@@ -201,7 +357,7 @@ function formatTime(value: string): string {
       <template #header>
         <div class="flex items-center justify-between">
           <span class="text-sm font-medium">目录</span>
-          <el-button text size="small" @click="folderVisible = true">
+          <el-button text size="small" @click="openCreateFolder(query.folder_id)">
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>
@@ -218,7 +374,7 @@ function formatTime(value: string): string {
       <div
         v-for="item in flatFolders"
         :key="item.folder.id"
-        class="flex cursor-pointer items-center rounded px-2 py-1.5 text-sm"
+        class="group flex cursor-pointer items-center rounded px-2 py-1.5 text-sm"
         :class="query.folder_id === item.folder.id ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
         :style="{ paddingLeft: `${8 + item.depth * 12}px` }"
         @click="pickFolder(item.folder.id)"
@@ -226,6 +382,23 @@ function formatTime(value: string): string {
         <el-icon class="mr-1 text-gray-400"><Folder /></el-icon>
         <span class="flex-1 truncate">{{ item.folder.name }}</span>
         <span class="text-xs text-gray-400">{{ item.folder.paper_count }}</span>
+        <!-- 包一层 span 阻止冒泡：点菜单不该顺手把侧栏筛选也切过去。
+             el-dropdown 自己的监听在触发元素上，外层拦冒泡不影响它展开。 -->
+        <span v-if="canEdit" class="ml-1" @click.stop>
+          <el-dropdown trigger="click" @command="(cmd: FolderCommand) => onFolderCommand(cmd, item.folder)">
+            <el-button text size="small" class="!h-5 !w-5 opacity-0 transition-opacity group-hover:opacity-100">
+              <el-icon><MoreFilled /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="child">新建子目录</el-dropdown-item>
+                <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                <el-dropdown-item command="move">移动到…</el-dropdown-item>
+                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </span>
       </div>
 
       <el-empty v-if="flatFolders.length === 0" description="暂无目录" :image-size="48" />
@@ -419,15 +592,38 @@ function formatTime(value: string): string {
             <el-radio value="shared">共享</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="query.folder_id" label="上级">
+        <el-form-item v-if="folderParentId" label="上级">
           <span class="text-sm text-gray-500">
-            将建在「{{ flatFolders.find((f) => f.folder.id === query.folder_id)?.folder.name }}」下
+            将建在「{{ findFolder(folderParentId)?.name ?? '未知目录' }}」下
           </span>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="folderVisible = false">取消</el-button>
         <el-button type="primary" @click="submitFolder">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 移动目录 -->
+    <el-dialog v-model="moveVisible" title="移动目录" width="400px">
+      <div v-if="folderTarget" class="text-sm text-gray-500">
+        把「{{ folderTarget.name }}」移动到：
+      </div>
+      <el-select v-model="moveParentId" class="mt-2 w-full" placeholder="根目录">
+        <el-option label="根目录（不放入任何目录）" :value="null" />
+        <el-option
+          v-for="item in moveCandidates"
+          :key="item.folder.id"
+          :label="'　'.repeat(item.depth) + item.folder.name"
+          :value="item.folder.id"
+        />
+      </el-select>
+      <p class="mt-2 text-xs text-gray-400">
+        只能移到同一空间（个人 / 共享）下的其它目录；目录里的试卷会跟着一起搬走。
+      </p>
+      <template #footer>
+        <el-button @click="moveVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitMoveFolder">移动</el-button>
       </template>
     </el-dialog>
   </div>

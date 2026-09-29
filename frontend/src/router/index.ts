@@ -64,6 +64,15 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '组卷工作台' },
       },
       {
+        // 某个定稿版本的只读还原。挂在 papers 下而不是编辑台内部：
+        // 它读的是冻结快照，不接受任何编辑，独立成页才不会让人
+        // 误以为改得动历史版本。
+        path: 'papers/:id/versions/:versionNo',
+        name: 'paper-version',
+        component: () => import('@/views/PaperVersionView.vue'),
+        meta: { title: '版本预览' },
+      },
+      {
         path: 'tags',
         name: 'tags',
         component: () => import('@/views/TagsView.vue'),
@@ -76,6 +85,21 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '智能录题' },
       },
       {
+        // 导入批次的历史与重试入口。排在智能录题之后：处理完导入之后
+        // 用户下一步通常就是回来看这批到底产出了什么、失败在哪。
+        path: 'import-history',
+        name: 'import-history',
+        component: () => import('@/views/ImportHistoryView.vue'),
+        meta: { title: '导入历史' },
+      },
+      {
+        // 每个登录用户都要能改自己的资料，所以不带 admin 标记。
+        path: 'profile',
+        name: 'profile',
+        component: () => import('@/views/ProfileView.vue'),
+        meta: { title: '个人资料' },
+      },
+      {
         path: 'chat',
         name: 'chat',
         component: () => import('@/views/ChatView.vue'),
@@ -86,6 +110,18 @@ const routes: RouteRecordRaw[] = [
         name: 'ai-settings',
         component: () => import('@/views/AISettingsView.vue'),
         meta: { title: 'AI 设置', admin: true },
+      },
+      {
+        path: 'activity-logs',
+        name: 'activity-logs',
+        component: () => import('@/views/ActivityLogView.vue'),
+        meta: { title: '操作日志', admin: true },
+      },
+      {
+        path: 'settings',
+        name: 'settings',
+        component: () => import('@/views/SystemSettingsView.vue'),
+        meta: { title: '系统设置', admin: true },
       },
       {
         path: 'subjects',

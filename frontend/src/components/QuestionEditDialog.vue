@@ -5,9 +5,12 @@ import { knowledgePointApi, questionApi, tagApi } from '@/api'
 import type {
   AnswerSpec,
   KnowledgePoint,
+  QuestionBrief,
   QuestionCreatePayload,
   QuestionDetail,
+  QuestionStatus,
   QuestionType,
+  QuestionUpdatePayload,
   RichDoc,
   Tag,
 } from '@/api/types'
@@ -27,6 +30,14 @@ const props = defineProps<{
   subjectId: number
   /** 为空表示新建。 */
   questionId: number | null
+  /**
+   * 新建时预置的母题。
+   *
+   * 列表上的「添加小问」用它把新题直接挂到当前题下——
+   * 这是材料题唯一真正需要的入口，让用户先去筛选里找出母题再手填 id
+   * 等于把两步操作藏起来。
+   */
+  presumeParentId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +56,10 @@ const submitting = ref(false)
 
 const knowledgePoints = ref<KnowledgePoint[]>([])
 const tags = ref<Tag[]>([])
+/** 母题候选：当前学科下的独立题。 */
+const parentCandidates = ref<QuestionBrief[]>([])
+/** 编辑已有题目时的原始状态，用于决定要不要提示"改动已发布内容"。 */
+const originalStatus = ref<QuestionStatus | null>(null)
 
 interface OptionRow {
   label: string
@@ -55,6 +70,8 @@ const form = reactive({
   question_type: 'single_choice' as QuestionType,
   difficulty: 3,
   visibility: 'public' as 'public' | 'private',
+  /** 母题；null 表示独立题。 */
+  parent_id: null as number | null,
   stem: emptyDoc() as RichDoc,
   options: [] as OptionRow[],
   // 选择/判断类答案
@@ -67,6 +84,8 @@ const form = reactive({
   analysis: null as RichDoc | null,
   tag_ids: [] as number[],
   knowledge_point_ids: [] as number[],
+  /** 改动已发布题目时的说明，写入审核日志。 */
+  change_note: '',
 })
 
 const rules: FormRules = {
@@ -77,6 +96,18 @@ const isChoice = computed(
   () => form.question_type === 'single_choice' || form.question_type === 'multiple_choice',
 )
 const isSingle = computed(() => form.question_type === 'single_choice')
+
+/**
+ * 改已发布的题目要给出提示，不是拦住。
+ *
+ * 服务端从来没有"已发布不可改"的守卫，界面却把编辑按钮藏了起来——
+ * 结果一个错别字只能删除重建，题目 id 一丢，所有引用它的试卷跟着断。
+ * 与其让按钮撒谎，不如把后果说清楚：改完 content_revision 会 +1，
+ * 引用了这道题的卷子会提示"题目已被改动"，改动本身还会写进审核记录。
+ */
+const editsPublished = computed(
+  () => props.questionId !== null && originalStatus.value === 'published',
+)
 
 /** 打开时初始化：新建给默认选项，编辑则回填。 */
 watch(
@@ -92,15 +123,43 @@ watch(
 async function loadOptions() {
   if (!props.subjectId) return
   try {
-    const [tree, tagList] = await Promise.all([
+    const [tree, tagList, parents] = await Promise.all([
       knowledgePointApi.tree(props.subjectId),
       tagApi.list(props.subjectId),
+      loadParentCandidates(),
     ])
     knowledgePoints.value = flatten(tree)
     tags.value = tagList
+    parentCandidates.value = parents
   } catch {
     // 下拉选项加载失败不阻断编辑，用户仍可保存题目本身。
   }
+}
+
+/**
+ * 母题候选：只列**当前学科下的独立题**。
+ *
+ * 限定 root_only=true 顺带解决了环的问题，省掉了在界面上做可达性分析的麻烦：
+ * 候选的 parent_id 全为空，因此它不可能是自己的祖先，
+ * 无论当前题挂在哪儿，挂上去都不成环。服务端还会再校验一次同学科与环，
+ * 这里只是让正常路径下根本触发不到那个错误。
+ *
+ * 排除自身是必须的：否则编辑一道独立题时，它会出现在自己的母题列表里。
+ */
+async function loadParentCandidates(): Promise<QuestionBrief[]> {
+  const result = await questionApi.list(props.subjectId, {
+    root_only: true,
+    sort: 'updated_desc',
+    page: 1,
+    // 母题数量级通常远小于题目总量；200 条足够选，又不至于把弹窗拖慢。
+    page_size: 200,
+  })
+  return (result.list ?? []).filter((q) => q.id !== props.questionId)
+}
+
+function parentLabel(q: QuestionBrief): string {
+  const stem = (q.stem_text || '（无题干）').replace(/\s+/g, ' ').trim()
+  return `#${q.id} ${stem.length > 40 ? `${stem.slice(0, 40)}…` : stem}`
 }
 
 /** 知识点是树，下拉框需要扁平列表 + 缩进表示层级。 */
@@ -117,6 +176,7 @@ function reset() {
   form.question_type = 'single_choice'
   form.difficulty = 3
   form.visibility = 'public'
+  form.parent_id = props.presumeParentId ?? null
   form.stem = emptyDoc()
   form.options = [
     { label: 'A', text: '' },
@@ -131,6 +191,8 @@ function reset() {
   form.analysis = null
   form.tag_ids = []
   form.knowledge_point_ids = []
+  form.change_note = ''
+  originalStatus.value = null
 }
 
 async function loadQuestion(id: number) {
@@ -140,10 +202,12 @@ async function loadQuestion(id: number) {
     form.question_type = detail.question_type
     form.difficulty = detail.difficulty
     form.visibility = detail.visibility
+    form.parent_id = detail.parent_id
     form.stem = detail.stem as RichDoc
     form.analysis = (detail.analysis as RichDoc | null) ?? null
     form.tag_ids = detail.tags.map((t) => t.id)
     form.knowledge_point_ids = detail.knowledge_points.map((k) => k.id)
+    originalStatus.value = detail.status
 
     // 选项：把富文本还原成 `$...$` 纯文本，保证"读出来再写回去"不丢公式。
     form.options = detail.options.length
@@ -295,6 +359,7 @@ async function onSubmit() {
     stem: form.stem,
     difficulty: form.difficulty,
     visibility: form.visibility,
+    parent_id: form.parent_id,
     answer: buildAnswer(),
     analysis: form.analysis,
     tag_ids: form.tag_ids,
@@ -308,9 +373,19 @@ async function onSubmit() {
 
   submitting.value = true
   try {
-    const saved = props.questionId
-      ? await questionApi.update(props.questionId, payload)
-      : await questionApi.create(props.subjectId, payload)
+    let saved: QuestionDetail
+    if (props.questionId) {
+      // parent_id 在更新接口里三态：null=不动，数字=改挂，0=解除挂载。
+      // 新建接口用 null 表达"独立题"，两边语义不同，不能共用一个值。
+      const updatePayload: QuestionUpdatePayload = {
+        ...payload,
+        parent_id: form.parent_id === null ? 0 : form.parent_id,
+      }
+      if (form.change_note.trim()) updatePayload.change_note = form.change_note.trim()
+      saved = await questionApi.update(props.questionId, updatePayload)
+    } else {
+      saved = await questionApi.create(props.subjectId, payload)
+    }
     ElMessage.success(props.questionId ? '已保存' : '已创建')
     emit('saved', saved)
     visible.value = false
@@ -355,6 +430,49 @@ async function onSubmit() {
           </el-form-item>
         </el-col>
       </el-row>
+
+      <el-form-item label="母题">
+        <el-select
+          v-model="form.parent_id"
+          placeholder="不选则为独立题"
+          clearable
+          filterable
+          class="w-full"
+        >
+          <el-option
+            v-for="q in parentCandidates"
+            :key="q.id"
+            :label="parentLabel(q)"
+            :value="q.id"
+          />
+        </el-select>
+        <div class="w-full text-xs text-gray-400">
+          母题/小问（材料题）结构：母题放共用材料，小问挂在它下面。清空即可解除挂载。
+        </div>
+      </el-form-item>
+
+      <el-alert
+        v-if="editsPublished"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-3"
+        title="这道题已发布"
+      >
+        <div class="text-xs">
+          保存会直接改线上题面，不会重新走审核。改动会让引用它的试卷提示「题目已被改动」，
+          并写入审核记录。建议在下面说明改动原因。
+        </div>
+      </el-alert>
+
+      <el-form-item v-if="editsPublished" label="变更说明">
+        <el-input
+          v-model="form.change_note"
+          placeholder="例如：修正上标笔误"
+          maxlength="255"
+          clearable
+        />
+      </el-form-item>
 
       <el-form-item label="题干" required>
         <RichTextEditor v-model="form.stem" placeholder="输入题干，公式用工具栏插入" />

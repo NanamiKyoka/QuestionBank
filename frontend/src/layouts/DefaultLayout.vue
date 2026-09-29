@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useSubjectStore } from '@/stores/subject'
+import QuestionBasketButton from '@/components/QuestionBasketButton.vue'
 import type { Permission } from '@/api/types'
 
 const route = useRoute()
@@ -29,12 +30,15 @@ const menus: MenuItem[] = [
   { name: 'papers', title: '试卷', icon: 'Document', permission: 'view_question' },
   { name: 'recycle-bin', title: '回收站', icon: 'Delete', permission: 'view_question' },
   { name: 'import', title: '智能录题', icon: 'MagicStick', permission: 'edit_question' },
+  { name: 'import-history', title: '导入历史', icon: 'Clock', permission: 'edit_question' },
   { name: 'chat', title: 'AI 助手', icon: 'ChatDotRound', permission: 'view_question' },
   { name: 'knowledge-points', title: '知识点', icon: 'Share', permission: 'view_question' },
   { name: 'tags', title: '标签', icon: 'PriceTag', permission: 'view_question' },
   { name: 'subjects', title: '学科管理', icon: 'School', admin: true },
   { name: 'users', title: '用户管理', icon: 'User', admin: true },
+  { name: 'activity-logs', title: '操作日志', icon: 'Finished', admin: true },
   { name: 'ai-settings', title: 'AI 设置', icon: 'Setting', admin: true },
+  { name: 'settings', title: '系统设置', icon: 'Tools', admin: true },
 ]
 
 const visibleMenus = computed(() =>
@@ -45,9 +49,10 @@ const visibleMenus = computed(() =>
   }),
 )
 
-/** 子页面（如组卷工作台）不在菜单里，但要让父菜单保持高亮。 */
+/** 子页面（如组卷工作台、版本预览）不在菜单里，但要让父菜单保持高亮。 */
 const menuAliases: Record<string, string> = {
   'paper-editor': 'papers',
+  'paper-version': 'papers',
 }
 
 const activeMenu = computed(() => {
@@ -153,7 +158,10 @@ async function onLogout() {
                 <el-dropdown-item disabled>
                   {{ auth.isSuperuser ? '全局管理员' : '普通用户' }}
                 </el-dropdown-item>
-                <el-dropdown-item divided @click="onLogout">退出登录</el-dropdown-item>
+                <el-dropdown-item divided @click="router.push({ name: 'profile' })">
+                  个人资料
+                </el-dropdown-item>
+                <el-dropdown-item @click="onLogout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -167,6 +175,12 @@ async function onLogout() {
         </div>
       </el-main>
     </el-container>
+
+    <!--
+      试题篮挂在布局上而不是各个列表页：篮子要能跨页面攒题，
+      老师在题库选中、在试卷页才倒进去。篮子为空时它自己不渲染。
+    -->
+    <QuestionBasketButton />
   </el-container>
 </template>
 

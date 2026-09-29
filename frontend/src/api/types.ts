@@ -200,6 +200,8 @@ export interface QuestionBrief {
   tags: TagBrief[]
   knowledge_points: KnowledgePointBrief[]
   child_count: number
+  /** 已通过的审核次数，配合学科阈值显示「还差几次复核」。 */
+  review_count: number
   source: string
   created_by: number
   created_at: string
@@ -253,11 +255,30 @@ export interface QuestionQuery {
   type?: QuestionType | ''
   status?: QuestionStatus | ''
   difficulty?: number | null
+  /**
+   * 知识点多选。后端接受重复的 `knowledge_point_ids` 参数，
+   * 单值的 `knowledge_point_id` 仍作为别名保留给老调用方。
+   */
+  knowledge_point_ids?: number[]
+  /** @deprecated 单值别名，新代码请用 knowledge_point_ids。 */
   knowledge_point_id?: number | null
   include_sub_knowledge?: boolean
   tag_ids?: number[]
   tag_match?: 'and' | 'or'
   created_by?: number | null
+  /** 来源模糊匹配（原始文件名等）。 */
+  source?: string
+  /** 精确匹配已通过的审核次数；0 = 还没被任何人审过。 */
+  review_count?: number | null
+  /** 被此人审核过。 */
+  reviewer_id?: number | null
+  /**
+   * 按导入批次筛选。
+   *
+   * 后端字段由另一条工作流补齐（见 QuestionFilter.ImportTaskID）；
+   * 类型与透传先就位，参数在服务端支持之前不会生效。
+   */
+  import_task_id?: number | null
   root_only?: boolean
   /** 混入已软删除的题目。与 only_deleted 互斥，同时传以后端为准。 */
   include_deleted?: boolean
@@ -276,6 +297,8 @@ export interface OptionInput {
 export interface QuestionCreatePayload {
   question_type: QuestionType
   stem: RichDoc
+  /** 母题。null / 不传 = 独立题。 */
+  parent_id?: number | null
   options?: OptionInput[]
   answer: AnswerSpec
   analysis?: RichDoc | null
@@ -290,7 +313,22 @@ export interface QuestionCreatePayload {
 }
 
 export type QuestionUpdatePayload = Partial<QuestionCreatePayload> & {
+  /**
+   * 改挂母题：`0` 表示解除挂载（变回独立题），`null`/不传表示不动。
+   *
+   * 三种含义必须分得开，裸 number 做不到，所以用 `number | null` 在类型上钉住。
+   */
+  parent_id?: number | null
   change_note?: string
+}
+
+/** 批量审核动作，与单题的 submit / review 同一套语义。 */
+export type QuestionBatchAction = 'submit' | 'approve' | 'reject'
+
+export interface QuestionBatchResult {
+  handled_count: number
+  skipped_count: number
+  skipped_ids: number[]
 }
 
 export interface ReviewLog {

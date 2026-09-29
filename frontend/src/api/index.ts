@@ -3,6 +3,8 @@ import type {
   KnowledgePoint,
   LoginResponse,
   MyPermissions,
+  QuestionBatchAction,
+  QuestionBatchResult,
   QuestionBrief,
   QuestionCreatePayload,
   QuestionDetail,
@@ -141,6 +143,9 @@ export const questionApi = {
       ...query,
       // 数组参数用逗号拼成重复键，gin 的 form 绑定能解析重复键。
       tag_ids: query.tag_ids?.length ? query.tag_ids : undefined,
+      knowledge_point_ids: query.knowledge_point_ids?.length
+        ? query.knowledge_point_ids
+        : undefined,
     }),
 
   /**
@@ -177,11 +182,26 @@ export const questionApi = {
       source,
     }),
 
+  /**
+   * 批量提交审核 / 通过 / 驳回。
+   *
+   * 权限与状态守卫由服务端逐条判定，混进来的已发布题、别人学科的题会被跳过，
+   * 所以调用方要按 `skipped_count` 如实提示，而不是只报成功的那部分。
+   */
+  batchReview: (ids: number[], action: QuestionBatchAction, comment = '') =>
+    post<QuestionBatchResult>('/questions/batch-review', { ids, action, comment }),
+
   submit: (id: number) => post<QuestionDetail>(`/questions/${id}/submit`),
   review: (id: number, action: 'approve' | 'reject', comment = '') =>
     post<QuestionDetail>(`/questions/${id}/review`, { action, comment }),
   reviewLogs: (id: number) => get<ReviewLog[]>(`/questions/${id}/review-logs`),
   restore: (id: number) => post<void>(`/questions/${id}/restore`),
+
+  /** 归档：仅「已发布 → 已归档」。不递增 content_revision，试卷不会误报题目已更新。 */
+  archive: (id: number, comment = '') =>
+    post<QuestionDetail>(`/questions/${id}/archive`, { comment }),
+  /** 取消归档：回到已发布。 */
+  unarchive: (id: number) => post<QuestionDetail>(`/questions/${id}/unarchive`),
 
   stats: (subjectId: number) =>
     get<{

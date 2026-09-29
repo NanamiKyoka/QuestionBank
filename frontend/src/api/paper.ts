@@ -1,4 +1,4 @@
-import { del, downloadFile, get, post, put, type PageResult } from './http'
+import { ApiError, del, downloadFile, get, post, put, type PageResult } from './http'
 import type { RichDoc } from './types'
 
 /**
@@ -63,6 +63,35 @@ export interface QuestionRef {
   /** 题号是否参与自动编号。 */
   numbering?: boolean
 }
+
+/**
+ * 题目节点的 props。
+ *
+ * 分值与题号都必须落在 props 上而不是 content 里：服务端的 sumScore 与
+ * 导出器都只读 props，写进 content 的话整卷分值永远是 0、题号也永远不会
+ * 出现在卷面上。题号是**字符串**，因为分组编号要的是 "1.1" 这种十进制写法，
+ * 用数值存就只能表达 1。
+ */
+export interface QuestionNodeProps {
+  score?: number
+  /** 手动指定的题号。留空表示交给自动编号。 */
+  number?: string
+}
+
+/** 题号长度上限，与后端节点 props 的契约一致：再多也不会更好读。 */
+export const QUESTION_NUMBER_MAX_LENGTH = 16
+
+/**
+ * 批量编号方式。
+ *
+ * 刻意只有这两种：'global' 整卷顺序；'heading' 以**二级标题**为分界，
+ * 组内编成 1.1、1.2…，下一节从 2.1 重新开始。一级标题不参与分组——
+ * 卷面顶层通常只有试卷名，用它分组等于整卷只有一组。
+ *
+ * 不用"一、二、三"：那是老师自己打在标题节点里的文字，不是编号。
+ */
+export type NumberingMode = 'global' | 'heading'
+
 
 /** 解析模块的内容结构。 */
 export interface ModuleContent {
@@ -190,12 +219,170 @@ export interface PaperEvent {
   created_at: string
 }
 
+/**
+ * 快照里的节点。
+ *
+ * 与 PaperNode 字段完全一致，只是定稿时把整行 model 序列化了，
+ * 因此多出 paper_id / created_at / updated_at 三个渲染用不到的字段。
+ * 显式写出来是为了让"快照契约"和"编辑器契约"的差异看得见，
+ * 而不是让读代码的人以为快照节点少东西。
+ */
+export interface SnapshotNode extends PaperNode {
+  paper_id: number
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * 定稿快照：**只读**。
+ *
+ * 里面冻结了节点树、题目内容投影与排版开关，因此渲染它不需要（也不应该）
+ * 再查一次题库——这正是定稿的意义。改动题库后这个页面看到的内容不会变。
+ */
+export interface PaperSnapshot {
+  title: string
+  nodes: SnapshotNode[]
+  /** 题目内容投影。Go 的 map[uint]X 序列化后是字符串键。 */
+  questions: Record<string, PaperQuestionProjection>
+  numbering_enabled: boolean
+  scoring_enabled: boolean
+  question_display: QuestionDisplay
+  total_score: number
+  source_revision: number
+  schema_version: number
+}
+
+export interface PaperVersionDetail {
+  version: PaperVersion
+  snapshot: PaperSnapshot
+}
+
+/** 追加题目的结果。 */
+export interface AppendQuestionsResult {
+  paper_id: number
+  paper_title: string
+  /** 写回后的新修订号。 */
+  revision: number
+  added: number
+}
+
+/** 把服务端返回的节点折成提交结构。 */
+export function toNodeInput(node: PaperNode): NodeInput {
+  return {
+    id: node.id,
+    parent_id: node.parent_id,
+    node_kind: node.node_kind,
+    node_type: node.node_type,
+    content: node.content,
+    props: node.props,
+    schema_version: node.schema_version || 1,
+    // 软指针由服务端重算：解析条目（reference）会按当前题目顺序重新派生，
+    // 客户端回传的旧值只会覆盖掉服务端刚算出来的结果。
+    source_question_node_id: null,
+    anchor_before_node_id: null,
+  }
+}
+
+/**
+ * 生成一个未被占用的节点 id。
+ *
+ * 节点主键是客户端生成的 UUID，而保存是**整树覆盖**：撞 id 不会被合并，
+ * 会被 domain.NormalizeTree 当成"节点 id 重复"整棵拒绝。所以这里要把
+ * 本次提交里已经用掉的 id 一起喂进来，而不是只查服务端那份。
+ */
+function newNodeID(taken: Set<string>): string {
+  let id = crypto.randomUUID()
+  while (taken.has(id)) id = crypto.randomUUID()
+  taken.add(id)
+  return id
+}
+
+/**
+ * 把一批题目追加到试卷末尾（解析模块之前）。
+ *
+ * 后端没有"批量加题"接口，只有整树覆盖的 `PUT /papers/:id/nodes`，
+ * 因此"追加"只能在客户端实现成「读一次 → 本地拼接 → 带 expected_revision 写回」。
+ * 代价是这一步不是原子的：读到的整棵树如果在此期间被别人改过，
+ * 写回会被乐观锁挡下（409）——这正是我们要的行为。
+ *
+ * 冲突时**不自动重试**：重试等于拿一份已经过期的整树覆盖回去，
+ * 恰好是乐观锁要防的那件事。抛给调用方，由界面提示用户重新确认目标。
+ */
+async function appendQuestions(
+  paperId: number,
+  questionIds: number[],
+): Promise<AppendQuestionsResult> {
+  if (questionIds.length === 0) {
+    throw new ApiError(400, 40001, '没有要加入的题目')
+  }
+  // 先看权限再读整棵树：不能编辑的卷子没必要拉全量内容。
+  const detail = await get<PaperDetail>(`/papers/${paperId}`)
+  if (!detail.permissions.can_edit) {
+    throw new ApiError(403, 40301, '你没有编辑这份试卷的权限')
+  }
+
+  const taken = new Set(detail.nodes.map((n) => n.id))
+  const roots = detail.nodes
+    .filter((n) => n.parent_id === null && n.node_kind !== 'reference')
+    .slice()
+    .sort((a, b) => a.position - b.position)
+
+  // 解析模块固定排在最后：它是卷末汇总，插在题目中间会打断题序。
+  const module = roots.find((n) => n.node_type === 'question_details') ?? null
+  const head = roots.filter((n) => n.node_type !== 'question_details')
+
+  const additions: NodeInput[] = questionIds.map((questionID) => ({
+    id: newNodeID(taken),
+    parent_id: null,
+    node_kind: 'block',
+    node_type: 'question',
+    // content_revision 记 0：题库列表接口不返回这个字段，为它逐题再拉一次
+    // 详情（N 次请求）并不划算。服务端把 0 视为"未记录"（CheckQuestionRevisions），
+    // 所以不会误报"内容已更新"，之后在编辑台点一次同步就补上了。
+    content: { question_id: questionID, content_revision: 0 } satisfies QuestionRef,
+    props: {},
+    schema_version: 1,
+    source_question_node_id: null,
+    anchor_before_node_id: null,
+  }))
+
+  const nodes: NodeInput[] = [
+    ...head.map(toNodeInput),
+    ...additions,
+    ...(module ? [toNodeInput(module)] : []),
+  ]
+
+  const saved = await put<ReplaceNodesResult>(`/papers/${paperId}/nodes`, {
+    expected_revision: detail.revision,
+    nodes,
+  })
+
+  return {
+    paper_id: detail.id,
+    paper_title: detail.title,
+    revision: saved.revision,
+    added: questionIds.length,
+  }
+}
+
 export const paperApi = {
   // ---- 目录 ----
   folderTree: (subjectId: number) =>
     get<PaperFolder[]>(`/subjects/${subjectId}/paper-folders`),
   createFolder: (subjectId: number, payload: { name: string; parent_id?: number | null; scope?: PaperScope }) =>
     post<PaperFolder>(`/subjects/${subjectId}/paper-folders`, payload),
+  /**
+   * 重命名或移动目录。
+   *
+   * 契约：传 parent_id 表示移动到该目录下，clear_parent 表示移回根，
+   * 只传 name 就是重命名。同级重名与"移动到自己的子目录下"由服务端拒绝（409）。
+   *
+   * 注意这里**没有** restore：后端只对题目和试卷提供了恢复接口，
+   * 目录删掉之后界面再也列不出来，删除确认框因此不能承诺可恢复。
+   */
+  updateFolder: (id: number, payload: { name?: string; parent_id?: number; clear_parent?: boolean }) =>
+    put<PaperFolder>(`/paper-folders/${id}`, payload),
+  /** 删除目录。目录非空（含子目录或试卷）时后端返回 409。 */
   deleteFolder: (id: number) => del<void>(`/paper-folders/${id}`),
 
   // ---- 试卷 ----
@@ -279,9 +466,19 @@ export const paperApi = {
   finalize: (id: number, note: string) =>
     post<PaperVersion>(`/papers/${id}/versions`, { note }),
   getVersion: (id: number, versionNo: number) =>
-    get<{ version: PaperVersion; snapshot: unknown }>(`/papers/${id}/versions/${versionNo}`),
+    get<PaperVersionDetail>(`/papers/${id}/versions/${versionNo}`),
 
-  events: (id: number) => get<PaperEvent[]>(`/papers/${id}/events`),
+  /**
+   * 操作时间线，按时间倒序的**键集分页**。
+   *
+   * 游标是 before_id 而不是 page：时间线一直在追加，用页码分页会导致
+   * 翻页时新事件插到前面、已经看过的条目被挤走。翻到 hasMore=false 即止。
+   */
+  events: (id: number, params: { limit?: number; before_id?: number } = {}) =>
+    get<PaperEvent[]>(`/papers/${id}/events`, { ...params }),
+
+  /** 追加题目到试卷（读整树 → 拼接 → 带乐观锁写回）。见函数注释。 */
+  appendQuestions,
 
   // ---- 导出 ----
   exportPaper: (id: number, format: 'docx' | 'latex', title: string) =>

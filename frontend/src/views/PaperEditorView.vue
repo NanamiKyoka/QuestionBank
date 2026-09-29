@@ -6,15 +6,21 @@ import { ApiError } from '@/api/http'
 import { questionApi } from '@/api'
 import {
   paperApi,
+  toNodeInput,
+  QUESTION_NUMBER_MAX_LENGTH,
   type NodeInput,
+  type NumberingMode,
   type PaperDetail,
   type PaperNode,
   type PaperVersion,
+  type QuestionNodeProps,
   type QuestionRef,
   type ModuleContent,
 } from '@/api/paper'
 import type { QuestionBrief } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
+import CompositionNumberingPanel from '@/components/CompositionNumberingPanel.vue'
+import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
 import RichTextEditor from '@/components/editor/RichTextEditor.vue'
 import { emptyDoc } from '@/lib/richdoc'
 
@@ -74,19 +80,22 @@ type AnswerSpaceStyle = 'blank' | 'lined'
  */
 type BlockEditorType = 'rich_text' | 'heading' | 'answer_space'
 
-/** 题目节点的 props。
+/** 题目节点的 props 类型来自 api/paper.ts（QuestionNodeProps）：
  *
- * 分值必须落在 props 上而不是 content 里：服务端 sumScore 与导出器都只读
+ * 分值必须落在 props 上而不是 content 里——服务端 sumScore 与导出器都只读
  * props.score，写进 content 的话整卷总分永远是 0（这正是原来的死功能）。
+ * 题号走同一个契约，导出器按"props.number 优先、位置计数兜底"的顺序取值。
  */
-interface QuestionNodeProps {
-  score?: number
-}
 
 /** 答题区节点的 props。 */
 interface AnswerSpaceProps {
   lines?: number
   style?: AnswerSpaceStyle
+}
+
+/** 标题节点的 props。 */
+interface HeadingProps {
+  level?: number
 }
 
 /** 答题区默认行数。
@@ -139,6 +148,9 @@ const settingsForm = reactive({
 const versionsVisible = ref(false)
 const versions = ref<PaperVersion[]>([])
 
+// ---- 操作时间线 ----
+const timelineVisible = ref(false)
+
 const staleQuestions = ref<number[]>([])
 
 const canEdit = computed(() => paper.value?.permissions.can_edit ?? false)
@@ -155,26 +167,143 @@ const topNodes = computed(() =>
 /** 解析模块（至多一个）。 */
 const answerModule = computed(() => topNodes.value.find((n) => n.node_type === 'question_details') ?? null)
 
-/** 题号：按顶层题目块的出现顺序。 */
+/** 顶层题目块，按出现顺序。 */
+const questionNodes = computed(() => topNodes.value.filter((n) => n.node_type === 'question'))
+
+/** 题号。
+ *
+ * 优先用节点上的 `props.number`——那是老师手填的，或者被"自动填充题号"
+ * 写进去的；没填过才按出现顺序数一遍。优先级必须和导出器一致
+ * （backend/internal/export/assemble.go 的 numberLabelFromProps），
+ * 否则界面上写着 1.1、导出来却是 3.，比没有覆盖还难查。
+ */
 const questionNumbers = computed(() => {
-  const map = new Map<string, number>()
-  let n = 0
-  for (const node of topNodes.value) {
-    if (node.node_type === 'question') {
-      n++
-      map.set(node.id, n)
-    }
-  }
+  const map = new Map<string, string>()
+  questionNodes.value.forEach((node, index) => {
+    map.set(node.id, numberOf(node) || String(index + 1))
+  })
   return map
 })
 
-const questionCount = computed(() => questionNumbers.value.size)
+const questionCount = computed(() => questionNodes.value.length)
+
+// ---- 题号 ----
+
+/** 题号写回后的编号方式。面板是"选方式 + 点填充"，所以这里只留选择。 */
+const numberingMode = ref<NumberingMode>('global')
+
+/** 节点上记录的题号。没设过（也就是交给自动编号）时返回空串。 */
+function numberOf(node: PaperNode): string {
+  const raw = nodeProps<QuestionNodeProps>(node).number
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function setNumber(node: PaperNode, value: string) {
+  // 截断而不是拒绝：老师在框里敲到第 17 个字时，拦下整次输入反而更烦。
+  const next = value.trim().slice(0, QUESTION_NUMBER_MAX_LENGTH)
+  const props: Record<string, unknown> = { ...nodeProps<QuestionNodeProps>(node) }
+  if (next) props.number = next
+  // 清空等于"这题不指定题号"，删键而不是写空串——空串会被导出器当成有效值。
+  else delete props.number
+  node.props = props
+  dirty.value = true
+}
+
+function headingLevelOf(node: PaperNode): number {
+  const level = nodeProps<HeadingProps>(node).level
+  return typeof level === 'number' && level >= 1 ? level : 1
+}
+
+/**
+ * 按所选方式算出每个题目块该有的题号。
+ *
+ * 'heading' 以**二级标题**为分界：一级标题不分组（卷面顶层通常只有卷名，
+ * 用它分组等于整卷只有一组）。首个二级标题之前的题目归第 1 组；
+ * 两个二级标题之间没有题目的空组会被跳过，编号不会白白多出一段。
+ */
+function computeNumbers(list: PaperNode[], mode: NumberingMode): Map<string, string> {
+  const out = new Map<string, string>()
+  let global = 0
+  let group = 0
+  let inGroup = 0
+  let pendingNewGroup = false
+
+  for (const node of list) {
+    if (node.node_type === 'heading' && headingLevelOf(node) === 2) {
+      // 还没开过组就先记着，等真有题进来时再开第 1 组。
+      if (group > 0) pendingNewGroup = true
+      continue
+    }
+    if (node.node_type !== 'question') continue
+
+    if (mode === 'global') {
+      global += 1
+      out.set(node.id, String(global))
+      continue
+    }
+    if (group === 0) {
+      group = 1
+      inGroup = 0
+    } else if (pendingNewGroup) {
+      group += 1
+      inGroup = 0
+      pendingNewGroup = false
+    }
+    inGroup += 1
+    out.set(node.id, `${group}.${inGroup}`)
+  }
+  return out
+}
+
+/**
+ * 自动填充题号。
+ *
+ * 整体覆盖是危险操作（手改过的题号会一起没），所以先确认再写；
+ * 写完只是标脏，仍要按「保存」才落库。
+ */
+async function applyNumbering(mode: NumberingMode) {
+  const targets = questionNodes.value
+  if (!targets.length) {
+    ElMessage.warning('试卷里还没有题目')
+    return
+  }
+  const wanted = computeNumbers(topNodes.value, mode)
+  const label = mode === 'global' ? '全局顺序' : '按二级标题分组'
+  try {
+    await ElMessageBox.confirm(
+      `将按「${label}」重排 ${targets.length} 道题的题号，已有的题号会被覆盖。之后仍可逐题修改。`,
+      '自动填充题号',
+      { type: 'warning', confirmButtonText: '填充', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  let changed = 0
+  for (const node of targets) {
+    const next = wanted.get(node.id) ?? ''
+    if (numberOf(node) === next) continue
+    setNumber(node, next)
+    changed += 1
+  }
+  numberingMode.value = mode
+  if (changed === 0) ElMessage.info('题号已经与所选方式一致，无需改动')
+  else ElMessage.success(`已改写 ${changed} 道题的题号，记得保存`)
+}
 
 // ---- 分值 ----
 
 /** 「启用分值统计」没开时整条分值链路都是死的：服务端 sumScore 直接返回 0，
  *  导出器也不输出「（N 分）」。这时就不该让用户填一个不会被采用的数字。 */
 const scoringEnabled = computed(() => paper.value?.scoring_enabled ?? false)
+
+/** 题号总开关的当前可见值。
+ *
+ * 取"设置弹窗里勾的"与"已保存的"二者的或：设置是批量提交，勾完到点保存
+ * 之间有一段时间，如果只看已保存值，老师刚打开的题号入口会凭空消失。
+ */
+const numberingEnabled = computed(
+  () => settingsForm.numbering_enabled || (paper.value?.numbering_enabled ?? false),
+)
 
 /** 单题分值。没设过或值非法时返回 null，让输入框显示占位符而不是摆一个 0——
  *  「0 分」和「没设」是两回事，必须在数据上就分得开。
@@ -523,7 +652,7 @@ function openBlockEditor(node: PaperNode | null, type: BlockEditorType) {
     blockForm.id = node.id
     blockForm.nodeType = node.node_type as BlockEditorType
     blockForm.content = node.content ?? emptyDoc()
-    blockForm.level = nodeProps<{ level?: number }>(node).level ?? 1
+    blockForm.level = headingLevelOf(node)
     blockForm.lines = answerLinesOf(node)
     blockForm.answerStyle = answerStyleOf(node)
   } else {
@@ -586,19 +715,7 @@ function submitBlock() {
 
 /** 转成提交结构：不带 position（服务端分配），不带服务端派生的 reference 节点。 */
 function toInputs(): NodeInput[] {
-  return nodes.value
-    .filter((n) => n.node_kind !== 'reference')
-    .map((n) => ({
-      id: n.id,
-      parent_id: n.parent_id,
-      node_kind: n.node_kind,
-      node_type: n.node_type,
-      content: n.content,
-      props: n.props,
-      schema_version: n.schema_version || 1,
-      source_question_node_id: null,
-      anchor_before_node_id: null,
-    }))
+  return nodes.value.filter((n) => n.node_kind !== 'reference').map(toNodeInput)
 }
 
 async function save(options: { silent?: boolean } = {}) {
@@ -699,6 +816,11 @@ async function finalize() {
 async function openVersions() {
   versionsVisible.value = true
   versions.value = await paperApi.listVersions(paperId.value)
+}
+
+/** 打开只读版本预览。关闭抽屉再回到这里，工作副本不会因为导航丢失。 */
+function openVersion(versionNo: number) {
+  void router.push({ name: 'paper-version', params: { id: paperId.value, versionNo } })
 }
 
 async function exportPaper(format: 'docx' | 'latex', versionNo?: number) {
@@ -856,6 +978,7 @@ function answerText(questionID: number): string {
           </el-button>
           <el-button @click="openSettings">设置</el-button>
           <el-button @click="openVersions">版本</el-button>
+          <el-button @click="timelineVisible = true">时间线</el-button>
           <el-dropdown :disabled="exporting" @command="(f: 'docx' | 'latex') => exportPaper(f)">
             <el-button :loading="exporting">导出<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
             <template #dropdown>
@@ -972,9 +1095,24 @@ function answerText(questionID: number): string {
                 <!-- 题目块 -->
                 <template v-if="node.node_type === 'question'">
                   <div class="mb-1 flex items-center gap-2">
-                    <span class="text-sm font-medium">
+                    <span v-if="!numberingEnabled" class="text-sm font-medium">
                       第 {{ questionNumbers.get(node.id) }} 题
                     </span>
+                    <!-- 题号是节点属性：占位符显示"自动编出来的那个"，
+                         填了就用填的，清空则退回自动编号。 -->
+                    <div v-else class="flex shrink-0 items-center gap-0.5">
+                      <span class="text-xs text-gray-400">第</span>
+                      <el-input
+                        :model-value="numberOf(node)"
+                        :placeholder="questionNumbers.get(node.id)"
+                        size="small"
+                        class="!w-20"
+                        :disabled="!canEdit"
+                        maxlength="16"
+                        @update:model-value="(v: string) => setNumber(node, v)"
+                      />
+                      <span class="text-xs text-gray-400">题</span>
+                    </div>
                     <el-tag v-if="questions[(node.content as QuestionRef)?.question_id]?.stale" size="small" type="warning">
                       内容已更新
                     </el-tag>
@@ -1166,7 +1304,15 @@ function answerText(questionID: number): string {
         </el-form-item>
         <el-form-item label="排版选项">
           <div class="space-y-1">
-            <el-checkbox v-model="settingsForm.numbering_enabled">自动编号题号</el-checkbox>
+            <CompositionNumberingPanel
+              v-model:mode="numberingMode"
+              :enabled="settingsForm.numbering_enabled"
+              :disabled="!canEdit"
+              :question-count="questionCount"
+              class="w-full"
+              @update:enabled="(v: boolean) => (settingsForm.numbering_enabled = v)"
+              @autofill="applyNumbering"
+            />
             <el-checkbox v-model="settingsForm.scoring_enabled">启用分值统计</el-checkbox>
           </div>
         </el-form-item>
@@ -1203,11 +1349,21 @@ function answerText(questionID: number): string {
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <el-button text size="small" type="primary" @click="openVersion(version.version_no)">
+            查看
+          </el-button>
         </div>
         <div v-if="version.note" class="mt-1 text-xs text-gray-500">{{ version.note }}</div>
         <div class="mt-1 text-xs text-gray-400">{{ new Date(version.created_at).toLocaleString('zh-CN') }}</div>
       </div>
     </el-drawer>
+
+    <!-- 操作时间线 -->
+    <CompositionTimelineSheet
+      v-model="timelineVisible"
+      :paper-id="paperId"
+      :title="paper?.title ?? ''"
+    />
 
     <!-- 大选择器 -->
     <el-dialog v-model="pickerVisible" title="从题库选题" width="760px">
