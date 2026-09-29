@@ -2,10 +2,22 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { importApi, uploadApi, type CommitResult, type Draft } from '@/api/ai'
+import { importApi, uploadApi, type CommitResult } from '@/api/ai'
 import { knowledgePointApi, tagApi } from '@/api'
+import {
+  groupImportDrafts,
+  importTaskApi,
+  type ImportDraft,
+  type ImportDraftNode,
+  type ImportExtractResponse,
+  type ImportMode,
+  type ImportParseMethod,
+} from '@/api/importTask'
 import type { KnowledgePoint, QuestionStatus, Tag } from '@/api/types'
-import RichContent from '@/components/RichContent.vue'
+import ImportDraftCard from '@/components/ImportDraftCard.vue'
+import ImportDraftEditDialog from '@/components/ImportDraftEditDialog.vue'
+import ImportFileDropzone from '@/components/ImportFileDropzone.vue'
+import ImportParseOptions from '@/components/ImportParseOptions.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -15,26 +27,50 @@ import { useSubjectStore } from '@/stores/subject'
  * 用户在草稿上逐题核对、修改、勾选后再**入库**。
  * 让模型直接写库看起来更"自动"，但录题是低成本高风险的环节——
  * 错一道题的代价远高于多点一次按钮。
+ *
+ * 三个来源（文件 / 粘贴文本 / 图片截图）都汇到同一份草稿上，
+ * 因为下游的审核、修改、入库对它们是完全一样的。
  */
 const router = useRouter()
 const subject = useSubjectStore()
 
-const tab = ref<'text' | 'image'>('text')
+const tab = ref<'file' | 'text' | 'image'>('file')
 const loading = ref(false)
 const committing = ref(false)
 
 const form = reactive({
   content: '',
-  mode: 'extract' as 'extract' | 'solve',
+  mode: 'extract' as ImportMode,
   solve_for_content: '',
   images: [] as string[],
+  method: 'ai' as ImportParseMethod,
+  /** 待上传的文档。文件与文本是二选一：文档优先，因为格式信息只有文件里有。 */
+  file: null as File | null,
 })
 
 const uploading = ref(false)
 
-const drafts = ref<Draft[]>([])
+const drafts = ref<ImportDraft[]>([])
 const selected = ref<Set<number>>(new Set())
-const extractMeta = ref<{ model: string; elapsed_ms: number; task_id: number } | null>(null)
+/** 来源文件筛选；空串 = 全部。一次响应可能覆盖多个文件（.zip）。 */
+const fileFilter = ref('')
+/** 正在编辑的草稿下标。 */
+const editingIndex = ref<number | null>(null)
+/**
+ * 本次抽取的如实记录。
+ *
+ * `methodReported` 区分"服务端说的"和"我们请求的"：后端还没上新字段时，
+ * 界面上不能把"我请求了规则解析"显示成"这次跑的是规则解析"。
+ */
+const runMeta = ref<{
+  method: string
+  methodReported: boolean
+  model: string
+  elapsed_ms: number
+  task_id: number
+  source_files: string[]
+  total: number
+} | null>(null)
 const commitResult = ref<CommitResult | null>(null)
 
 const knowledgePoints = ref<KnowledgePoint[]>([])
@@ -48,6 +84,63 @@ const defaults = reactive({
 const canEdit = computed(() => subject.can('edit_question'))
 const selectedDrafts = computed(() => drafts.value.filter((_, i) => selected.value.has(i)))
 const warningCount = computed(() => drafts.value.filter((d) => d.warnings?.length).length)
+/** 按母/小问组装好的树。审核列表、来源筛选都在这上面做。 */
+const draftTree = computed(() => groupImportDrafts(drafts.value))
+
+/** 本次抽取覆盖的来源文件。草稿上的 source_file 才是权威，响应级字段只是提示。 */
+const sourceFiles = computed(() => {
+  const found = new Set(drafts.value.map((d) => d.source_file).filter((f): f is string => !!f))
+  for (const f of runMeta.value?.source_files ?? []) found.add(f)
+  return [...found]
+})
+
+/** 当前来源文件下每道题的分布，让"这个文件到底出了几道题"一眼可见。 */
+const fileCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const draft of drafts.value) {
+    if (!draft.source_file) continue
+    counts.set(draft.source_file, (counts.get(draft.source_file) ?? 0) + 1)
+  }
+  return counts
+})
+
+/** 本次实际跑的解析路径：服务端说了算，没回就用我们请求的那个顶上。 */
+const ranTemplate = computed(() => (runMeta.value?.method ?? form.method) === 'template')
+
+const editingDraft = computed<ImportDraft | null>(() =>
+  editingIndex.value === null ? null : (drafts.value[editingIndex.value] ?? null),
+)
+
+const editingVisible = computed({
+  get: () => editingIndex.value !== null,
+  set: (open: boolean) => {
+    if (!open) editingIndex.value = null
+  },
+})
+
+/**
+ * 可见的树：按来源文件裁剪。
+ *
+ * 母题只要有小问命中就保留，层级才不会在筛选时断掉——孤零零一个小问
+ * 挂在没有材料的地方，用户根本没法判断它在说什么。
+ */
+const visibleTree = computed<ImportDraftNode[]>(() => filterTree(draftTree.value, fileFilter.value))
+
+function filterTree(nodes: ImportDraftNode[], file: string): ImportDraftNode[] {
+  if (!file) return nodes
+  const out: ImportDraftNode[] = []
+  for (const node of nodes) {
+    const children = filterTree(node.children, file)
+    if (node.draft.source_file === file || children.length) out.push({ ...node, children })
+  }
+  return out
+}
+
+/** 母题因小问命中而被带出来时，要标出来——否则用户以为整组都来自当前文件。 */
+function shownForChild(node: ImportDraftNode): boolean {
+  if (!fileFilter.value || node.draft.source_file === fileFilter.value) return false
+  return node.children.length > 0
+}
 
 onMounted(async () => {
   await loadOptions()
@@ -63,6 +156,8 @@ watch(
     drafts.value = []
     selected.value = new Set()
     commitResult.value = null
+    runMeta.value = null
+    fileFilter.value = ''
     await loadOptions()
   },
 )
@@ -70,11 +165,11 @@ watch(
 async function loadOptions() {
   if (!subject.currentId) return
   try {
-    const [tree, tagList] = await Promise.all([
+    const [tree_, tagList] = await Promise.all([
       knowledgePointApi.tree(subject.currentId),
       tagApi.list(subject.currentId),
     ])
-    knowledgePoints.value = flatten(tree)
+    knowledgePoints.value = flatten(tree_)
     tags.value = tagList
   } catch {
     // 选项加载失败不阻断录题
@@ -90,7 +185,7 @@ function flatten(nodes: KnowledgePoint[], depth = 0): KnowledgePoint[] {
   return out
 }
 
-// ---- 图片上传 ----
+// ---- 图片来源 ----
 
 async function onPickImages(event: Event) {
   const input = event.target as HTMLInputElement
@@ -110,54 +205,186 @@ async function onPickImages(event: Event) {
   }
 }
 
+/**
+ * 拖进来 / 粘进来的是图片。
+ *
+ * 图片不能走 /imports/upload（那个端点只收文档），所以这里把它们
+ * 接到已有的「上传图片 → 图片地址」链路上，用户不必知道自己换了一条路。
+ */
+async function onImageFile(file: File) {
+  if (form.method === 'template') {
+    ElMessage.warning('规则解析不读图片，请先切换到「模型识别」')
+    return
+  }
+  tab.value = 'image'
+  uploading.value = true
+  try {
+    const saved = await uploadApi.image(file)
+    form.images.push(saved.url)
+    ElMessage.success('已添加 1 张图片')
+  } finally {
+    uploading.value = false
+  }
+}
+
 function removeImage(index: number) {
   form.images.splice(index, 1)
 }
 
+// ---- 解析方式 ----
+
+function onMethodChange(value: ImportParseMethod) {
+  form.method = value
+  // 规则解析既不读图片也不解题：把不可行的组合直接改回可行的那一个，
+  // 而不是留着让用户提交后才吃一个 400。
+  if (value === 'template') {
+    form.mode = 'extract'
+    if (form.images.length && tab.value === 'image') tab.value = 'file'
+  }
+}
+
+/**
+ * 规则解析的格式预检。
+ *
+ * 解析器只认【题目】这类标签，文本里一个都没有时它会**静默返回空列表**——
+ * 界面上就是"识别出 0 道题"，用户完全不知道该去改文档还是在怀疑系统坏了。
+ * 这条检查能提前把原因说清楚。只能对能读到原文的来源做（粘贴文本 / .md / .txt），
+ * .docx / .zip 读不了，跳过而不是假装检查过。
+ */
+const STRUCTURED_TAG_PATTERN = /[【\[]\s*(题目|题干|question|title)\s*[】\]]/i
+const plainTextPreview = ref<string | null>(null)
+const structuredTagWarning = computed(() => {
+  if (form.method !== 'template') return null
+  const text = tab.value === 'text' ? form.content : (plainTextPreview.value ?? '')
+  if (!text.trim()) return null
+  if (STRUCTURED_TAG_PATTERN.test(text)) return null
+  return '这段内容里没有【题目】标签，规则解析很可能一道题也识别不出来。'
+})
+
+// 读一次 .md / .txt 的原文用于上面的预检；读不到就算了，不是必需信息。
+watch(
+  () => form.file,
+  async (file) => {
+    plainTextPreview.value = null
+    if (!file || !/\.(md|txt|markdown)$/i.test(file.name)) return
+    try {
+      plainTextPreview.value = await file.text()
+    } catch {
+      plainTextPreview.value = null
+    }
+  },
+)
+
+watch(tab, () => {
+  if (tab.value !== 'file') return
+  // 切到文件来源时，预检文本只能来自文件本身。
+  void (form.file ? readPlainText(form.file) : Promise.resolve())
+})
+
+function readPlainText(file: File): Promise<void> {
+  return file
+    .text()
+    .then((text) => {
+      plainTextPreview.value = text
+    })
+    .catch(() => {
+      plainTextPreview.value = null
+    })
+}
+
 // ---- 抽取 ----
+
+function canSubmit(): boolean {
+  if (tab.value === 'file') return form.file !== null
+  if (tab.value === 'image') return form.images.length > 0
+  return form.content.trim().length > 0
+}
+
+/** 缺东西时说清是哪一样缺了，而不是把按钮灰掉让人猜。 */
+const submitHint = computed(() => {
+  if (canSubmit()) return ''
+  if (tab.value === 'file') return '请先选择要导入的文件'
+  if (tab.value === 'image') return '请先添加图片'
+  return '请粘贴题目内容'
+})
 
 async function extract() {
   if (!subject.currentId) {
     ElMessage.warning('请先选择学科')
     return
   }
-  if (tab.value === 'text' && !form.content.trim()) {
-    ElMessage.warning('请粘贴题目内容')
-    return
-  }
-  if (tab.value === 'image' && form.images.length === 0) {
-    ElMessage.warning('请先上传题目图片')
-    return
-  }
   if (form.mode === 'solve' && !form.solve_for_content.trim()) {
     ElMessage.warning('“只求解”模式需要提供原题内容')
+    return
+  }
+  if (!canSubmit()) {
+    ElMessage.warning(submitHint.value)
     return
   }
 
   loading.value = true
   commitResult.value = null
   try {
-    const result = await importApi.extract(subject.currentId, {
-      content: tab.value === 'text' ? form.content : '',
-      images: tab.value === 'image' ? form.images : undefined,
-      mode: form.mode,
-      solve_for_content: form.mode === 'solve' ? form.solve_for_content : undefined,
-    })
-    drafts.value = result.drafts ?? []
-    // 默认全选：绝大多数情况下用户是想全部入库的，逐题勾选是负担。
-    selected.value = new Set(drafts.value.map((_, i) => i))
-    extractMeta.value = { model: result.model, elapsed_ms: result.elapsed_ms, task_id: result.task_id }
-    ElMessage.success(`识别出 ${result.total} 道题`)
+    const result =
+      tab.value === 'file' && form.file
+        ? await importTaskApi.upload(subject.currentId, {
+            file: form.file,
+            method: form.method,
+            mode: form.mode,
+          })
+        : await importTaskApi.extract(subject.currentId, {
+            content: tab.value === 'text' ? form.content : '',
+            images: tab.value === 'image' ? form.images : undefined,
+            method: form.method,
+            mode: form.mode,
+            solve_for_content: form.mode === 'solve' ? form.solve_for_content : undefined,
+          })
+    acceptResult(result)
   } finally {
     loading.value = false
   }
 }
+
+function acceptResult(result: ImportExtractResponse) {
+  drafts.value = result.drafts ?? []
+  // 默认全选：绝大多数情况下用户是想全部入库的，逐题勾选是负担。
+  selected.value = new Set(drafts.value.map((_, i) => i))
+  fileFilter.value = ''
+  editingIndex.value = null
+
+  const reported = result.method?.trim() ?? ''
+  runMeta.value = {
+    method: reported || form.method,
+    methodReported: !!reported,
+    model: result.model,
+    elapsed_ms: result.elapsed_ms,
+    task_id: result.task_id,
+    source_files: result.source_files ?? [],
+    total: result.total,
+  }
+
+  if (drafts.value.length === 0) {
+    ElMessage.warning(
+      form.method === 'template'
+        ? '没有解析出任何题目，请确认内容使用了【题目】标签'
+        : '没有识别出任何题目，请检查内容是否完整',
+    )
+    return
+  }
+  ElMessage.success(`识别出 ${result.total} 道题`)
+}
+
+// ---- 草稿编辑 ----
 
 function toggleSelect(index: number) {
   const next = new Set(selected.value)
   if (next.has(index)) next.delete(index)
   else next.add(index)
   selected.value = next
+}
+
+function isChecked(index: number): boolean {
+  return selected.value.has(index)
 }
 
 function selectAll() {
@@ -174,14 +401,68 @@ function selectWarningsOnly() {
   )
 }
 
-function removeDraft(index: number) {
+/** 应用草稿修改：整体替换那一项，其余原样不动。 */
+function applyDraftEdit(updated: ImportDraft) {
+  if (editingIndex.value === null) return
+  drafts.value.splice(editingIndex.value, 1, updated)
+}
+
+/**
+ * 移除一道草稿。
+ *
+ * 删母题要先问一句：它的小问会变成指向空引用，而后端入库时会把这些小问
+ * 一并判失败（"母题未能入库"）。所以明确告诉用户会发生什么，
+ * 并把**直接**小问降级为独立题——用户删掉的是那一道题，不一定是那二十道。
+ *
+ * 只处理直接子级：更深一层的小问指向的是自己的母题，那道母题还在，
+ * 关系不受影响，跟着一起平移即可。
+ */
+async function removeDraft(index: number) {
+  const draft = drafts.value[index]
+  if (!draft) return
+  const tempId = (draft.temp_id ?? '').trim()
+  const childIndexes = tempId
+    ? drafts.value
+        .map((d, i) => ({ d, i }))
+        .filter(({ d }) => (d.parent_temp_id ?? '').trim() === tempId)
+        .map(({ i }) => i)
+    : []
+
+  if (childIndexes.length) {
+    try {
+      await ElMessageBox.confirm(
+        `这道材料题下面有 ${childIndexes.length} 个小问。删除母题后，这些小问会作为独立题入库。`,
+        '确认删除母题？',
+        { type: 'warning', confirmButtonText: '删除母题', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
+
   drafts.value.splice(index, 1)
+  // 下标全部前移，勾选状态要跟着平移，否则会整体错位一位。
   const next = new Set<number>()
   for (const i of selected.value) {
     if (i < index) next.add(i)
     else if (i > index) next.add(i - 1)
   }
   selected.value = next
+
+  for (const childIndex of childIndexes) {
+    const shifted = childIndex > index ? childIndex - 1 : childIndex
+    const child = drafts.value[shifted]
+    if (child) child.parent_temp_id = ''
+  }
+  if (editingIndex.value === index) editingIndex.value = null
+}
+
+function openEditor(index: number) {
+  editingIndex.value = index
+}
+
+function onModeChange(value: ImportMode) {
+  form.mode = value
 }
 
 // ---- 入库 ----
@@ -207,7 +488,7 @@ async function commit() {
     // 剩下的留给你修——比整批重来省事得多。
     if (result.failed_count > 0) {
       const failedSet = new Set(result.failures.map((f) => f.index))
-      const remaining: Draft[] = []
+      const remaining: ImportDraft[] = []
       let cursor = 0
       for (let i = 0; i < drafts.value.length; i++) {
         if (!selected.value.has(i)) {
@@ -245,26 +526,6 @@ async function commit() {
 function goToQuestions() {
   void router.push({ name: 'questions' })
 }
-
-function answerText(draft: Draft): string {
-  const answer = draft.answer
-  if (!answer) return ''
-  switch (answer.kind) {
-    case 'single':
-    case 'multiple':
-      return (answer.correct ?? [])
-        .map((id) => draft.options.find((o) => o.id === id)?.label ?? id)
-        .join('、')
-    case 'boolean':
-      return answer.bool_answer ? '正确' : '错误'
-    case 'blanks':
-      return (answer.blanks ?? []).map((b) => b.accepts.length).join(' / ') + ' 个空'
-    case 'reference':
-      return '见参考答案'
-    default:
-      return answer.kind
-  }
-}
 </script>
 
 <template>
@@ -276,16 +537,23 @@ function answerText(draft: Draft): string {
     <!-- 输入区 -->
     <el-card shadow="never">
       <template #header>
-        <div class="flex items-center justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-2">
           <span class="text-sm font-medium">① 提供题目内容</span>
-          <el-radio-group v-model="form.mode" size="small">
-            <el-radio-button value="extract">完整抽取</el-radio-button>
-            <el-radio-button value="solve">只求解</el-radio-button>
-          </el-radio-group>
+          <el-tag v-if="tab === 'file' && form.file" size="small" type="info" effect="plain">
+            待导入：{{ form.file.name }}
+          </el-tag>
         </div>
       </template>
 
       <el-tabs v-model="tab">
+        <el-tab-pane label="上传文件" name="file">
+          <ImportFileDropzone
+            v-model="form.file"
+            :disabled="loading || !canEdit"
+            @image="onImageFile"
+          />
+        </el-tab-pane>
+
         <el-tab-pane label="粘贴文本" name="text">
           <el-input
             v-model="form.content"
@@ -294,9 +562,7 @@ function answerText(draft: Draft): string {
             placeholder="直接粘贴试卷内容。支持 Markdown、编号列表、选项与答案混排，公式可写 LaTeX（$x^2$ 或 \[...\]）。"
             maxlength="200000"
           />
-          <div class="mt-1 text-right text-xs text-gray-400">
-            {{ form.content.length }} / 200000
-          </div>
+          <div class="mt-1 text-right text-xs text-gray-400">{{ form.content.length }} / 200000</div>
         </el-tab-pane>
 
         <el-tab-pane label="上传图片" name="image">
@@ -321,7 +587,7 @@ function answerText(draft: Draft): string {
             </label>
           </div>
           <div class="text-xs text-gray-400">
-            适用于拍照或扫描的试卷。需要配置视觉模型，否则请改用文本模式。
+            适用于拍照或扫描的试卷，也可以在「上传文件」区直接 Ctrl+V 粘贴截图。需要配置视觉模型，否则请改用文本模式。
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -335,14 +601,36 @@ function answerText(draft: Draft): string {
         />
       </el-form-item>
 
-      <div class="mt-3 flex items-center gap-2">
-        <el-button type="primary" :loading="loading" :disabled="!canEdit || !subject.currentId" @click="extract">
+      <el-divider content-position="left">
+        <span class="text-xs text-gray-400">解析设置</span>
+      </el-divider>
+
+      <ImportParseOptions
+        :method="form.method"
+        :mode="form.mode"
+        :disabled="loading"
+        @update:method="onMethodChange"
+        @update:mode="onModeChange"
+      />
+
+      <el-alert v-if="structuredTagWarning" type="warning" :closable="false" show-icon class="mt-2">
+        <template #title>{{ structuredTagWarning }}</template>
+      </el-alert>
+
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <el-button
+          type="primary"
+          :loading="loading"
+          :disabled="!canEdit || !subject.currentId"
+          @click="extract"
+        >
           <el-icon class="mr-1"><MagicStick /></el-icon>
-          开始识别
+          {{ form.method === 'template' ? '开始解析' : '开始识别' }}
         </el-button>
-        <span v-if="extractMeta" class="text-xs text-gray-400">
-          模型 {{ extractMeta.model }} · 耗时 {{ extractMeta.elapsed_ms }}ms · 任务 #{{ extractMeta.task_id }}
+        <span v-if="loading" class="text-xs text-gray-400">
+          正在解析，大文件可能需要几分钟，请不要关闭页面。
         </span>
+        <span v-else-if="submitHint" class="text-xs text-gray-400">{{ submitHint }}</span>
       </div>
     </el-card>
 
@@ -365,89 +653,61 @@ function answerText(draft: Draft): string {
         </div>
       </template>
 
-      <div class="space-y-2">
-        <div
-          v-for="(draft, index) in drafts"
-          :key="draft.temp_id || index"
-          class="rounded border p-3"
-          :class="selected.has(index) ? 'border-blue-300 bg-blue-50/40' : 'border-gray-200'"
-        >
-          <div class="flex items-start gap-2">
-            <el-checkbox
-              :model-value="selected.has(index)"
-              class="mt-0.5"
-              @change="toggleSelect(index)"
-            />
-
-            <div class="min-w-0 flex-1">
-              <div class="mb-1 flex flex-wrap items-center gap-2">
-                <span class="text-sm font-medium">第 {{ index + 1 }} 题</span>
-                <el-tag size="small">{{ draft.type_label || draft.question_type }}</el-tag>
-                <span class="text-amber-500">{{ '★'.repeat(draft.difficulty || 0) }}</span>
-                <el-tag v-if="draft.source_number" size="small" type="info" effect="plain">
-                  原卷第 {{ draft.source_number }} 题
-                </el-tag>
-              </div>
-
-              <div class="rounded bg-white p-2">
-                <RichContent :doc="draft.stem" />
-                <div v-if="draft.options?.length" class="mt-1 space-y-0.5">
-                  <div v-for="option in draft.options" :key="option.id" class="flex gap-1 text-sm">
-                    <span class="font-medium">{{ option.label }}.</span>
-                    <RichContent :doc="option.content" class="flex-1" />
-                  </div>
-                </div>
-              </div>
-
-              <div class="mt-1 text-xs">
-                <span class="text-gray-500">答案：</span>
-                <span class="text-green-700">{{ answerText(draft) || '未识别' }}</span>
-              </div>
-
-              <!-- 解析预览 -->
-              <el-collapse v-if="draft.analysis" class="mt-1">
-                <el-collapse-item title="查看解析">
-                  <div class="rounded bg-gray-50 p-2 text-sm">
-                    <RichContent :doc="draft.analysis" />
-                  </div>
-                </el-collapse-item>
-              </el-collapse>
-
-              <!-- 知识点建议：模型自述与向量检索分开呈现 -->
-              <div class="mt-2 flex flex-wrap items-center gap-1 text-xs">
-                <template v-if="draft.suggested_knowledge_points?.length">
-                  <span class="text-gray-500">知识点候选：</span>
-                  <el-tag
-                    v-for="s in draft.suggested_knowledge_points"
-                    :key="s.knowledge_point_id"
-                    size="small"
-                    type="success"
-                    effect="plain"
-                  >
-                    {{ s.name }} · {{ (s.score * 100).toFixed(0) }}%
-                  </el-tag>
-                </template>
-                <template v-if="draft.knowledge_points?.length">
-                  <span class="ml-2 text-gray-500">模型提及：</span>
-                  <el-tag v-for="name in draft.knowledge_points" :key="name" size="small" type="info" effect="plain">
-                    {{ name }}
-                  </el-tag>
-                </template>
-              </div>
-
-              <!-- 提示 -->
-              <el-alert
-                v-if="draft.warnings?.length"
-                type="warning"
-                :closable="false"
-                class="mt-2"
-                :title="draft.warnings.join('；')"
-              />
-            </div>
-
-            <el-button text size="small" type="danger" @click="removeDraft(index)">移除</el-button>
-          </div>
+      <!-- 本次抽取的如实记录：走没走模型、覆盖了哪几个文件 -->
+      <div v-if="runMeta" class="mb-3 rounded border border-gray-200 bg-gray-50 p-2 text-xs">
+        <div class="flex flex-wrap items-center gap-2">
+          <el-tag v-if="ranTemplate" size="small" type="warning">
+            <el-icon class="mr-1"><Cpu /></el-icon>
+            规则解析
+          </el-tag>
+          <el-tag v-else size="small" type="primary" effect="plain">
+            <el-icon class="mr-1"><MagicStick /></el-icon>
+            模型识别
+          </el-tag>
+          <span v-if="ranTemplate" class="text-gray-500">
+            本次由确定性规则解析器完成，<b>没有调用任何模型</b>。结果只认标签格式，请重点核对题型与答案。
+          </span>
+          <span v-else-if="runMeta.model" class="text-gray-500">模型 {{ runMeta.model }}</span>
+          <span class="text-gray-400">耗时 {{ runMeta.elapsed_ms }}ms · 任务 #{{ runMeta.task_id }}</span>
+          <el-tag v-if="!runMeta.methodReported" size="small" type="info" effect="plain">
+            服务端未回报实际路径
+          </el-tag>
         </div>
+        <div v-if="sourceFiles.length" class="mt-1 flex flex-wrap items-center gap-2">
+          <span class="text-gray-500">来源文件：</span>
+          <el-tag
+            v-for="file in sourceFiles"
+            :key="file"
+            size="small"
+            :type="fileFilter === file ? 'primary' : 'info'"
+            :effect="fileFilter === file ? 'dark' : 'plain'"
+            class="cursor-pointer"
+            @click="fileFilter = fileFilter === file ? '' : file"
+          >
+            {{ file }} · {{ fileCounts.get(file) ?? 0 }} 道
+          </el-tag>
+          <el-button v-if="fileFilter" text size="small" @click="fileFilter = ''">显示全部</el-button>
+        </div>
+        <div v-if="fileFilter" class="mt-1 text-gray-400">
+          筛选只影响展示，勾选与入库范围不变。
+        </div>
+      </div>
+
+      <el-empty v-if="!visibleTree.length" description="当前筛选下没有题目" :image-size="60" />
+
+      <div v-else class="space-y-2">
+        <ImportDraftCard
+          v-for="node in visibleTree"
+          :key="node.index"
+          :draft="node.draft"
+          :index="node.index"
+          :children="node.children"
+          :is-checked="isChecked"
+          :shown-for-child="shownForChild(node)"
+          @toggle="toggleSelect"
+          @edit="openEditor"
+          @remove="removeDraft"
+        />
       </div>
     </el-card>
 
@@ -465,9 +725,7 @@ function answerText(draft: Draft): string {
             <el-radio value="pending">待审核</el-radio>
             <el-radio v-if="subject.can('review_question')" value="published">直接发布</el-radio>
           </el-radio-group>
-          <div class="mt-1 text-xs text-gray-400">
-            建议先入库为草稿，逐题确认后再提交审核。
-          </div>
+          <div class="mt-1 text-xs text-gray-400">建议先入库为草稿，逐题确认后再提交审核。</div>
         </el-col>
 
         <el-col :xs="24" :md="8">
@@ -501,9 +759,7 @@ function answerText(draft: Draft): string {
         >
           确认入库（{{ selectedDrafts.length }} 道）
         </el-button>
-        <span class="text-xs text-gray-400">
-          只写入你勾选的题目。未匹配到的知识点名不会自动创建。
-        </span>
+        <span class="text-xs text-gray-400">只写入你勾选的题目。未匹配到的知识点名不会自动创建。</span>
       </div>
     </el-card>
 
@@ -526,5 +782,7 @@ function answerText(draft: Draft): string {
         未匹配到的名称：{{ commitResult.unresolved_names.join('、') }}
       </div>
     </el-card>
+
+    <ImportDraftEditDialog v-model="editingVisible" :draft="editingDraft" @save="applyDraftEdit" />
   </div>
 </template>
