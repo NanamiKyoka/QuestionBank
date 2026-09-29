@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { importApi, uploadApi, type CommitResult } from '@/api/ai'
 import { knowledgePointApi, tagApi } from '@/api'
@@ -32,6 +32,7 @@ import { useSubjectStore } from '@/stores/subject'
  * 因为下游的审核、修改、入库对它们是完全一样的。
  */
 const router = useRouter()
+const route = useRoute()
 const subject = useSubjectStore()
 
 const tab = ref<'file' | 'text' | 'image'>('file')
@@ -145,7 +146,28 @@ function shownForChild(node: ImportDraftNode): boolean {
 onMounted(async () => {
   await loadOptions()
   loaded.value = true
+  await loadFromRoute()
 })
+
+/**
+ * 从导入历史跳过来时带着 ?task=<id>：把那个任务抽出的草稿拉进审核界面。
+ *
+ * 队列任务的 HTTP 响应早就返回了，草稿存在任务记录里；
+ * 没有这一步，排队抽出来的题就没人能审核，队列等于白做。
+ */
+async function loadFromRoute() {
+  const raw = route.query.task
+  const id = Number(Array.isArray(raw) ? raw[0] : raw)
+  if (!Number.isFinite(id) || id <= 0 || !subject.currentId) return
+  loading.value = true
+  try {
+    acceptResult(await importTaskApi.drafts(subject.currentId, id))
+    // 用 replace 清掉地址栏里的 task，否则刷新会再拉一次。
+    void router.replace({ name: 'import' })
+  } finally {
+    loading.value = false
+  }
+}
 
 const loaded = ref(false)
 

@@ -207,6 +207,16 @@ function goImport() {
   void router.push({ name: 'import' })
 }
 
+/**
+ * 把某个任务抽出来的草稿拉进审核界面。
+ *
+ * 队列任务跑完时 HTTP 响应早就返回了，草稿存在任务记录里。
+ * 不给这一步，排队抽出来的题就永远没人能审核入库——队列也就白做了。
+ */
+function reviewTask(row: ImportTask) {
+  void router.push({ name: 'import', query: { task: String(row.id) } })
+}
+
 function statusTag(status: ImportTaskStatus): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   switch (status) {
     case 'completed':
@@ -313,13 +323,27 @@ function countText(row: ImportTask): string {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="230" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button text size="small" @click="openQuestions(row)">
               查看题目<span v-if="row.saved_count > 0">（{{ row.saved_count }}）</span>
             </el-button>
 
             <template v-if="canOperate">
+              <!--
+                只有"已完成但还没入库"的任务才需要审核入口。
+                已经入库的（saved_count > 0）再点进去只会拿到空草稿，
+                给一个必然落空的按钮比不给更糟。
+              -->
+              <el-button
+                v-if="row.status === 'completed' && row.saved_count === 0"
+                text
+                size="small"
+                type="primary"
+                @click="reviewTask(row)"
+              >
+                审核草稿
+              </el-button>
               <el-button v-if="row.retryable" text size="small" type="warning" @click="retryTask(row)">
                 重试
               </el-button>

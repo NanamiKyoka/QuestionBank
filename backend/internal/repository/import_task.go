@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -70,6 +71,74 @@ func (r *ImportTaskRepo) SwapStatus(ctx context.Context, id uint, from []model.I
 		return false, fmt.Errorf("更新导入任务状态失败: %w", res.Error)
 	}
 	return res.RowsAffected > 0, nil
+}
+
+// ClaimPending 原子地认领一个待处理任务。
+//
+// 返回 nil 表示当前没有可认领的任务。
+//
+// 认领必须是**一条带条件的 UPDATE**，不能是"先查出来再改状态"：
+// 两个 worker 同时轮询时，后者会读到同一条任务并跑两遍——
+// 一次导入要调模型、跑几分钟，重复执行等于白烧额度。
+// 条件更新由数据库保证只有一个赢家（受影响行数为 1），这在
+// MySQL 与 SQLite 上都成立，不需要额外的锁。
+func (r *ImportTaskRepo) ClaimPending(ctx context.Context, now time.Time) (*model.ImportTask, error) {
+	// 先按 id 升序取一个候选：FIFO，让等待最久的先跑，
+	// 否则先到的任务可能被源源不断的新任务饿死。
+	var candidates []model.ImportTask
+	if err := conn(ctx, r.db).
+		Where("status = ?", model.ImportStatusPending).
+		Order("id ASC").
+		Limit(8).
+		Find(&candidates).Error; err != nil {
+		return nil, fmt.Errorf("查找待处理任务失败: %w", err)
+	}
+
+	for i := range candidates {
+		ok, err := r.SwapStatus(ctx, candidates[i].ID,
+			[]model.ImportTaskStatus{model.ImportStatusPending},
+			map[string]any{
+				"status":     model.ImportStatusProcessing,
+				"started_at": &now,
+				// attempt 在认领时就 +1：万一进程在这里被 kill，
+				// 任务的尝试次数已经记上了，不会被无限重试。
+				"attempt": gorm.Expr("attempt + 1"),
+			})
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			// 被别人抢先认领了，试下一个。
+			continue
+		}
+		claimed := candidates[i]
+		claimed.Status = model.ImportStatusProcessing
+		claimed.StartedAt = &now
+		claimed.Attempt++
+		return &claimed, nil
+	}
+	return nil, nil
+}
+
+// RequeueStale 把长时间停在 processing 的任务退回 pending。
+//
+// 处理中状态由 worker 写下的那一行来维持。如果进程在写"处理中"之后、
+// 写终态之前被强杀（OOM、断电、部署替换），这条任务会永远卡在
+// processing：既不失败也不重试，队列就此少一个成员，且没有任何迹象。
+// 因此启动时做一次回收。
+func (r *ImportTaskRepo) RequeueStale(ctx context.Context, before time.Time) (int64, error) {
+	res := conn(ctx, r.db).Model(&model.ImportTask{}).
+		Where("status = ? AND started_at IS NOT NULL AND started_at < ?",
+			model.ImportStatusProcessing, before).
+		Updates(map[string]any{
+			"status":     model.ImportStatusPending,
+			"started_at": nil,
+			"error_msg":  "上次执行被中断（进程退出或超时），已自动重新排队",
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("回收僵死任务失败: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // Delete 彻底删除任务记录。

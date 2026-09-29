@@ -136,6 +136,23 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 	// 也给上传用（落盘并返回对外地址）。
 	mediaStore := storage.NewLocal(cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)
 
+	// 后台导入队列。
+	//
+	// 先建 ImportService 再建 worker：worker 持有 service 的引用，
+	// 反过来会让两个构造步骤互相等待。
+	importSvc := service.NewImportService(repos, aiConfigSvc, questionSvc).
+		WithVectors(vectorSvc).
+		WithStorage(mediaStore).
+		// 原始上传件放 uploads 目录：它不对外提供静态服务，
+		// 未公开的试卷不该因为"图省事放进 media"而被发布出去。
+		WithUploadDir(cfg.Storage.UploadDir)
+	importWorker := service.NewImportWorker(importSvc)
+	importSvc = importSvc.WithWorker(importWorker)
+	importWorker.Start(ctx)
+	// 关闭时先停 worker 再关数据库：worker 可能正在读库，
+	// 顺序反了会得到一堆莫名其妙的 "database is closed"。
+	app.cleanups = append(app.cleanups, importWorker.Stop)
+
 	app.Engine = router.New(router.Deps{
 		Config:          cfg,
 		DB:              gdb,
@@ -149,7 +166,7 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 		Papers:          service.NewPaperService(repos),
 		Exports:         service.NewExportService(repos, mediaStore),
 		AIConfig:        aiConfigSvc,
-		Imports:         service.NewImportService(repos, aiConfigSvc, questionSvc).WithVectors(vectorSvc),
+		Imports:         importSvc,
 		Chat: service.NewChatService(repos, aiConfigSvc, questionSvc,
 			kpSvc,
 			service.NewTagService(repos),

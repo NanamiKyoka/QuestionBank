@@ -32,10 +32,18 @@ type ImportService struct {
 	vectors *VectorService
 	// storage 可选：删除导入任务时清理落盘的原始文件。
 	//
-	// 目前导入还没有文件上传入口（只有粘贴与拍照），FilePath 通常为空；
-	// 注入它是为了让"删除任务顺手删掉磁盘上的文件"这件事在文件上传落地时
-	// 不必再改一遍调用方。
+	// 没有它时同步导入照常工作（只是没有落盘文件可清），
+	// 但队列导入不可用：worker 必须能从磁盘读回原始内容。
 	storage *storage.Local
+	// worker 可选：后台导入队列。没有它时 EnqueueFile 仍可建任务，
+	// 但任务会一直停在 pending——界面会如实显示 worker 未启动。
+	worker *ImportWorker
+	// uploadDir 存放队列任务用到的原始文件。
+	//
+	// 刻意**不放在媒体目录里**：媒体目录是通过 /media 对外提供静态服务的，
+	// 而原始试卷常常是尚未公开的教研材料，把它放进去等于顺手发布。
+	// 它用的是 uploads 目录——只在本机，不对外。
+	uploadDir string
 }
 
 func NewImportService(repos *Repos, aiConfig *AIConfigService, questions *QuestionService) *ImportService {
@@ -51,6 +59,15 @@ func (s *ImportService) WithVectors(v *VectorService) *ImportService {
 // WithStorage 注入媒体存储。未注入时删除任务不会清理磁盘文件。
 func (s *ImportService) WithStorage(st *storage.Local) *ImportService {
 	s.storage = st
+	return s
+}
+
+// WithUploadDir 指定原始上传文件的落盘目录。
+//
+// 不设时队列导入不可用（会明确报错，而不是把文件塞进别处）——
+// 静默换个位置存用户材料，比直接拒绝更糟。
+func (s *ImportService) WithUploadDir(dir string) *ImportService {
+	s.uploadDir = dir
 	return s
 }
 
@@ -1023,12 +1040,32 @@ func (s *ImportService) QueueStatus(ctx context.Context, user *model.User, subje
 		})
 	}
 
+	// WorkerOnline 反映真实的 worker 状态。
+	//
+	// 以前这里恒为 false，界面上如实写着"排队中不会自动开始"——
+	// 那时确实没有 worker。现在有了，就必须把它接上：否则界面会给一个
+	// 真正在跑的任务显示"不会开始"，用户就不敢等，队列也就白做了。
+	online := s.worker != nil && s.worker.Online()
+	hint := "抽取是同步执行的，队列中的任务不会自动开始；需要重跑请回到智能录题页重新发起。"
+	if online {
+		hint = "队列已启动，任务会按提交顺序依次处理；处理中的任务可以随时放弃。"
+	}
+
 	return &schema.ImportQueueStatusResponse{
 		Stats:        stats,
 		ActiveTasks:  items,
-		WorkerOnline: false,
-		Hint:         "抽取当前是同步执行的，队列中的任务不会自动开始；需要重跑请回到智能录题页重新发起。",
+		WorkerOnline: online,
+		Hint:         hint,
 	}, nil
+}
+
+// WithWorker 注入后台 worker。
+//
+// 构造与注入分开，是为了让 ImportService 在没有 worker 的场景下
+// （单元测试、只想用同步导入的部署）依然完全可用。
+func (s *ImportService) WithWorker(w *ImportWorker) *ImportService {
+	s.worker = w
+	return s
 }
 
 // TaskQuestions 列出某次导入产生的题目。

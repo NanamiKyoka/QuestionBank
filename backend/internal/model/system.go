@@ -122,6 +122,33 @@ type ImportTask struct {
 
 func (ImportTask) TableName() string { return "import_tasks" }
 
+// ResultMap 解出 Result JSON 的顶层对象。
+//
+// Result 是个多用途的 JSON 列：排队任务在里面记解析方式，
+// 抽取完成后又存下整份草稿。刻意不在 model 里给出 typed 读取——
+// model 不能依赖 schema（会成环），而在这里硬编码一份结构同样会把
+// 存储格式焊死在模型上。读法交给 service。
+func (t *ImportTask) ResultMap() map[string]any {
+	if t.Result.IsEmpty() {
+		return nil
+	}
+	var m map[string]any
+	if err := t.Result.Into(&m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// ResultString 读 Result 里某个字符串字段，取不到返回空串。
+func (t *ImportTask) ResultString(key string) string {
+	m := t.ResultMap()
+	if m == nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
+}
+
 // CanRetry 判断任务是否允许重试：失败或已取消，且未超过上限。
 func (t *ImportTask) CanRetry(maxAttempt int) bool {
 	if t.Status != ImportStatusFailed && t.Status != ImportStatusCancelled {

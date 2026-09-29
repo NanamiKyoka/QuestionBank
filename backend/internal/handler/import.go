@@ -152,6 +152,107 @@ func (h *ImportHandler) ListTasks(c *gin.Context) {
 	response.Page(c, res, total, page.Page, page.PageSize)
 }
 
+// Enqueue POST /subjects/:subject_id/imports
+//
+// multipart，可一次带多个文件（字段名 file）。每个文件建一个排队任务，
+// 立刻返回 202 与任务列表，不等抽取跑完。
+//
+// 与 Upload 的分工：Upload 是"我要现在就看结果"（同步返回草稿），
+// Enqueue 是"这一堆文件先收着"——适合整个文件夹的批量导入。
+func (h *ImportHandler) Enqueue(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	subjectID, ok := parseID(c, "subject_id")
+	if !ok {
+		return
+	}
+
+	headers, err := c.MultipartForm()
+	if err != nil {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "请求不是有效的文件上传"))
+		return
+	}
+	files := headers.File["file"]
+	if len(files) == 0 {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "请至少选择一个文件"))
+		return
+	}
+	// 一次最多收 50 个：再多的话，用户宁可分几次提交，
+	// 而不是一个塞满的表单把内存吃光。
+	const maxFiles = 50
+	if len(files) > maxFiles {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "一次最多导入 50 个文件").
+			WithDetail("收到 %d 个", len(files)))
+		return
+	}
+
+	method := c.PostForm("method")
+	mode := c.PostForm("mode")
+
+	created := make([]schema.ImportTaskResponse, 0, len(files))
+	var failures []string
+	for _, fh := range files {
+		f, err := fh.Open()
+		if err != nil {
+			failures = append(failures, fh.Filename+": 无法读取")
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(f, maxUploadBytes+1))
+		f.Close()
+		if err != nil {
+			failures = append(failures, fh.Filename+": 无法读取")
+			continue
+		}
+		if len(data) > maxUploadBytes {
+			failures = append(failures, fh.Filename+": 超过 32 MB 上限")
+			continue
+		}
+		resp, err := h.imports.EnqueueFile(c.Request.Context(), user, subjectID,
+			fh.Filename, data, method, mode)
+		if err != nil {
+			// 单个文件失败不影响其余：整批因为一个坏文件全部退回
+			// 等于强迫用户自己挑出哪个有问题。
+			failures = append(failures, fh.Filename+": "+err.Error())
+			continue
+		}
+		created = append(created, *resp)
+	}
+
+	response.Accepted(c, gin.H{
+		"tasks":    created,
+		"accepted": len(created),
+		"rejected": len(files) - len(created),
+		"failures": failures,
+	})
+}
+
+// TaskDrafts GET /subjects/:subject_id/imports/:task_id/drafts
+//
+// 读回队列任务抽取出的草稿。worker 跑完时草稿存进了任务记录
+// （HTTP 响应那时早就返回了），审核界面靠这条接口取。
+func (h *ImportHandler) TaskDrafts(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	subjectID, ok := parseID(c, "subject_id")
+	if !ok {
+		return
+	}
+	taskID, ok := parseID(c, "task_id")
+	if !ok {
+		return
+	}
+	res, err := h.imports.TaskDrafts(c.Request.Context(), user, subjectID, taskID)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
 // CancelTask POST /subjects/:subject_id/imports/:task_id/cancel
 //
 // 语义是**放弃**而不是中断：抽取同步跑在请求里，服务端没有可抢占的执行体。

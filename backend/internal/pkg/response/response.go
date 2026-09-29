@@ -32,6 +32,14 @@ func Created(c *gin.Context, data any) {
 	c.JSON(http.StatusCreated, Body{Code: 0, Message: "ok", Data: data})
 }
 
+// Accepted 表示"已受理，但还没做完"。
+//
+// 用于异步任务：请求成功不代表结果已经产生。
+// 状态码必须与 OK 区分开——前端据此知道该去轮询而不是直接渲染结果。
+func Accepted(c *gin.Context, data any) {
+	c.JSON(http.StatusAccepted, Body{Code: 0, Message: "已受理", Data: data})
+}
+
 func NoContent(c *gin.Context) {
 	c.JSON(http.StatusOK, Body{Code: 0, Message: "ok"})
 }

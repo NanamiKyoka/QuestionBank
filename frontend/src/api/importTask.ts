@@ -67,8 +67,23 @@ export interface ImportExtractResponse {
   method?: string
   /** 本次覆盖的来源文件；.zip 会有多个。 */
   source_files?: string[]
+  /** 文档级提示（例如压缩包里跳过了不安全的条目），与逐题警告不同。 */
+  warnings?: string[]
   model: string
   elapsed_ms: number
+}
+
+/**
+ * 批量排队的返回。
+ *
+ * 刻意是"部分成功"：整批因为一个坏文件全部退回，等于强迫用户自己
+ * 挨个试出是哪个有问题，所以后端逐个收下并把失败的列出来。
+ */
+export interface EnqueueResult {
+  tasks: ImportTask[]
+  accepted: number
+  rejected: number
+  failures: string[]
 }
 
 // ---- 草稿层级（视图模型，不是后端契约） ----
@@ -263,4 +278,30 @@ export const importTaskApi = {
     taskId: number,
     params: { page?: number; page_size?: number } = {},
   ) => get<PageResult<QuestionBrief>>(`/subjects/${subjectId}/imports/${taskId}/questions`, params),
+
+  /**
+   * 批量排队：一次提交多个文件，立刻返回 202 与任务列表。
+   *
+   * 与 `upload` 的分工：upload 是"我现在就要看结果"（同步返回草稿），
+   * enqueue 是"这一堆先收着"——整个文件夹的卷子该用后者。
+   */
+  enqueue: (
+    subjectId: number,
+    payload: { files: File[]; method: ImportParseMethod; mode: ImportMode },
+  ) => {
+    const form = new FormData()
+    for (const f of payload.files) form.append('file', f)
+    form.append('method', payload.method)
+    form.append('mode', payload.mode)
+    return post<EnqueueResult>(`/subjects/${subjectId}/imports`, form, SLOW_TIMEOUT)
+  },
+
+  /**
+   * 取回某个排队任务抽出来的草稿。
+   *
+   * worker 跑完时 HTTP 响应早就返回了，草稿存在任务记录里，
+   * 审核界面靠这条接口把结果取回来。
+   */
+  drafts: (subjectId: number, taskId: number) =>
+    get<ImportExtractResponse>(`/subjects/${subjectId}/imports/${taskId}/drafts`),
 }
