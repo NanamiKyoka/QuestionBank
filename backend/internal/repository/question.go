@@ -120,6 +120,25 @@ func (r *QuestionRepo) Get(ctx context.Context, id uint) (*model.Question, error
 	return &q, nil
 }
 
+// GetDeleted 读取已软删除的题目。
+//
+// 恢复流程必须走这里：普通 Get 会被 GORM 自动追加 deleted_at IS NULL，
+// 于是"恢复一道已删除的题目"永远查不到记录、直接 404——
+// 路由上明明挂着 POST /questions/:id/restore，实际却永远失败。
+func (r *QuestionRepo) GetDeleted(ctx context.Context, id uint) (*model.Question, error) {
+	var q model.Question
+	if err := conn(ctx, r.db).Unscoped().First(&q, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperr.ErrNotFound.WithDetail("题目 %d 不存在", id)
+		}
+		return nil, err
+	}
+	if !q.DeletedAt.Valid {
+		return nil, apperr.ErrUnprocessable.WithDetail("题目 %d 未被删除", id)
+	}
+	return &q, nil
+}
+
 // List 按条件查询题目。
 func (r *QuestionRepo) List(ctx context.Context, f model.QuestionFilter, sort model.QuestionSort, limit, offset int) ([]model.Question, int64, error) {
 	q := r.buildQuery(ctx, f)
@@ -147,7 +166,12 @@ func (r *QuestionRepo) List(ctx context.Context, f model.QuestionFilter, sort mo
 func (r *QuestionRepo) buildQuery(ctx context.Context, f model.QuestionFilter) *gorm.DB {
 	q := conn(ctx, r.db).Model(&model.Question{})
 
-	if f.IncludeDeleted {
+	// 单靠 IncludeDeleted 只能得到"活的 + 删掉的"混在一起的结果，
+	// 而 SoftBase.DeletedAt 标记了 json:"-"，客户端没有任何字段能把两者区分开。
+	// 回收站要的是"只给我删掉的"，所以另给一个互斥开关。
+	if f.OnlyDeleted {
+		q = q.Unscoped().Where("questions.deleted_at IS NOT NULL")
+	} else if f.IncludeDeleted {
 		q = q.Unscoped()
 	}
 	if f.SubjectID > 0 {

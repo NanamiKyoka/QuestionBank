@@ -31,10 +31,28 @@ type PaperFilter struct {
 
 	Keyword string
 	Status  model.PaperStatus
+
+	// IncludeDeleted 是否包含已软删除的试卷（回收站）。
+	// 与题目列表的同名参数保持一致：默认一律不返回已删除的记录。
+	IncludeDeleted bool
+
+	// OnlyDeleted 只返回已软删除的试卷（回收站）。
+	//
+	// 单靠 IncludeDeleted 是不够的：那会把已删除与未删除的记录混在一起返回，
+	// 而 SoftBase.DeletedAt 标记了 json:"-"，客户端拿不到任何字段把它们区分开。
+	// 回收站需要的是"只给我删掉的"，所以这里单独提供一个互斥的开关。
+	OnlyDeleted bool
 }
 
 func (r *PaperRepo) buildQuery(ctx context.Context, f PaperFilter) *gorm.DB {
 	q := conn(ctx, r.db).Model(&model.Paper{})
+
+	switch {
+	case f.OnlyDeleted:
+		q = q.Unscoped().Where("deleted_at IS NOT NULL")
+	case f.IncludeDeleted:
+		q = q.Unscoped()
+	}
 
 	if f.SubjectID > 0 {
 		q = q.Where("subject_id = ?", f.SubjectID)
@@ -90,6 +108,26 @@ func (r *PaperRepo) Get(ctx context.Context, id uint) (*model.Paper, error) {
 			return nil, apperr.ErrNotFound.WithDetail("试卷 %d 不存在", id)
 		}
 		return nil, err
+	}
+	return &p, nil
+}
+
+// GetDeleted 读取已软删除的试卷。
+//
+// 恢复流程必须走这里：普通的 Get 会被 GORM 自动追加 deleted_at IS NULL，
+// 于是"恢复一条已删除的试卷"永远查不到记录，直接 404——
+// 路由上明明挂着 POST /papers/:id/restore，实际却永远失败。
+func (r *PaperRepo) GetDeleted(ctx context.Context, id uint) (*model.Paper, error) {
+	var p model.Paper
+	if err := conn(ctx, r.db).Unscoped().First(&p, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperr.ErrNotFound.WithDetail("试卷 %d 不存在", id)
+		}
+		return nil, err
+	}
+	if !p.DeletedAt.Valid {
+		// 记录其实是活的，走的是普通恢复路径，这里明确拒绝避免语义混淆。
+		return nil, apperr.ErrUnprocessable.WithDetail("试卷 %d 未被删除", id)
 	}
 	return &p, nil
 }

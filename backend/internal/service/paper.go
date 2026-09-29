@@ -18,6 +18,10 @@ type ListPapersQuery struct {
 	Unfiled  bool
 	Keyword  string
 	Status   model.PaperStatus
+	// IncludeDeleted 是否包含已软删除的试卷（回收站）。
+	IncludeDeleted bool
+	// OnlyDeleted 只返回已软删除的试卷（回收站）。
+	OnlyDeleted bool
 }
 
 // ListPapers 分页查询试卷。
@@ -27,12 +31,14 @@ func (s *PaperService) ListPapers(ctx context.Context, user *model.User, subject
 	}
 
 	filter := repository.PaperFilter{
-		SubjectID: subjectID,
-		Scope:     q.Scope,
-		FolderID:  q.FolderID,
-		Unfiled:   q.Unfiled,
-		Keyword:   q.Keyword,
-		Status:    q.Status,
+		SubjectID:      subjectID,
+		Scope:          q.Scope,
+		FolderID:       q.FolderID,
+		Unfiled:        q.Unfiled,
+		Keyword:        q.Keyword,
+		Status:         q.Status,
+		IncludeDeleted: q.IncludeDeleted,
+		OnlyDeleted:    q.OnlyDeleted,
 	}
 	// 个人空间只能看自己的卷子；共享空间人人可见。
 	if q.Scope == model.PaperScopePersonal {
@@ -131,19 +137,38 @@ func (s *PaperService) CreatePaper(ctx context.Context, user *model.User, subjec
 	return s.GetPaper(ctx, user, paper.ID)
 }
 
+// authorizePaperRead 校验当前用户是否可以读取这份试卷。
+//
+// 分两层，缺一不可：
+//  1. 学科级读权限——决定"这个人是否属于这个学科"；
+//  2. 空间归属——个人空间的卷子只有本人（以及超管）能读。
+//
+// 第 2 层曾经只写在 GetPaper 里，而版本列表、版本详情、操作时间线、
+// 版本导出都只做了第 1 层。后果是同学科的任何成员只要猜到试卷 id，
+// 就能读到别人的个人卷快照、完整操作流水，甚至把定稿版本导出走。
+// 个人空间的意义就在于"只有我看得见"，少这一层等于这个空间不存在，
+// 所以这里抽成公共函数，让所有读路径都必须经过它。
+func authorizePaperRead(user *model.User, paper *model.Paper) error {
+	if err := authorizeRead(user, paper.SubjectID); err != nil {
+		return err
+	}
+	if paper.Scope == model.PaperScopePersonal &&
+		(paper.OwnerID == nil || *paper.OwnerID != user.ID) && !user.IsSuperuser {
+		// 返回 404 而不是 403：403 等于确认"这张卷子存在"，
+		// 反而给枚举提供了信号。
+		return apperr.ErrNotFound
+	}
+	return nil
+}
+
 // GetPaper 试卷详情：元信息 + 节点树 + 题目内容投影。
 func (s *PaperService) GetPaper(ctx context.Context, user *model.User, id uint) (*schema.PaperDetail, error) {
 	paper, err := s.repos.Papers.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
-	}
-	// 他人个人空间的卷子不可见，返回 404 防止枚举。
-	if paper.Scope == model.PaperScopePersonal &&
-		(paper.OwnerID == nil || *paper.OwnerID != user.ID) && !user.IsSuperuser {
-		return nil, apperr.ErrNotFound
 	}
 
 	nodes, err := s.repos.Papers.Nodes(ctx, id)
@@ -172,7 +197,7 @@ func (s *PaperService) GetPaper(ctx context.Context, user *model.User, id uint) 
 	}
 	detail.QuestionCount = len(domain.CollectQuestionIDs(nodes))
 
-	projections, err := s.projectQuestions(ctx, nodes)
+	projections, err := s.projectQuestions(ctx, nodes, user)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +209,13 @@ func (s *PaperService) GetPaper(ctx context.Context, user *model.User, id uint) 
 //
 // 一次性按 id 批量取，而不是逐个节点查询——一份卷子可能有几十道题，
 // 逐个查会变成几十条 SQL。
-func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.PaperNode) (map[uint]schema.PaperQuestionProjection, error) {
+//
+// viewer 用于可见性过滤：写入口（checkQuestionVisibility）已经拦住了"把私有题
+// 塞进他人可读的卷子"，但那只管**新增**。存量数据里已经有两种绕过路径：
+// 题是公开时被排进了共享卷、事后才改成私有；或者这份卷子是在修复之前建的。
+// ListByIDs 不带任何可见性条件，所以这里必须再挡一次——
+// 否则"私有题不能进共享卷"这条规则形同虚设，只要数据早于它存在就能一直读到。
+func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.PaperNode, viewer *model.User) (map[uint]schema.PaperQuestionProjection, error) {
 	out := make(map[uint]schema.PaperQuestionProjection)
 
 	ids := domain.CollectQuestionIDs(nodes)
@@ -211,6 +242,11 @@ func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.Paper
 
 	for i := range questions {
 		q := &questions[i]
+		// 读不到就不投影：与题目列表的读路径保持同一套判定
+		// （公开题，或本人创建，或拥有 view_private_any）。
+		if !questionReadableBy(q, viewer) {
+			continue
+		}
 		var options []model.Option
 		if !q.Options.IsEmpty() {
 			_ = q.Options.Into(&options)
@@ -236,6 +272,23 @@ func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.Paper
 		}
 	}
 	return out, nil
+}
+
+// questionReadableBy 判断 viewer 是否有权读到这道题的完整内容。
+//
+// 与 repository 层题目列表的过滤条件保持一致：公开题人人可读，
+// 私有题仅创建者与拥有 view_private_any 的人可读。超管同样受此约束——
+// 超管可以去看题库，但试卷投影是把内容**摊给卷子的读者**，
+// 因此判定标准是"这个读者有没有资格看"，而不是"有没有权限看全库"。
+func questionReadableBy(q *model.Question, viewer *model.User) bool {
+	if q.Visibility != model.VisibilityPrivate {
+		return true
+	}
+	if viewer == nil {
+		return false
+	}
+	return q.CreatedBy == viewer.ID || viewer.IsSuperuser ||
+		viewer.Can(model.PermViewPrivateAny, q.SubjectID)
 }
 
 // UpdatePaper 修改试卷元信息。
@@ -327,7 +380,9 @@ func (s *PaperService) DeletePaper(ctx context.Context, user *model.User, id uin
 
 // RestorePaper 从回收站恢复试卷。
 func (s *PaperService) RestorePaper(ctx context.Context, user *model.User, id uint) error {
-	paper, err := s.repos.Papers.Get(ctx, id)
+	// 必须用 GetDeleted：已软删除的记录用普通 Get 查不到，
+	// 那会让这条恢复接口永远返回 404。
+	paper, err := s.repos.Papers.GetDeleted(ctx, id)
 	if err != nil {
 		return err
 	}

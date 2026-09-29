@@ -189,8 +189,13 @@ func (s *QuestionService) Delete(ctx context.Context, user *model.User, ids []ui
 }
 
 // Restore 从回收站恢复。
+//
+// 必须走 GetDeleted（Unscoped）：普通 Get 会被 GORM 自动追加 deleted_at IS NULL，
+// 于是"恢复一条已删除的题目"永远查到记录、直接 404——路由挂着，实现却从未生效。
+// GetDeleted 对"记录其实是活的"返回 ErrUnprocessable，避免"恢复一道没删的题"
+// 静默成功、让调用方以为自己做了什么。
 func (s *QuestionService) Restore(ctx context.Context, user *model.User, id uint) error {
-	q, err := s.repos.Questions.Get(ctx, id)
+	q, err := s.repos.Questions.GetDeleted(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -229,6 +234,13 @@ func (s *QuestionService) Submit(ctx context.Context, user *model.User, id uint)
 //
 // 通过时累加审核次数；达到学科配置的阈值才发布，否则继续留在待审队列等下一次审核。
 // 这样"重要学科要求两人复核"可以只通过配置表达，无需改代码。
+//
+// 驳回则把审核次数**清零**：审核次数回答的是"当前这一稿已经过了几道关"，
+// 题目被打回草稿后内容还会继续改，之前那次通过并不能为改过之后的稿子背书。
+// 不清零的话，阈值=2 时「通过1次 → 驳回 → 再通过1次」就会直接发布，
+// 双人复核被一次驳回架空。
+// 注意清零的只是计数，review_logs 里的驳回记录照常保留——
+// 它是审计流水，正是"这次被谁打回过"唯一的证据来源，不能跟着计数一起抹掉。
 func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint, req *schema.ReviewRequest) (*schema.QuestionDetail, error) {
 	q, err := s.repos.Questions.Get(ctx, id)
 	if err != nil {
@@ -244,6 +256,9 @@ func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint,
 
 	from := q.Status
 	to := model.QuestionStatusDraft
+	// resetReview 表示本次要把审核次数清零（驳回）。计数与状态在同一次
+	// UpdateFields 里落库，避免出现"状态已退回草稿、计数还是旧的"的中间态。
+	resetReview := false
 
 	err = s.repos.Tx.Within(ctx, func(ctx context.Context) error {
 		switch req.Action {
@@ -263,14 +278,19 @@ func (s *QuestionService) Review(ctx context.Context, user *model.User, id uint,
 			}
 		case "reject":
 			to = model.QuestionStatusDraft
+			resetReview = true
 		default:
 			return apperr.New(apperr.CodeInvalidParam, "不支持的审核动作")
 		}
 
-		if err := s.repos.Questions.UpdateFields(ctx, id, map[string]any{
+		fields := map[string]any{
 			"status":     to,
 			"updated_by": user.ID,
-		}); err != nil {
+		}
+		if resetReview {
+			fields["review_count"] = 0
+		}
+		if err := s.repos.Questions.UpdateFields(ctx, id, fields); err != nil {
 			return apperr.From(err)
 		}
 

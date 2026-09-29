@@ -109,6 +109,10 @@ type paperListQuery struct {
 	Unfiled  bool   `form:"unfiled"`
 	Keyword  string `form:"keyword"`
 	Status   string `form:"status"`
+	// IncludeDeleted 是否包含已软删除的试卷（回收站）。
+	IncludeDeleted bool `form:"include_deleted"`
+	// OnlyDeleted 只返回已软删除的试卷（回收站）。
+	OnlyDeleted bool `form:"only_deleted"`
 }
 
 // List GET /subjects/:subject_id/papers
@@ -128,11 +132,13 @@ func (h *PaperHandler) List(c *gin.Context) {
 	page := pagination.Parse(c)
 
 	res, total, err := h.papers.ListPapers(c.Request.Context(), user, subjectID, service.ListPapersQuery{
-		Scope:    model.PaperScope(q.Scope),
-		FolderID: q.FolderID,
-		Unfiled:  q.Unfiled,
-		Keyword:  q.Keyword,
-		Status:   model.PaperStatus(q.Status),
+		Scope:          model.PaperScope(q.Scope),
+		FolderID:       q.FolderID,
+		Unfiled:        q.Unfiled,
+		Keyword:        q.Keyword,
+		Status:         model.PaperStatus(q.Status),
+		IncludeDeleted: q.IncludeDeleted,
+		OnlyDeleted:    q.OnlyDeleted,
 	}, page.Limit(), page.Offset())
 	if err != nil {
 		response.Fail(c, err)

@@ -33,8 +33,8 @@ func (s *PaperService) ReplaceNodes(ctx context.Context, user *model.User, paper
 		return nil, err
 	}
 
-	// 2) 校验引用的题目都存在且属于同一学科
-	if err := s.checkQuestionRefs(ctx, paper.SubjectID, nodes); err != nil {
+	// 2) 校验引用的题目都存在、属于同一学科，且对这份试卷的读者可见
+	if err := s.checkQuestionRefs(ctx, user, paper, nodes); err != nil {
 		return nil, err
 	}
 
@@ -82,12 +82,12 @@ func (s *PaperService) ReplaceNodes(ctx context.Context, user *model.User, paper
 }
 
 // checkQuestionRefs 校验题目引用的合法性与跨学科引用。
-func (s *PaperService) checkQuestionRefs(ctx context.Context, subjectID uint, nodes []model.PaperNode) error {
+func (s *PaperService) checkQuestionRefs(ctx context.Context, user *model.User, paper *model.Paper, nodes []model.PaperNode) error {
 	ids := domain.CollectQuestionIDs(nodes)
 	if len(ids) == 0 {
 		return nil
 	}
-	missing, err := s.repos.Questions.ExistsInSubject(ctx, ids, subjectID)
+	missing, err := s.repos.Questions.ExistsInSubject(ctx, ids, paper.SubjectID)
 	if err != nil {
 		return apperr.ErrInternal.WithCause(err)
 	}
@@ -95,7 +95,54 @@ func (s *PaperService) checkQuestionRefs(ctx context.Context, subjectID uint, no
 		return apperr.New(apperr.CodeMissingRef, "试卷引用了不存在或不属于本学科的题目").
 			WithDetail("question_ids=%v", missing)
 	}
-	return nil
+	return s.checkQuestionVisibility(ctx, user, paper, ids)
+}
+
+// checkQuestionVisibility 拦截私有题被放进他人也能读到的试卷。
+//
+// 读取路径（QuestionService.Get）对私有题是"仅创建者 / view_private_any 可见"，
+// 但试卷投影（projectQuestions → ListByIDs）**不重复这道过滤**：只要题目进了节点树，
+// 该学科的每个成员都能在试卷里读到它的完整题干与答案。把私有题塞进共享试卷，
+// 等于绕开了可见性这道闸门——所以这里按"这份卷子还有谁会读"来判定，而不是
+// 只看操作者自己能不能看见：
+//
+//   - 共享试卷：读者是全体学科成员，私有题一律拒绝。
+//     即使操作者是超管也不放行——他有权"看"，不等于有权替别人"公开"；
+//     真要共享这道题，先把可见性改成 public，这一步必须是显式的。
+//   - 个人试卷：只有本人会读，因此允许放自己的私有题，
+//     但仍然拒绝引用别人的私有题（哪怕操作者有 view_private_any——
+//     那条权限是给查看用的，不该顺手把别人的私有题复制进自己的卷子）。
+func (s *PaperService) checkQuestionVisibility(ctx context.Context, user *model.User, paper *model.Paper, ids []uint) error {
+	questions, err := s.repos.Questions.ListByIDs(ctx, ids)
+	if err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	byID := make(map[uint]*model.Question, len(questions))
+	for i := range questions {
+		byID[questions[i].ID] = &questions[i]
+	}
+
+	canViewAll := user.Can(model.PermViewPrivateAny, paper.SubjectID)
+	var denied []uint
+	for _, id := range ids {
+		q := byID[id]
+		if q == nil || q.Visibility != model.VisibilityPrivate {
+			continue
+		}
+		if paper.Scope == model.PaperScopePersonal && (q.CreatedBy == user.ID || canViewAll) {
+			continue
+		}
+		denied = append(denied, id)
+	}
+	if len(denied) == 0 {
+		return nil
+	}
+	if paper.Scope == model.PaperScopeShared {
+		return apperr.New(apperr.CodeForbidden, "私有题目不能加入共享试卷").
+			WithDetail("共享试卷的读者是全体学科成员；如需共享请先把题目可见性改为公开。question_ids=%v", denied)
+	}
+	return apperr.New(apperr.CodeForbidden, "试卷引用了别人的私有题目").
+		WithDetail("私有题目仅创建者可用。question_ids=%v", denied)
 }
 
 // sumScore 汇总试卷总分。
@@ -127,7 +174,7 @@ func (s *PaperService) CheckQuestionRevisions(ctx context.Context, user *model.U
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
 	}
 
@@ -286,7 +333,7 @@ func (s *PaperService) FinalizeVersion(ctx context.Context, user *model.User, pa
 		return nil, apperr.New(apperr.CodeUnprocessable, "空试卷无法定稿")
 	}
 
-	projections, err := s.projectQuestions(ctx, nodes)
+	projections, err := s.projectQuestions(ctx, nodes, user)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +406,9 @@ func (s *PaperService) ListVersions(ctx context.Context, user *model.User, paper
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	// 必须走 authorizePaperRead：个人空间的卷子只有本人能读，
+	// 只做学科级校验等于任何成员都能翻出别人的版本列表。
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
 	}
 
@@ -375,12 +424,14 @@ func (s *PaperService) ListVersions(ctx context.Context, user *model.User, paper
 }
 
 // GetVersion 版本详情（含冻结快照）。
+//
+// 快照里是**完整组卷内容**，因此这里的归属校验与列表同样不能省。
 func (s *PaperService) GetVersion(ctx context.Context, user *model.User, paperID uint, versionNo int) (*schema.VersionDetailResponse, error) {
 	paper, err := s.repos.Papers.Get(ctx, paperID)
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
 	}
 
@@ -400,7 +451,8 @@ func (s *PaperService) ListEvents(ctx context.Context, user *model.User, paperID
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	// 操作流水同样属于卷子内容：能看到时间线就等于看到了这张卷子的全部改动。
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
 	}
 	if limit <= 0 || limit > 100 {

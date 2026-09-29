@@ -32,6 +32,8 @@ type ListQuery struct {
 	CreatedBy      uint
 	RootOnly       bool
 	IncludeDeleted bool
+	// OnlyDeleted 只返回已软删除的题目（回收站）。与 IncludeDeleted 互斥。
+	OnlyDeleted bool
 
 	Sort model.QuestionSort
 }
@@ -53,6 +55,7 @@ func (s *QuestionService) List(ctx context.Context, user *model.User, subjectID 
 		CreatedBy:         q.CreatedBy,
 		RootOnly:          q.RootOnly,
 		IncludeDeleted:    q.IncludeDeleted,
+		OnlyDeleted:       q.OnlyDeleted,
 		ViewerID:          user.ID,
 		CanViewPrivateAll: user.Can(model.PermViewPrivateAny, subjectID),
 	}

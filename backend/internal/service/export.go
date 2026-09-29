@@ -65,12 +65,8 @@ func (s *ExportService) ExportPaper(ctx context.Context, user *model.User, paper
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
-	}
-	if paper.Scope == model.PaperScopePersonal &&
-		(paper.OwnerID == nil || *paper.OwnerID != user.ID) && !user.IsSuperuser {
-		return nil, apperr.ErrNotFound
 	}
 
 	nodes, err := s.repos.Papers.Nodes(ctx, paperID)
@@ -81,7 +77,7 @@ func (s *ExportService) ExportPaper(ctx context.Context, user *model.User, paper
 		return nil, apperr.New(apperr.CodeUnprocessable, "试卷还没有内容，无法导出")
 	}
 
-	views, err := s.questionViews(ctx, nodes)
+	views, err := s.questionViews(ctx, nodes, user)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +119,7 @@ func (s *ExportService) ExportVersion(ctx context.Context, user *model.User, pap
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeRead(user, paper.SubjectID); err != nil {
+	if err := authorizePaperRead(user, paper); err != nil {
 		return nil, err
 	}
 
@@ -239,7 +235,11 @@ func zipLaTeX(name string, res *latex.Result) ([]byte, error) {
 }
 
 // questionViews 装载节点引用到的题目内容。
-func (s *ExportService) questionViews(ctx context.Context, nodes []model.PaperNode) (map[uint]export.QuestionView, error) {
+//
+// 与 PaperService.projectQuestions 用同一套可见性判定：导出是"把卷子内容
+// 落到一个可以带走的文件里"，比在页面上看一眼扩散得更快，所以读不到的
+// 私有题必须在这里同样被挡住，而不是只在页面上挡住。
+func (s *ExportService) questionViews(ctx context.Context, nodes []model.PaperNode, viewer *model.User) (map[uint]export.QuestionView, error) {
 	out := map[uint]export.QuestionView{}
 
 	ids := domain.CollectQuestionIDs(nodes)
@@ -254,6 +254,9 @@ func (s *ExportService) questionViews(ctx context.Context, nodes []model.PaperNo
 
 	for i := range list {
 		q := &list[i]
+		if !questionReadableBy(q, viewer) {
+			continue
+		}
 		var options []model.Option
 		if !q.Options.IsEmpty() {
 			_ = q.Options.Into(&options)

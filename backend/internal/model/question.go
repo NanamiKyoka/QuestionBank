@@ -1,5 +1,7 @@
 package model
 
+import "log/slog"
+
 // Question 题目——系统的核心实体。
 //
 // 内容字段全部使用 JSON 列，因为五种题型的答案结构差异很大：
@@ -166,6 +168,12 @@ type QuestionFilter struct {
 	RootOnly bool
 	// IncludeDeleted 是否包含已软删除的题目（回收站）。
 	IncludeDeleted bool
+	// OnlyDeleted 只返回已软删除的题目（回收站）。与 IncludeDeleted 互斥。
+	//
+	// 为什么需要这一个独立开关：IncludeDeleted 得到的是"活的 + 删掉的"混在一起的结果，
+	// 而 SoftBase.DeletedAt 带 json:"-"，客户端拿到的题目对象上没有任何字段
+	// 能区分两者——同一条题目在列表里长一个样，用户看不出哪条已经进了回收站。
+	OnlyDeleted bool
 
 	// ---- 可见性 ----
 	// ViewerID 私有题判定：私有题仅创建者可见。
@@ -185,16 +193,46 @@ const (
 	SortByUpdatedDesc    QuestionSort = "updated_desc"
 	SortByDifficultyAsc  QuestionSort = "difficulty_asc"
 	SortByDifficultyDesc QuestionSort = "difficulty_desc"
+
+	// SortByUpdatedAtDesc 是"按更新时间倒序"的历史命名，与 SortByUpdatedDesc
+	// 语义完全相同。保留它是因为前端题库页一直发送这个值
+	// （前端视图 QuestionsView.vue 的默认排序），删掉只会让它静默退化成
+	// created_desc —— 一个没人会发现的错误排序。
+	SortByUpdatedAtDesc QuestionSort = "updated_at_desc"
 )
 
+// validQuestionSorts 合法排序值全集。
+//
+// 用一张表而不是逐个 case，是为了保证"白名单"和"能落到 SQL 的取值"始终同源：
+// 新增取值时忘了登记进 Normalize，编译期发现不了，而线上表现是静默回落。
+var validQuestionSorts = map[QuestionSort]bool{
+	SortByCreatedDesc:    true,
+	SortByCreatedAsc:     true,
+	SortByUpdatedDesc:    true,
+	SortByUpdatedAtDesc:  true,
+	SortByDifficultyAsc:  true,
+	SortByDifficultyDesc: true,
+}
+
+// Valid 是否为受支持的排序方式。
+func (s QuestionSort) Valid() bool { return validQuestionSorts[s] }
+
 // Normalize 校验并回落默认排序。
+//
+// 回落必须**可观测**：题库页一直声明按"更新时间"排序、实际始终是创建时间倒序，
+// 就是早期这里静默回落造成的——既没有报错也没有日志，排查时除了翻代码没有线索。
+// 因此非法取值一律打一条 warn 日志（带上用户实际传的值），让它能被检索到。
 func (s QuestionSort) Normalize() QuestionSort {
-	switch s {
-	case SortByCreatedAsc, SortByUpdatedDesc, SortByDifficultyAsc, SortByDifficultyDesc:
+	if validQuestionSorts[s] {
 		return s
-	default:
-		return SortByCreatedDesc
 	}
+	// 空前串是"没传排序参数"，属于正常路径，不必刷日志。
+	if s != "" {
+		slog.Warn("题目排序参数不合法，已回落到默认排序",
+			"requested", string(s),
+			"fallback", string(SortByCreatedDesc))
+	}
+	return SortByCreatedDesc
 }
 
 // OrderClause 返回 SQL 片段。集中在一处，避免把用户输入拼进 SQL。
@@ -202,7 +240,7 @@ func (s QuestionSort) OrderClause() string {
 	switch s {
 	case SortByCreatedAsc:
 		return "questions.created_at ASC"
-	case SortByUpdatedDesc:
+	case SortByUpdatedDesc, SortByUpdatedAtDesc:
 		return "questions.updated_at DESC"
 	case SortByDifficultyAsc:
 		return "questions.difficulty ASC, questions.id DESC"

@@ -33,10 +33,12 @@ type questionListQuery struct {
 	TagIDs           []uint `form:"tag_ids"`
 	TagMatch         string `form:"tag_match"`
 
-	CreatedBy      uint   `form:"created_by"`
-	RootOnly       bool   `form:"root_only"`
-	IncludeDeleted bool   `form:"include_deleted"`
-	Sort           string `form:"sort"`
+	CreatedBy      uint `form:"created_by"`
+	RootOnly       bool `form:"root_only"`
+	IncludeDeleted bool `form:"include_deleted"`
+	// OnlyDeleted 只返回已软删除的题目（回收站）。与 IncludeDeleted 互斥。
+	OnlyDeleted bool   `form:"only_deleted"`
+	Sort        string `form:"sort"`
 }
 
 // List GET /subjects/:subject_id/questions
@@ -68,6 +70,7 @@ func (h *QuestionHandler) List(c *gin.Context) {
 		CreatedBy:        q.CreatedBy,
 		RootOnly:         q.RootOnly,
 		IncludeDeleted:   q.IncludeDeleted,
+		OnlyDeleted:      q.OnlyDeleted,
 		Sort:             model.QuestionSort(q.Sort),
 	}, page.Limit(), page.Offset())
 	if err != nil {
