@@ -16,13 +16,25 @@ LDFLAGS := -s -w \
 	-X github.com/NanamiKyoka/questionmind/internal/version.Commit=$(COMMIT) \
 	-X github.com/NanamiKyoka/questionmind/internal/version.BuildTime=$(BUILT)
 
-.PHONY: build run test fmt vet tidy clean cross check web web-clean full desktop
+.PHONY: build run test fmt vet tidy clean cross check web web-clean full desktop migrate migrate-status
 
 ## build: 编译服务器版与桌面版（均内嵌前端，无需 CGO）
 build: web
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/server
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DESKTOP_BIN) ./cmd/desktop
 	@echo "==> 产出: $(BIN) $(DESKTOP_BIN)"
+
+## migrate: 执行未应用的数据库迁移
+#
+# 破坏性变更必须走这里，而不是指望模型结构自动推导。
+# 已存在的库第一次执行时会被"基线化"：AutoMigrate 是幂等的，
+# 老库只会被登记为 v1，不会重建任何表。
+migrate:
+	CGO_ENABLED=0 go run ./cmd/migrate up
+
+## migrate-status: 列出各版本的执行状态
+migrate-status:
+	CGO_ENABLED=0 go run ./cmd/migrate status
 
 ## desktop: 只编译桌面版
 desktop: web

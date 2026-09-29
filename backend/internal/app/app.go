@@ -85,7 +85,7 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 	app.cleanups = append(app.cleanups, logger)
 
 	if cfg.Database.AutoMigrate {
-		if err := db.AutoMigrate(gdb); err != nil {
+		if err := db.Migrate(gdb); err != nil {
 			app.Close()
 			return nil, err
 		}

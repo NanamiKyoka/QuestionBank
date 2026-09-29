@@ -8,6 +8,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,7 +21,7 @@ import (
 	"gorm.io/gorm/schema"
 
 	"github.com/NanamiKyoka/questionmind/internal/config"
-	"github.com/NanamiKyoka/questionmind/internal/model"
+	"github.com/NanamiKyoka/questionmind/internal/migrations"
 )
 
 // sqliteMaxOpenConns SQLite 连接池上限。
@@ -104,16 +105,41 @@ func Open(cfg *config.Config) (*gorm.DB, error) {
 	return gdb, nil
 }
 
-// AutoMigrate 自动建表/加列。
+// Migrate 把数据库结构推进到当前代码要求的版本。
 //
-// 注意：AutoMigrate 只做"增量的、非破坏性的"变更（建表、加列、加索引），
-// 不会删除列或改列类型。生产环境的破坏性变更必须走 migrations/ 下的
-// 版本化 SQL，由 migrate 命令显式执行。
-func AutoMigrate(gdb *gorm.DB) error {
-	if err := gdb.AutoMigrate(model.AllModels()...); err != nil {
-		return fmt.Errorf("自动迁移失败: %w", err)
+// 这里是**唯一**的建表入口：以前是每次启动裸跑一次 AutoMigrate，
+// 现在改为跑版本化迁移。行为上的差别不是"更严谨"这种说法，
+// 而是可以回答三个以前无法回答的问题：
+//
+//   - 这个库现在是什么结构？（看 schema_migrations 账本）
+//   - 它上次升级到哪一版、什么时候、谁跑的？
+//   - 有人改动了一条已经执行过的迁移吗？（校验和对不上会拒绝启动）
+//
+// 对**既有部署**没有任何行为变化：基线迁移内部就是一次 AutoMigrate，
+// 它是幂等的，老库会被平滑登记为 v1。
+// 从此之后模型的任何结构变更都必须写成新迁移，AutoMigrate 不再被调用。
+func Migrate(gdb *gorm.DB) error {
+	runner, err := migrations.NewRunner(gdb)
+	if err != nil {
+		return fmt.Errorf("初始化迁移器失败: %w", err)
 	}
-	slog.Info("数据库结构已同步", "tables", len(model.AllModels()))
+	applied, err := runner.Up(context.Background(), 0)
+	if err != nil {
+		return fmt.Errorf("执行数据库迁移失败: %w", err)
+	}
+	if len(applied) == 0 {
+		cur, err := runner.Current(context.Background())
+		if err != nil {
+			return fmt.Errorf("读取当前迁移版本失败: %w", err)
+		}
+		slog.Info("数据库结构已是最新", "version", cur)
+		return nil
+	}
+	labels := make([]string, 0, len(applied))
+	for _, m := range applied {
+		labels = append(labels, m.Label())
+	}
+	slog.Info("已执行数据库迁移", "migrations", labels)
 	return nil
 }
 

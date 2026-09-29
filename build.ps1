@@ -18,7 +18,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('web', 'build', 'desktop', 'api', 'test', 'check', 'cross', 'clean', 'run', 'help')]
+    [ValidateSet('web', 'build', 'desktop', 'api', 'test', 'check', 'cross', 'clean', 'run', 'migrate', 'migrate-status', 'help')]
     [string]$Task = 'help',
 
     # 跳过前端构建（只想出后端产物时用）
@@ -228,6 +228,8 @@ QuestionMind 构建脚本
   cross     交叉编译三平台 × 两种形态（共 6 份产物）
   clean     清理构建产物
   run       开发模式直接运行
+  migrate   执行未应用的数据库迁移（破坏性变更走这里）
+  migrate-status  列出各版本的迁移执行状态
 
 选项:
   -SkipWeb  跳过前端构建
@@ -236,6 +238,7 @@ QuestionMind 构建脚本
   .\build.ps1 build
   .\build.ps1 desktop -SkipWeb
   .\build.ps1 check
+  .\build.ps1 migrate
 '@ | Write-Host
 }
 
@@ -264,6 +267,18 @@ try {
         'check'   { Invoke-Check }
         'cross'   { Build-Cross }
         'clean'   { Invoke-Clean }
+        'migrate' {
+            # 破坏性变更走这里，而不是指望模型结构自动推导。
+            # 已存在的库第一次执行时会被"基线化"：AutoMigrate 幂等，老库只登记不重建。
+            Test-Tool 'go' '请先安装 Go 1.24+'
+            Push-Location $Backend
+            try { go run ./cmd/migrate up } finally { Pop-Location }
+        }
+        'migrate-status' {
+            Test-Tool 'go' '请先安装 Go 1.24+'
+            Push-Location $Backend
+            try { go run ./cmd/migrate status } finally { Pop-Location }
+        }
         'run'     {
             Test-Tool 'go' '请先安装 Go 1.24+'
             Push-Location $Backend
