@@ -210,11 +210,16 @@ func (s *PaperService) GetPaper(ctx context.Context, user *model.User, id uint) 
 // 一次性按 id 批量取，而不是逐个节点查询——一份卷子可能有几十道题，
 // 逐个查会变成几十条 SQL。
 //
+// 内容取自**节点上的冻结副本**，而不是题目表当前的值：试卷是稿件，
+// 题库之后怎么改都不应该回头改动已经排好的卷子（导出与阅读都按冻结内容走）。
+// 题目表仍然要查，但只用来看两件事——它是否还存在、修订号有没有变
+// （用来标"可同步最新内容"）以及可见性。这三点都不需要完整内容。
+//
 // viewer 用于可见性过滤：写入口（checkQuestionVisibility）已经拦住了"把私有题
 // 塞进他人可读的卷子"，但那只管**新增**。存量数据里已经有两种绕过路径：
 // 题是公开时被排进了共享卷、事后才改成私有；或者这份卷子是在修复之前建的。
-// ListByIDs 不带任何可见性条件，所以这里必须再挡一次——
-// 否则"私有题不能进共享卷"这条规则形同虚设，只要数据早于它存在就能一直读到。
+// 所以读侧必须再挡一次——注意判定要看**当前**的题目行，
+// 因为"题变私有"这件事正是靠它才能被发现。
 func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.PaperNode, viewer *model.User) (map[uint]schema.PaperQuestionProjection, error) {
 	out := make(map[uint]schema.PaperQuestionProjection)
 
@@ -225,53 +230,83 @@ func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.Paper
 
 	// 记录每个题目块声明的修订号，用于判断是否过期。
 	declared := make(map[uint]int64, len(ids))
+	frozen := make(map[uint]frozenQuestion, len(ids))
 	for i := range nodes {
 		if nodes[i].NodeType != model.NodeTypeQuestion || nodes[i].Content.IsEmpty() {
 			continue
 		}
 		var ref domain.QuestionRef
-		if err := nodes[i].Content.Into(&ref); err == nil && ref.QuestionID != 0 {
-			declared[ref.QuestionID] = ref.ContentRevision
+		if err := nodes[i].Content.Into(&ref); err != nil || ref.QuestionID == 0 {
+			continue
+		}
+		declared[ref.QuestionID] = ref.ContentRevision
+		if !nodes[i].QuestionContent.IsEmpty() {
+			var fq frozenQuestion
+			if err := nodes[i].QuestionContent.Into(&fq); err == nil {
+				frozen[ref.QuestionID] = fq
+			}
 		}
 	}
 
-	questions, err := s.repos.Questions.ListByIDs(ctx, ids)
+	list, err := s.repos.Questions.ListByIDs(ctx, ids)
 	if err != nil {
 		return nil, apperr.ErrInternal.WithCause(err)
 	}
+	live := make(map[uint]*model.Question, len(list))
+	for i := range list {
+		live[list[i].ID] = &list[i]
+	}
 
-	for i := range questions {
-		q := &questions[i]
-		// 读不到就不投影：与题目列表的读路径保持同一套判定
-		// （公开题，或本人创建，或拥有 view_private_any）。
-		if !questionReadableBy(q, viewer) {
+	for _, id := range ids {
+		cur, alive := live[id]
+		if alive && !questionReadableBy(cur, viewer) {
 			continue
 		}
-		var options []model.Option
-		if !q.Options.IsEmpty() {
-			_ = q.Options.Into(&options)
+
+		if fq, ok := frozen[id]; ok {
+			out[id] = projectionFromFrozen(fq, declared, cur)
+			continue
 		}
-		var answer model.AnswerSpec
-		if !q.Answer.IsEmpty() {
-			_ = q.Answer.Into(&answer)
+		// 没有冻结副本：历史数据，或题目已被删除。
+		if !alive {
+			continue // 题目没了且没有快照，导出时会显示"引用失效"
 		}
-		out[q.ID] = schema.PaperQuestionProjection{
-			ID:                q.ID,
-			QuestionType:      q.QuestionType,
-			QuestionTypeLabel: q.QuestionType.Label(),
-			Difficulty:        q.Difficulty,
-			Stem:              q.Stem,
-			Options:           options,
-			Answer:            answer,
-			Analysis:          q.Analysis,
-			Solution:          q.Solution,
-			Summary:           q.Summary,
-			StemText:          q.StemText,
-			ContentRevision:   q.ContentRevision,
-			Stale:             declared[q.ID] != 0 && declared[q.ID] != q.ContentRevision,
-		}
+		out[id] = projectionFromFrozen(freezePayload(cur), declared, cur)
 	}
 	return out, nil
+}
+
+// projectionFromFrozen 把冻结内容转成前端投影。
+//
+// Stale 判定用「节点声明的修订号」与「题目当前修订号」比较：
+// 冻结之后题库又改过，界面就该提示可以同步最新内容。
+// 题目已被删除时一律视为过期——内容已经不完整了。
+func projectionFromFrozen(fq frozenQuestion, declared map[uint]int64, live *model.Question) schema.PaperQuestionProjection {
+	var options []model.Option
+	if !fq.Options.IsEmpty() {
+		_ = fq.Options.Into(&options)
+	}
+	var answer model.AnswerSpec
+	if !fq.Answer.IsEmpty() {
+		_ = fq.Answer.Into(&answer)
+	}
+	return schema.PaperQuestionProjection{
+		ID:                fq.ID,
+		QuestionType:      fq.QuestionType,
+		QuestionTypeLabel: fq.QuestionTypeLabel,
+		Difficulty:        fq.Difficulty,
+		Stem:              fq.Stem,
+		Options:           options,
+		Answer:            answer,
+		Analysis:          fq.Analysis,
+		Solution:          fq.Solution,
+		Summary:           fq.Summary,
+		StemText:          fq.StemText,
+		ContentRevision:   fq.ContentRevision,
+		Stale:             live == nil || (declared[fq.ID] != 0 && declared[fq.ID] != live.ContentRevision),
+		Visibility:        fq.Visibility,
+		CreatedBy:         fq.CreatedBy,
+	}
 }
 
 // questionReadableBy 判断 viewer 是否有权读到这道题的完整内容。

@@ -167,10 +167,16 @@ type PaperNodeResponse struct {
 
 	SourceQuestionNodeID *string `json:"source_question_node_id"`
 	AnchorBeforeNodeID   *string `json:"anchor_before_node_id"`
+
+	// QuestionID 题目块引用的题目 id（服务端解析自 Content）。
+	QuestionID *uint `json:"question_id,omitempty"`
+	// QuestionRevision 冻结那一刻题目的修订号。界面据此显示
+	// 「可同步最新内容」，客户端不需要、也不应该提交这两个字段。
+	QuestionRevision int64 `json:"question_revision,omitempty"`
 }
 
 func NewPaperNodeResponse(n *model.PaperNode) PaperNodeResponse {
-	return PaperNodeResponse{
+	resp := PaperNodeResponse{
 		ID:                   n.ID,
 		ParentID:             n.ParentID,
 		Position:             n.Position,
@@ -181,7 +187,17 @@ func NewPaperNodeResponse(n *model.PaperNode) PaperNodeResponse {
 		SchemaVersion:        n.SchemaVersion,
 		SourceQuestionNodeID: n.SourceQuestionNodeID,
 		AnchorBeforeNodeID:   n.AnchorBeforeNodeID,
+		QuestionID:           n.QuestionID,
 	}
+	if !n.QuestionContent.IsEmpty() {
+		var fq struct {
+			ContentRevision int64 `json:"content_revision"`
+		}
+		if err := n.QuestionContent.Into(&fq); err == nil {
+			resp.QuestionRevision = fq.ContentRevision
+		}
+	}
+	return resp
 }
 
 // PaperDetail 试卷详情。
@@ -215,6 +231,13 @@ type PaperQuestionProjection struct {
 	ContentRevision int64 `json:"content_revision"`
 	// Stale 为真表示引用的题目已被改动，界面提示"同步最新内容"。
 	Stale bool `json:"stale"`
+
+	// Visibility / CreatedBy 记的是**冻结那一刻**的可见性。
+	// 定稿快照会连同它们一起存下来，于是导出历史版本时能重新判断
+	// "题是不是后来变私有了"——否则定稿之后再把题改成私有，
+	// 旧版本仍然会把内容原样导出来。
+	Visibility model.Visibility `json:"visibility,omitempty"`
+	CreatedBy  uint             `json:"created_by,omitempty"`
 }
 
 type PaperPermissions struct {

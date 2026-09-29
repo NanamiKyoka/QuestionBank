@@ -134,7 +134,14 @@ func (s *ExportService) ExportVersion(ctx context.Context, user *model.User, pap
 	}
 
 	views := make(map[uint]export.QuestionView, len(snap.Questions))
+	blocked, err := s.filterSnapshotVisibility(ctx, paper.SubjectID, snap.Questions, user)
+	if err != nil {
+		return nil, err
+	}
 	for id, q := range snap.Questions {
+		if blocked[id] {
+			continue
+		}
 		views[id] = export.QuestionView{
 			ID:        q.ID,
 			Type:      q.QuestionType,
@@ -234,11 +241,57 @@ func zipLaTeX(name string, res *latex.Result) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// filterSnapshotVisibility 找出定稿快照里"现在不该再被读到"的题目。
+//
+// 快照存的是**当时**的内容，可见性也一并记在里面；但可见性是会变的——
+// 定稿之后把一道题改成私有，旧版本里就还留着它的完整题干与答案。
+// 快照是历史数据，不代表它可以绕过今天的可见性规则。
+//
+// 判定以**当前**的题目行为准；题目已被删除的（读不到当前值）按快照里
+// 记的可见性与创建者判断：公开题照常导出，私有题仍然挡住。
+func (s *ExportService) filterSnapshotVisibility(
+	ctx context.Context,
+	subjectID uint,
+	questions map[uint]snapshotQuestion,
+	viewer *model.User,
+) (map[uint]bool, error) {
+	blocked := make(map[uint]bool)
+
+	ids := make([]uint, 0, len(questions))
+	for id := range questions {
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return blocked, nil
+	}
+
+	live, err := s.repos.Questions.ListByIDs(ctx, ids)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	current := make(map[uint]model.Question, len(live))
+	for i := range live {
+		current[live[i].ID] = live[i]
+	}
+
+	for id, proj := range questions {
+		if q, ok := current[id]; ok {
+			blocked[id] = !questionReadableBy(&q, viewer)
+			continue
+		}
+		// 题库已删：退回到快照里记录的可见性来判断。
+		blocked[id] = proj.Visibility == model.VisibilityPrivate &&
+			(viewer == nil || (proj.CreatedBy != viewer.ID && !viewer.Can(model.PermViewPrivateAny, subjectID)))
+	}
+	return blocked, nil
+}
+
 // questionViews 装载节点引用到的题目内容。
 //
-// 与 PaperService.projectQuestions 用同一套可见性判定：导出是"把卷子内容
-// 落到一个可以带走的文件里"，比在页面上看一眼扩散得更快，所以读不到的
-// 私有题必须在这里同样被挡住，而不是只在页面上挡住。
+// 内容取自**节点上的冻结副本**，与 PaperService.projectQuestions 同一套来源：
+// 导出的是"这份卷子此刻的样子"，题库后来怎么改都不该出现在这份文件里。
+// 题目表仍然要查，但只用于可见性判定——题变私有时必须在导出里一并挡住，
+// 否则读侧挡住了、导出侧却把私有内容写进了可以带走的文件。
 func (s *ExportService) questionViews(ctx context.Context, nodes []model.PaperNode, viewer *model.User) (map[uint]export.QuestionView, error) {
 	out := map[uint]export.QuestionView{}
 
@@ -247,9 +300,47 @@ func (s *ExportService) questionViews(ctx context.Context, nodes []model.PaperNo
 		return out, nil
 	}
 
+	// 冻结内容按题目 id 归拢：同一道题被多次引用时只解析一次。
+	frozen := make(map[uint]frozenQuestion, len(ids))
+	for i := range nodes {
+		if nodes[i].NodeType != model.NodeTypeQuestion || nodes[i].QuestionContent.IsEmpty() {
+			continue
+		}
+		var ref domain.QuestionRef
+		if err := nodes[i].Content.Into(&ref); err != nil || ref.QuestionID == 0 {
+			continue
+		}
+		var fq frozenQuestion
+		if err := nodes[i].QuestionContent.Into(&fq); err == nil {
+			frozen[ref.QuestionID] = fq
+		}
+	}
+
 	list, err := s.repos.Questions.ListByIDs(ctx, ids)
 	if err != nil {
 		return nil, apperr.ErrInternal.WithCause(err)
+	}
+
+	emit := func(fq frozenQuestion) {
+		var options []model.Option
+		if !fq.Options.IsEmpty() {
+			_ = fq.Options.Into(&options)
+		}
+		var answer model.AnswerSpec
+		if !fq.Answer.IsEmpty() {
+			_ = fq.Answer.Into(&answer)
+		}
+		out[fq.ID] = export.QuestionView{
+			ID:        fq.ID,
+			Type:      fq.QuestionType,
+			TypeLabel: fq.QuestionTypeLabel,
+			Stem:      fq.Stem,
+			Options:   options,
+			Answer:    answer,
+			Analysis:  fq.Analysis,
+			Solution:  fq.Solution,
+			Summary:   fq.Summary,
+		}
 	}
 
 	for i := range list {
@@ -257,24 +348,18 @@ func (s *ExportService) questionViews(ctx context.Context, nodes []model.PaperNo
 		if !questionReadableBy(q, viewer) {
 			continue
 		}
-		var options []model.Option
-		if !q.Options.IsEmpty() {
-			_ = q.Options.Into(&options)
+		if fq, ok := frozen[q.ID]; ok {
+			emit(fq)
+			continue
 		}
-		var answer model.AnswerSpec
-		if !q.Answer.IsEmpty() {
-			_ = q.Answer.Into(&answer)
-		}
-		out[q.ID] = export.QuestionView{
-			ID:        q.ID,
-			Type:      q.QuestionType,
-			TypeLabel: q.QuestionType.Label(),
-			Stem:      q.Stem,
-			Options:   options,
-			Answer:    answer,
-			Analysis:  q.Analysis,
-			Solution:  q.Solution,
-			Summary:   q.Summary,
+		emit(freezePayload(q))
+	}
+
+	// 题库里的题目已被删除，但卷子冻结过它——导出仍然要带上这份内容。
+	// 这正是"稿件自带内容"的意义：题库清理不应让已排好的卷子散架。
+	for id, fq := range frozen {
+		if _, done := out[id]; !done {
+			emit(fq)
 		}
 	}
 	return out, nil
@@ -312,6 +397,11 @@ type snapshotQuestion struct {
 	Analysis          model.JSON         `json:"analysis"`
 	Solution          model.JSON         `json:"solution"`
 	Summary           model.JSON         `json:"summary"`
+	// Visibility / CreatedBy 记的是定稿那一刻的可见性。
+	// 导出历史版本时要拿它跟题库的**当前**状态对一遍：题在定稿之后
+	// 改成私有的，旧版本不该继续把内容导出来。
+	Visibility model.Visibility `json:"visibility,omitempty"`
+	CreatedBy  uint             `json:"created_by,omitempty"`
 }
 
 // safeFilename 生成安全的文件名。

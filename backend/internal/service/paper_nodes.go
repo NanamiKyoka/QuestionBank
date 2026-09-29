@@ -38,6 +38,12 @@ func (s *PaperService) ReplaceNodes(ctx context.Context, user *model.User, paper
 		return nil, err
 	}
 
+	// 3) 冻结题目内容。放在校验之后：先确认这道题确实可用，
+	//    再把它抄进卷子，否则会把不该留存的题目内容先落到内存里。
+	if err := s.freezeQuestionContent(ctx, paperID, nodes); err != nil {
+		return nil, err
+	}
+
 	newRevision := req.ExpectedRevision + 1
 	totalScore := sumScore(nodes, paper.ScoringEnabled)
 
@@ -79,6 +85,144 @@ func (s *PaperService) ReplaceNodes(ctx context.Context, user *model.User, paper
 		out = append(out, schema.NewPaperNodeResponse(&saved[i]))
 	}
 	return &schema.ReplaceNodesResponse{Revision: newRevision, Nodes: out}, nil
+}
+
+// freezeQuestionContent 为题目块冻结题目内容。
+//
+// 何时重新冻结——这是本函数唯一需要讲清楚的规则：
+//
+//   - 节点是**新增**的（这张卷子里还没有这个节点 id）：冻结。
+//     刚拖进来的题，理应记录它此刻的样子。
+//   - 节点引用的**题目换了**（question_id 变了）：冻结。
+//     内容跟着新题目走，保留旧快照等于张冠李戴。
+//   - 其余情况（同一道题、同一节点再次保存）：**不重新冻结**。
+//     自动保存是整棵树覆盖式的，用户每敲一下键盘都会提交一次；
+//     若每次都重新冻结，题库里的改动就会被自动保存悄悄带进卷子，
+//     "卷子不受题库影响"这条语义当场作废。题库变了要靠
+//     SyncQuestionNodes 显式同步，那里会明确告诉用户"要更新几道题"。
+//
+// 冻结不了的情况（题目已被软删除）不是错误：节点保留，
+// QuestionContent 留空，读的时候回落到实时查询并显示"引用失效"。
+func (s *PaperService) freezeQuestionContent(ctx context.Context, paperID uint, nodes []model.PaperNode) error {
+	ids := domain.CollectQuestionIDs(nodes)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// 先看这张卷子已经冻结过什么：节点 id -> 旧快照。
+	previous, err := s.repos.Papers.Nodes(ctx, paperID)
+	if err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	prevByNodeID := make(map[string]model.PaperNode, len(previous))
+	for i := range previous {
+		prevByNodeID[previous[i].ID] = previous[i]
+	}
+
+	// 只给"需要重新冻结"的节点去查题目，避免每次自动保存都把
+	// 整张卷子引用的题目重新读一遍。
+	needFreeze := make(map[uint]struct{}, len(ids))
+	for i := range nodes {
+		n := &nodes[i]
+		if n.NodeType != model.NodeTypeQuestion {
+			continue
+		}
+		var ref domain.QuestionRef
+		if n.Content.IsEmpty() {
+			continue
+		}
+		if err := n.Content.Into(&ref); err != nil || ref.QuestionID == 0 {
+			continue
+		}
+		prev, existed := prevByNodeID[n.ID]
+		// 引用换了题，或者这个节点还没有快照（例如历史数据），都需要重新冻结。
+		if !existed || prev.QuestionID == nil || *prev.QuestionID != ref.QuestionID || prev.QuestionContent.IsEmpty() {
+			n.QuestionID = &ref.QuestionID
+			needFreeze[ref.QuestionID] = struct{}{}
+		} else {
+			// 沿用旧快照，连同它冻结时的修订号一起带走。
+			n.QuestionID = prev.QuestionID
+			n.QuestionContent = prev.QuestionContent
+		}
+	}
+	if len(needFreeze) == 0 {
+		return nil
+	}
+
+	list, err := s.repos.Questions.ListByIDs(ctx, mapKeys(needFreeze))
+	if err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	byID := make(map[uint]model.Question, len(list))
+	for i := range list {
+		byID[list[i].ID] = list[i]
+	}
+
+	for i := range nodes {
+		n := &nodes[i]
+		if n.QuestionID == nil || !n.QuestionContent.IsEmpty() {
+			continue
+		}
+		q, ok := byID[*n.QuestionID]
+		if !ok {
+			continue // 已被删除：留空，读时显示"引用失效"
+		}
+		snap, err := model.JSONOf(freezePayload(&q))
+		if err != nil {
+			return apperr.ErrInternal.WithCause(err)
+		}
+		n.QuestionContent = snap
+	}
+	return nil
+}
+
+// frozenQuestion 冻结到节点上的题目内容。
+//
+// 字段与 schema.PaperQuestionProjection 对齐：投影层读出来就能直接渲染，
+// 不必再认识题目表。Deleted 单独记一份，因为"曾经存在但现在没了"
+// 与"从未存在"在导出时的处理完全不同。
+type frozenQuestion struct {
+	ID                uint               `json:"id"`
+	QuestionType      model.QuestionType `json:"question_type"`
+	QuestionTypeLabel string             `json:"question_type_label"`
+	Difficulty        int                `json:"difficulty"`
+	Stem              model.JSON         `json:"stem"`
+	Options           model.JSON         `json:"options"`
+	Answer            model.JSON         `json:"answer"`
+	Analysis          model.JSON         `json:"analysis"`
+	Solution          model.JSON         `json:"solution"`
+	Summary           model.JSON         `json:"summary"`
+	StemText          string             `json:"stem_text"`
+	ContentRevision   int64              `json:"content_revision"`
+	Visibility        model.Visibility   `json:"visibility"`
+	CreatedBy         uint               `json:"created_by"`
+}
+
+func freezePayload(q *model.Question) frozenQuestion {
+	return frozenQuestion{
+		ID:                q.ID,
+		QuestionType:      q.QuestionType,
+		QuestionTypeLabel: q.QuestionType.Label(),
+		Difficulty:        q.Difficulty,
+		Stem:              q.Stem,
+		Options:           q.Options,
+		Answer:            q.Answer,
+		Analysis:          q.Analysis,
+		Solution:          q.Solution,
+		Summary:           q.Summary,
+		StemText:          q.StemText,
+		ContentRevision:   q.ContentRevision,
+		Visibility:        q.Visibility,
+		CreatedBy:         q.CreatedBy,
+	}
+}
+
+func mapKeys(m map[uint]struct{}) []uint {
+	out := make([]uint, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // checkQuestionRefs 校验题目引用的合法性与跨学科引用。
@@ -219,10 +363,14 @@ func (s *PaperService) CheckQuestionRevisions(ctx context.Context, user *model.U
 	return resp, nil
 }
 
-// SyncQuestionNodes 把节点上记录的题目修订号刷新为当前值。
+// SyncQuestionNodes 把节点上的题目内容刷新为题库的当前值。
 //
-// 只改修订号，不改题目内容本身——题目内容始终从题库实时读取。
-// 这一步的作用是让"题目已更新"的提示消失，表示用户已确认。
+// 这是"题库改了 → 卷子里也改"的唯一显式入口：用户点了同步，
+// 我们才把题目的最新内容重新冻结进节点，并把修订号对齐。
+//
+// 之所以需要这一步而不是自动跟随：试卷是稿件，题库里的日常改动
+// 不该悄悄改动已排好的卷子；但用户确认之后，就该一步到位地跟上，
+// 而不是只消掉"题目已更新"的提示、卷面还是旧内容。
 func (s *PaperService) SyncQuestionNodes(ctx context.Context, user *model.User, paperID uint, questionIDs []uint) (*schema.SyncQuestionNodesResponse, error) {
 	paper, err := s.repos.Papers.Get(ctx, paperID)
 	if err != nil {
@@ -265,6 +413,16 @@ func (s *PaperService) SyncQuestionNodes(ctx context.Context, user *model.User, 
 		return nil, apperr.ErrInternal.WithCause(err)
 	}
 
+	// 取回要同步的题目的当前内容，重新冻结。
+	fresh, err := s.repos.Questions.ListByIDs(ctx, want)
+	if err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	byID := make(map[uint]*model.Question, len(fresh))
+	for i := range fresh {
+		byID[fresh[i].ID] = &fresh[i]
+	}
+
 	synced := make([]uint, 0, len(want))
 	for i := range nodes {
 		if nodes[i].NodeType != model.NodeTypeQuestion || nodes[i].Content.IsEmpty() {
@@ -275,7 +433,21 @@ func (s *PaperService) SyncQuestionNodes(ctx context.Context, user *model.User, 
 			continue
 		}
 		rev, ok := current[ref.QuestionID]
-		if !ok || rev == ref.ContentRevision {
+		if !ok {
+			// 题目已被删除：保留旧冻结内容不动，让它标着过期，
+			// 而不是把节点清空——清空等于把卷面挖一个洞。
+			continue
+		}
+		q := byID[ref.QuestionID]
+		if q != nil {
+			snap, err := model.JSONOf(freezePayload(q))
+			if err != nil {
+				return nil, apperr.ErrInternal.WithCause(err)
+			}
+			nodes[i].QuestionContent = snap
+			nodes[i].QuestionID = &ref.QuestionID
+		}
+		if rev == ref.ContentRevision {
 			continue
 		}
 		ref.ContentRevision = rev

@@ -99,6 +99,21 @@ type PaperNode struct {
 	// Props 节点属性（如分值、是否显示题号、答题区高度）
 	Props JSON `json:"props"`
 
+	// ---- 题目块的冻结内容（服务端维护，客户端不参与往返）----
+	//
+	// 试卷是**稿件**，不是题库的一个视图。题库里改了题干、删了题目、
+	// 调了答案，已经排好的卷子不应该跟着变——否则上周定稿发给学生的卷子
+	// 今天再导出就变成了另一个样子。因此题目块在加入卷子时把当时的题目
+	// 内容冻结一份，之后一直用这份；题库那边改了，只在界面上提示
+	// 「可同步最新内容」，由用户决定要不要覆盖。
+	//
+	// 这两列刻意**不进 Content**：Content 是客户端提交的契约，混进
+	// 服务端维护的字段会让"客户端能伪造冻结内容"变成可能。
+	QuestionID *uint `gorm:"index" json:"question_id,omitempty"`
+	// QuestionContent 冻结的题目内容投影（结构同 PaperQuestionProjection）。
+	// 为空表示尚未冻结（历史数据或题目已删），此时退回按 id 实时读取。
+	QuestionContent JSON `json:"question_content,omitempty"`
+
 	// SchemaVersion 节点 schema 版本，前端据此决定是否允许空块等情况，
 	// 必须原样往返，不能丢。
 	SchemaVersion int `gorm:"not null;default:1" json:"schema_version"`
