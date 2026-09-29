@@ -23,10 +23,10 @@ func numberingInput(nodes []model.PaperNode, qids ...uint) Input {
 		// 会回落到题库答案，答案为空就渲染不出任何内容。
 		yes := true
 		qs[id] = QuestionView{
-			ID:      id,
-			Type:    model.QuestionTypeTrueFalse,
-			Stem:    stemDoc("题干"),
-			Answer:  model.AnswerSpec{Kind: "boolean", BoolAnswer: &yes},
+			ID:     id,
+			Type:   model.QuestionTypeTrueFalse,
+			Stem:   stemDoc("题干"),
+			Answer: model.AnswerSpec{Kind: "boolean", BoolAnswer: &yes},
 		}
 	}
 	return Input{
@@ -71,9 +71,9 @@ func TestNumberingFallsBackToPositionalCounter(t *testing.T) {
 // 且互不干扰（不能让"填了一个"导致后面全部错位）。
 func TestNumberingMixesExplicitAndPositional(t *testing.T) {
 	nodes := []model.PaperNode{
-		questionNode("a", 1, nil),                  // 位置 1
+		questionNode("a", 1, nil),                             // 位置 1
 		questionNode("b", 2, map[string]any{"number": "2.1"}), // 显式
-		questionNode("c", 3, nil),                  // 位置 3
+		questionNode("c", 3, nil),                             // 位置 3
 	}
 	got := docText(assemblePaper(numberingInput(nodes, 1, 2, 3)))
 	for _, want := range []string{"1．", "2.1．", "3．"} {
