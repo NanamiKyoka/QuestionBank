@@ -3,6 +3,7 @@ package export
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -126,7 +127,7 @@ func Assemble(in Input, loader ImageLoader) *Document {
 
 			// scope=before：解析紧跟本题。
 			if item, ok := anchored[root.ID]; ok {
-				doc.Blocks = append(doc.Blocks, assembleAnswerItem(&item, in, loader, counter.current)...)
+				doc.Blocks = append(doc.Blocks, assembleAnswerItem(&item, in, loader, sourceQuestionNumber(&item, in, counter.current))...)
 			}
 
 		case model.NodeTypeQuestionDetails:
@@ -150,7 +151,8 @@ func Assemble(in Input, loader ImageLoader) *Document {
 				})
 			}
 			for j := range items {
-				doc.Blocks = append(doc.Blocks, assembleAnswerItem(&items[j], in, loader, numberFromProps(items[j].Props))...)
+				item := &items[j]
+				doc.Blocks = append(doc.Blocks, assembleAnswerItem(item, in, loader, sourceQuestionNumber(item, in, numberFromProps(item.Props)))...)
 			}
 		}
 	}
@@ -217,17 +219,80 @@ func clampAnswerLines(n int) int {
 
 // counter 题号计数器。
 //
-// 题号在这里计算而不是读节点属性：插入删除题目后编号必须自动连续，
-// 若把题号写死在节点里，用户每次调整排版都要手工重编号。
+// 题号在这里计算**只是兜底**：节点 props.number 有值时以它为准（见
+// questionNumber）。保留计数器是为了让"没填过题号"的老数据继续保持
+// 插入删除后自动连续的行为——若连兜底都去掉，老卷子会集体丢题号。
 type counter struct {
 	current int
 }
 
 func newCounter() *counter { return &counter{} }
 
+// maxQuestionNumber 节点 props.number 的长度上限，与前端一致。
+// 不做上限的话，一个几百字的"题号"能把整行题干顶到下一行去。
+const maxQuestionNumber = 16
+
+// numberLabelFromJSON 读题目节点上记录的题号。
+//
+// 存在的原因是题号不再只能是整数：按二级标题分组时需要 "1.1" 这种十进制
+// 编号，而整数表达不了。题号是教师显式填的（或前端"自动填充题号"写进去的），
+// 因此导出时原样采用，不再由这里计算。
+func numberLabelFromJSON(props model.JSON) string {
+	label := strings.TrimSpace(attrStringFromJSON(props, "number"))
+	if label == "" {
+		return ""
+	}
+	// 按 rune 截断而不是按字节：中文题号（"一之三"之类）按字节切会切出半个字。
+	runes := []rune(label)
+	if len(runes) > maxQuestionNumber {
+		label = string(runes[:maxQuestionNumber])
+	}
+	return label
+}
+
 // numberFromProps 读取解析条目上记录的题号。
 func numberFromProps(props model.JSON) int {
 	return attrIntFromJSON(props, "number")
+}
+
+// questionNumber 决定一道题在卷面上显示的题号。
+//
+// 优先级：题目节点 props.number > fallback（位置计数）。
+// 前端编辑器用同一套优先级渲染题号输入框，两边必须一致，
+// 否则界面上写着 1.1、导出来却是 3.。
+func questionNumber(props model.JSON, fallback int) string {
+	if label := numberLabelFromJSON(props); label != "" {
+		return label
+	}
+	if fallback > 0 {
+		return strconv.Itoa(fallback)
+	}
+	return ""
+}
+
+// sourceQuestionNumber 解析条目对应的题号。
+//
+// 条目自己 props.number 上记的是服务端按位置算的整数，对不上 "1.1" 这类
+// 编号；真正的题号在它指向的题目块的 props.number 上。所以先回查题目块，
+// 查不到才用整数序号兜底——答案页与题干页的题号必须对得上，
+// 对不上老师就没法拿答案页对着答题卡讲。
+func sourceQuestionNumber(node *model.PaperNode, in Input, fallback int) string {
+	if node.SourceQuestionNodeID != nil {
+		for i := range in.Nodes {
+			n := &in.Nodes[i]
+			if n.ID != *node.SourceQuestionNodeID {
+				continue
+			}
+			if label := numberLabelFromJSON(n.Props); label != "" {
+				return label
+			}
+			break
+		}
+	}
+	if fallback > 0 {
+		return strconv.Itoa(fallback)
+	}
+	return ""
 }
 
 // assembleQuestion 渲染一道题。
@@ -251,7 +316,9 @@ func assembleQuestion(node *model.PaperNode, in Input, loader ImageLoader, c *co
 	// 题干前置"题号 + 分值"。
 	var prefix []Inline
 	if in.NumberingEnabled {
-		prefix = append(prefix, &Text{Value: fmt.Sprintf("%d．", c.current), Bold: true})
+		if label := questionNumber(node.Props, c.current); label != "" {
+			prefix = append(prefix, &Text{Value: fmt.Sprintf("%s．", label), Bold: true})
+		}
 	}
 	if in.ScoringEnabled {
 		if score := attrFloatFromJSON(node.Props, "score"); score > 0 {
@@ -388,13 +455,17 @@ func assembleExtras(qv QuestionView, display model.QuestionDisplay, loader Image
 }
 
 // assembleAnswerItem 渲染一个解析条目。
-func assembleAnswerItem(node *model.PaperNode, in Input, loader ImageLoader, number int) []Block {
+//
+// number 已经是解析好的题号文本（可能带 "1.1" 这类分组编号），
+// 调用方负责按"题目块 props.number 优先、整数序号兜底"的顺序解析，
+// 这里的 prefix 逻辑对两种形式一视同仁。
+func assembleAnswerItem(node *model.PaperNode, in Input, loader ImageLoader, number string) []Block {
 	// 解析条目优先渲染自己填的内容（教师手写的解析）。
 	own := RichDocBlocks(node.Content, loader)
 	if len(own) > 0 {
 		prefix := "【解析】"
-		if number > 0 {
-			prefix = fmt.Sprintf("%d．【解析】", number)
+		if number != "" {
+			prefix = fmt.Sprintf("%s．【解析】", number)
 		}
 		return prependRuns(own, []Inline{&Text{Value: prefix, Bold: true}})
 	}
@@ -408,8 +479,8 @@ func assembleAnswerItem(node *model.PaperNode, in Input, loader ImageLoader, num
 	}
 	var out []Block
 	prefix := "【答案】"
-	if number > 0 {
-		prefix = fmt.Sprintf("%d．【答案】", number)
+	if number != "" {
+		prefix = fmt.Sprintf("%s．【答案】", number)
 	}
 	if ans := AnswerInlines(qv); len(ans) > 0 {
 		out = append(out, &Paragraph{Runs: append([]Inline{&Text{Value: prefix, Bold: true}}, ans...)})
