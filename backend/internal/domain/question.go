@@ -39,10 +39,17 @@ type Node struct {
 // PlainText 提取纯文本，用于列表展示与关键词检索。
 //
 // 表格用空格分隔单元格、行之间用换行，避免把相邻单元格的文本粘成一个词。
+//
+// 公式与空位必须显式处理：它们的文字信息在 attrs 里而不是 content
+// 里，走 default 分支递归会**什么都取不到**。结果是"若 f(x)=x^2，则…"
+// 变成"若 ，则…"——公式位置留下空洞，既没法用公式做关键词检索，
+// 也让 AI 助手看到的题干残缺不全。
 func PlainText(doc RichDoc) string {
 	var sb strings.Builder
 	walkText(doc.Content, &sb)
-	return strings.TrimSpace(sb.String())
+	// 折叠连续空行：段落之间已经加了 \n，公式块又各加一次，
+	// 不收敛会得到一串空行，展示时很难看。
+	return collapseBlankLines(strings.TrimSpace(sb.String()))
 }
 
 func walkText(nodes []Node, sb *strings.Builder) {
@@ -52,6 +59,16 @@ func walkText(nodes []Node, sb *strings.Builder) {
 		case "text":
 			sb.WriteString(n.Text)
 		case "hardBreak":
+			sb.WriteString("\n")
+		case "blank":
+			sb.WriteString("______")
+		case "inlineMath":
+			// 用 LaTeX 原文而不是渲染后的字形：检索时用户会输入
+			// "x^2" 这样的写法，存源文才能匹配上。
+			sb.WriteString(mathLatex(n.Attrs))
+		case "blockMath":
+			sb.WriteString("\n")
+			sb.WriteString(mathLatex(n.Attrs))
 			sb.WriteString("\n")
 		case "tableRow":
 			walkText(n.Content, sb)
@@ -66,6 +83,33 @@ func walkText(nodes []Node, sb *strings.Builder) {
 			walkText(n.Content, sb)
 		}
 	}
+}
+
+func mathLatex(attrs map[string]any) string {
+	if attrs == nil {
+		return ""
+	}
+	if latex, ok := attrs["latex"].(string); ok {
+		return latex
+	}
+	return ""
+}
+
+func collapseBlankLines(text string) string {
+	if !strings.Contains(text, "\n\n") {
+		return text
+	}
+	out := make([]string, 0, 8)
+	previousBlank := true // 开头的空行也要去掉
+	for _, line := range strings.Split(text, "\n") {
+		blank := strings.TrimSpace(line) == ""
+		if blank && previousBlank {
+			continue
+		}
+		out = append(out, line)
+		previousBlank = blank
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 // CountBlanks 统计题干中填空题空位节点的数量。
@@ -225,8 +269,12 @@ func ValidateQuestion(qtype model.QuestionType, stem RichDoc, opts []model.Optio
 		}
 
 	case model.QuestionTypeMultipleChoice:
-		if len(answer.Correct) < 1 {
-			return apperr.New(apperr.CodeInvalidAnswer, "多选题至少需要一个正确选项")
+		// 多选题要求**至少两个**正确选项：只有一个正确答案的"多选题"
+		// 与单选没有区别，多半是录入或模型抽取时判错了题型。
+		// 放过它会让题库里混入无法区分单选的题目，且事后无从发现。
+		if len(answer.Correct) < 2 {
+			return apperr.New(apperr.CodeInvalidAnswer, "多选题至少需要两个正确选项").
+				WithDetail("当前 %d 个；若只有一个正确答案请改用单选题", len(answer.Correct))
 		}
 		dup := make(map[string]bool, len(answer.Correct))
 		for _, id := range answer.Correct {

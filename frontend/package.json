@@ -1,0 +1,54 @@
+{
+  "name": "questionmind-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "build:only": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc -b --force"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.6.0",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.6.0",
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@tiptap/core": "^3.31.3",
+    "@tiptap/extension-image": "^3.31.3",
+    "@tiptap/extension-placeholder": "^3.31.3",
+    "@tiptap/extension-subscript": "^3.31.3",
+    "@tiptap/extension-superscript": "^3.31.3",
+    "@tiptap/extension-table": "^3.31.3",
+    "@tiptap/extension-table-cell": "^3.31.3",
+    "@tiptap/extension-table-header": "^3.31.3",
+    "@tiptap/extension-table-row": "^3.31.3",
+    "@tiptap/extension-text-align": "^3.31.3",
+    "@tiptap/extension-underline": "^3.31.3",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
+    "@tiptap/vue-3": "^3.31.3",
+    "axios": "^1.20.0",
+    "element-plus": "^2.14.6",
+    "katex": "^0.18.9",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.43",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/katex": "^0.16.8",
+    "@types/node": "^26.6.3",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1",
+    "vue-tsc": "^3.3.11"
+  }
+}

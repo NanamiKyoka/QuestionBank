@@ -289,3 +289,61 @@ func TestCountBlanks(t *testing.T) {
 		t.Fatalf("期望 0 个空位，实际 %d", n)
 	}
 }
+
+// 公式与空位的文字信息在 attrs 里，不在 content 里。
+// 只递归 content 会把它们整个漏掉，题干变成"若 ，则…"——
+// 既搜不到公式，AI 助手看到的题干也是残缺的。
+func TestPlainTextKeepsMathAndBlanks(t *testing.T) {
+	d := RichDoc{Type: "doc", Content: []Node{
+		{Type: "paragraph", Content: []Node{
+			{Type: "text", Text: "若 "},
+			{Type: "inlineMath", Attrs: map[string]any{"latex": "f(x)=x^2"}},
+			{Type: "text", Text: "，则 f(2)="},
+			{Type: "blank"},
+		}},
+		{Type: "blockMath", Attrs: map[string]any{"latex": `\int_0^1 x dx`}},
+	}}
+
+	got := PlainText(d)
+
+	// 行内公式的 LaTeX 原文必须保留，否则没法按公式检索。
+	if !strings.Contains(got, "f(x)=x^2") {
+		t.Fatalf("行内公式应保留 LaTeX 原文，实际 %q", got)
+	}
+	// 独立公式同样要保留。
+	if !strings.Contains(got, `\int_0^1 x dx`) {
+		t.Fatalf("独立公式应保留 LaTeX 原文，实际 %q", got)
+	}
+	// 空位要有可见标记，否则看不出这里是让学生填空的。
+	if !strings.Contains(got, "______") {
+		t.Fatalf("空位应渲染为下划线，实际 %q", got)
+	}
+	// 段落与公式块各自都会补换行，叠加后可能留下多个连续空行。
+	// 收敛到"至多一个空行"——空行本身是段落分隔，是需要的。
+	if strings.Contains(got, "\n\n\n") {
+		t.Fatalf("不应出现两个以上连续空行，实际 %q", got)
+	}
+}
+
+// 只有一个正确答案的"多选题"与单选没有区别，多半是题型判错了。
+func TestValidateQuestionRejectsSingleAnswerMultipleChoice(t *testing.T) {
+	opts := options(t, "A", "B", "C")
+
+	err := ValidateQuestion(model.QuestionTypeMultipleChoice, doc(t, "下列哪些是质数"),
+		opts, model.AnswerSpec{Kind: "multiple", Correct: []string{opts[0].ID}})
+	if err == nil {
+		t.Fatal("多选题只有一个正确答案应被拒绝")
+	}
+	if !apperr.Is(err, apperr.CodeInvalidAnswer) {
+		t.Fatalf("期望 CodeInvalidAnswer，实际 %v", err)
+	}
+	if !strings.Contains(err.Error(), "两个") {
+		t.Fatalf("错误信息应说明需要两个正确答案，实际 %q", err.Error())
+	}
+
+	// 两个正确答案应当通过。
+	if err := ValidateQuestion(model.QuestionTypeMultipleChoice, doc(t, "下列哪些是质数"),
+		opts, model.AnswerSpec{Kind: "multiple", Correct: []string{opts[0].ID, opts[1].ID}}); err != nil {
+		t.Fatalf("两个正确答案应通过，实际 %v", err)
+	}
+}

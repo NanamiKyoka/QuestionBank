@@ -1,0 +1,40 @@
+/*
+ * 样式分层：
+ *  1. Tailwind 的主题与工具类（**故意不引入 preflight**）
+ *  2. 少量全局基础样式
+ *
+ * 为什么不引入 preflight：它会重置所有元素的 margin/padding/边框，
+ * 与 Element Plus 的组件样式正面冲突（按钮、输入框、表格都会走形）。
+ * 只取 theme + utilities，两套样式就能和平共处。
+ */
+@import 'tailwindcss/theme.css';
+@import 'tailwindcss/utilities.css';
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  background-color: var(--el-bg-color-page);
+  color: var(--el-text-color-primary);
+}
+
+/* 富文本与题目渲染里的公式统一用 KaTeX 排版 */
+.katex {
+  font-size: 1.05em;
+}
+
+/* 题干预览：保留换行、限制高度 */
+.stem-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
