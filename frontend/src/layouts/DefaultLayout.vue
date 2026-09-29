@@ -38,6 +38,7 @@ const menus: MenuItem[] = [
   { name: 'users', title: '用户管理', icon: 'User', admin: true },
   { name: 'activity-logs', title: '操作日志', icon: 'Finished', admin: true },
   { name: 'ai-settings', title: 'AI 设置', icon: 'Setting', admin: true },
+  { name: 'prompts', title: '提示词', icon: 'EditPen', admin: true },
   { name: 'settings', title: '系统设置', icon: 'Tools', admin: true },
 ]
 

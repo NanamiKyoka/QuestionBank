@@ -164,8 +164,11 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 		Stats:      service.NewStatsService(repos),
 		Activities: activitySvc,
 		Settings:   service.NewSettingsService(repos),
-		Uploads:    service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
-		Media:      mediaStore,
+		// 提示词服务在构造时把自己注册为 importing 的模板来源，
+		// 因此"接口通"与"提示词真的读得到"不可能脱节。
+		Prompts: service.NewPromptService(repos),
+		Uploads: service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
+		Media:   mediaStore,
 	})
 
 	if opt.Addr != "" {

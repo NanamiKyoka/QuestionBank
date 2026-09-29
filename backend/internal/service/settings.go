@@ -79,9 +79,10 @@ var settingCatalog = []settingDef{
 		Description: "从文档中抽取题目时使用的系统提示词",
 		Type:        SettingTypeText,
 		Editable:    false,
-		Note: "⚠ 只读：键在 model/enums.go:324 声明，importing.DefaultExtractPromptKey 也引用了它，" +
-			"但没有任何代码真的去读这一行。智能录题仍使用 importing/prompt.go 里硬编码的提示词，" +
-			"改这里不会影响抽取结果。",
+		Note: "内置默认提示词之上的**全局兜底**。优先级低于「提示词」页保存的模板，" +
+			"只在「提示词」页没有配置对应模板时才生效；配置了模板时改这里不会有任何效果。" +
+			"要调整抽取行为，请到「提示词」页，并优先考虑按学科覆盖——" +
+			"数学、语文、英语的题目结构差别很大。",
 	},
 	{
 		Key:         model.SettingAISolvePrompt,
@@ -89,7 +90,7 @@ var settingCatalog = []settingDef{
 		Description: "为已有题目补写答案与解析时使用的系统提示词",
 		Type:        SettingTypeText,
 		Editable:    false,
-		Note:        "⚠ 只读：键在 model/enums.go:325 声明，但没有任何读取方，与上一项情况相同。",
+		Note:        "与上一项同：内置默认之上的全局兜底，优先级低于「提示词」页的模板。",
 	},
 	{
 		Key:         model.SettingAITextModelID,

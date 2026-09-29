@@ -321,6 +321,15 @@ const (
 
 // SettingKey 系统设置的键。集中定义避免各处硬编码字符串。
 const (
+	// SettingAIExtractPrompt / SettingAISolvePrompt 是智能录题系统提示词的
+	// **全局兜底**：internal/importing 的解析链在"没有学科覆盖、也没有在
+	// 「提示词」页保存过全局模板"时才读这两个键，读到就用它渲染。
+	// 它们排在解析链的最底层（低于模板表），因为模板表支持按学科覆盖、
+	// 也能在界面上编辑，而这两行只有系统设置页能改。
+	//
+	// 它们曾经是"声明了但全仓无人读取"的死键：键在这里、界面把它列成只读、
+	// 说明里还写着"改了不起作用"。现在它真的有读取方了——但优先级最低，
+	// 所以如果你在「提示词」页配过模板，再回到这里改是看不到效果的。
 	SettingAIExtractPrompt  = "ai_extract_prompt"
 	SettingAISolvePrompt    = "ai_solve_prompt"
 	SettingRegistrationOpen = "registration_enabled"

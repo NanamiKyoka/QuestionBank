@@ -147,7 +147,9 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	}
 
 	promptOpts := importing.PromptOptions{
-		Mode:                    mode,
+		Mode: mode,
+		// 带上学科：提示词可以按学科覆盖，数学与语文的抽取要求本就不同。
+		SubjectID:               &subjectID,
 		SubjectName:             subject.Name,
 		ExistingKnowledgePoints: kpNames,
 		ExistingTags:            tagNames,

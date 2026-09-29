@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"strconv"
+	"strings"
+	"time"
+)
 
 // ChatSession AI 对话会话。
 type ChatSession struct {
@@ -118,22 +122,73 @@ type AgentStep struct {
 
 func (AgentStep) TableName() string { return "agent_steps" }
 
-// PromptTemplate 提示词模板。管理员可在线编辑，无需改代码。
+// PromptTemplate 提示词模板。管理员可在「提示词」页在线编辑，导入与 AI 助手
+// 在运行时真的读它（service/prompt.go 的解析链），不是一张摆着好看的表。
+//
+// 生效优先级：学科覆盖 > 全局模板 > 系统设置兜底 > 代码内置默认。
+// 读不到、读坏了、渲染不出东西，一律回落到内置默认，绝不让一次导入或
+// 一轮对话因为提示词配置而出错。
 type PromptTemplate struct {
 	SoftBase
 
-	// Key 唯一标识，如 extract_questions / solve_questions。
+	// Key 唯一标识。取值见 internal/importing 的 PromptKey* 常量；
+	// 学科覆盖行的键由 SubjectPromptKey 生成，不是新的提示词种类。
 	Key string `gorm:"size:64;not null;uniqueIndex" json:"key"`
 	// Name 展示名。
 	Name string `gorm:"size:128;not null" json:"name"`
 	// Scene 适用场景，便于界面上分组。
 	Scene string `gorm:"size:32" json:"scene"`
 
+	// SystemPrompt 系统提示词正文，其中的 {{占位符}} 在渲染时替换。
 	SystemPrompt string `gorm:"type:text" json:"system_prompt"`
-	UserPrompt   string `gorm:"type:text" json:"user_prompt"`
+	// UserPrompt 用户消息模板列。
+	//
+	// 刻意留空：本系统现有的三个提示词（录题抽取、录题解题、助手人设）
+	// 全部是系统提示词，没有任何面向用户消息的模板功能，
+	// 读写它等于凭空造一个产品里不存在的配置项。列本身不能删——
+	// 表结构已经是发布过的基线（internal/migrations/registry.go）。
+	UserPrompt string `gorm:"type:text" json:"user_prompt"`
 
+	// IsBuiltin 标记由代码内置的模板。内置模板不落库（它们是常量，
+	// 存一份只会产生"改了哪一份才生效"的第二个真相），该列预留给将来
+	// 的内置模板落库方案，当前恒为 false。
 	IsBuiltin bool `gorm:"not null;default:false" json:"is_builtin"`
 	UpdatedBy uint `json:"updated_by"`
 }
 
 func (PromptTemplate) TableName() string { return "prompt_templates" }
+
+// 学科覆盖行的键后缀。
+//
+// 为什么把学科 id 编进 key 而不是加一列 subject_id：
+// 数据库已经是发布过的迁移基线（internal/db/db.go 的 Migrate 只在 v1
+// 跑一次 AutoMigrate），基线之后新增的列不会被自动补上，而补迁移这件事
+// 不属于本文件能自行完成的范围。key 本来就有唯一索引，把作用域编进键里
+// 既不用改表，又天然满足"同一学科同一提示词只有一行"。
+const subjectKeySuffix = "@subject:"
+
+// SubjectPromptKey 生成学科覆盖行的键。
+func SubjectPromptKey(baseKey string, subjectID uint) string {
+	return baseKey + subjectKeySuffix + strconv.FormatUint(uint64(subjectID), 10)
+}
+
+// BasePromptKey 反解键：学科覆盖行还原成基础提示词键，其余原样返回。
+func BasePromptKey(stored string) string {
+	if i := strings.Index(stored, subjectKeySuffix); i > 0 {
+		return stored[:i]
+	}
+	return stored
+}
+
+// PromptSubjectID 解析键里的学科 id。非学科覆盖行返回 ok=false。
+func PromptSubjectID(stored string) (uint, bool) {
+	i := strings.Index(stored, subjectKeySuffix)
+	if i <= 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(stored[i+len(subjectKeySuffix):], 10, 64)
+	if err != nil || n == 0 {
+		return 0, false
+	}
+	return uint(n), true
+}

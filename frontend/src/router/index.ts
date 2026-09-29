@@ -112,6 +112,14 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'AI 设置', admin: true },
       },
       {
+        // 提示词单独成页：它决定的是全系统的抽取与对话行为，
+        // 混在「AI 设置」里会被密钥与模型配置盖住，管理员根本找不到。
+        path: 'prompts',
+        name: 'prompts',
+        component: () => import('@/views/PromptSettingsView.vue'),
+        meta: { title: '提示词', admin: true },
+      },
+      {
         path: 'activity-logs',
         name: 'activity-logs',
         component: () => import('@/views/ActivityLogView.vue'),

@@ -41,6 +41,7 @@ type Deps struct {
 	Stats           *service.StatsService
 	Activities      *service.ActivityService
 	Settings        *service.SettingsService
+	Prompts         *service.PromptService
 	Uploads         *service.UploadService
 	Media           *storage.Local
 }
@@ -106,6 +107,7 @@ func New(d Deps) *gin.Engine {
 	registerStatsRoutes(v1, d)
 	registerActivityRoutes(v1, d)
 	registerSettingsRoutes(v1, d)
+	registerPromptRoutes(v1, d)
 	registerUploadRoutes(v1, d)
 
 	// 媒体文件（题目配图）直接由后端提供。
@@ -398,6 +400,31 @@ func registerSettingsRoutes(g *gin.RouterGroup, d Deps) {
 	{
 		settings.GET("", h.List)
 		settings.PUT("/:key", h.Update)
+	}
+}
+
+// registerPromptRoutes 提示词模板与学科覆盖。
+//
+// 仅管理员可用：提示词是全系统行为，改错一次会同时影响所有学科的录题与对话。
+func registerPromptRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewPromptHandler(d.Prompts)
+	prompts := g.Group("/prompts")
+	prompts.Use(middleware.RequireAuth(), middleware.RequireSuperuser())
+	{
+		prompts.GET("", h.List)
+		prompts.POST("", h.Create)
+		prompts.PUT("/:id", h.Update)
+		prompts.DELETE("/:id", h.Delete)
+	}
+
+	// 通配段名必须与既有路由一致地叫 :subject_id：
+	// gin v1.12 不允许同一位置出现两个不同名字的通配段，
+	// 用 :sid 会在启动时 panic，而不是报错。
+	subjects := g.Group("/subjects/:subject_id")
+	subjects.Use(middleware.RequireAuth(), middleware.RequireSuperuser())
+	{
+		subjects.GET("/prompts", h.SubjectPrompts)
+		subjects.PUT("/prompts", h.SaveSubjectPrompts)
 	}
 }
 

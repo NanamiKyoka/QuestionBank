@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
 	"github.com/NanamiKyoka/questionmind/internal/aiagent"
+	"github.com/NanamiKyoka/questionmind/internal/importing"
 	"github.com/NanamiKyoka/questionmind/internal/model"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 	"github.com/NanamiKyoka/questionmind/internal/repository"
@@ -271,7 +273,7 @@ func (s *ChatService) PrepareSend(
 		SessionID:    sessionID,
 		SubjectID:    subjectID,
 		RunID:        newUUID(),
-		SystemPrompt: s.systemPrompt(scene),
+		SystemPrompt: s.systemPrompt(ctx, scene, subjectID),
 		MaxTokens:    resolved.MaxTokens,
 	}, nil
 }
@@ -373,26 +375,56 @@ func (s *ChatService) buildContext(ctx context.Context, sessionID uint) ([]ai.Me
 }
 
 // systemPrompt 助手的人设与行为约束。
-func (s *ChatService) systemPrompt(scene aiagent.Scene) string {
-	var sb strings.Builder
-	sb.WriteString("你是 QuestionMind 题库系统的 AI 助手，帮助教师管理题目和组卷。\n\n")
-	sb.WriteString("工作方式：\n")
-	sb.WriteString("1. 需要题库信息时先调用工具查，不要凭空编造题目 id 或内容。\n")
-	sb.WriteString("2. 工具返回错误时读懂原因再调整，不要原样重试同一个调用。\n")
-	sb.WriteString("3. 涉及修改数据的操作，先向用户说明将要做什么。\n")
-	sb.WriteString("4. 回答简洁直接，用中文；涉及公式时用 LaTeX，行内写 $...$。\n")
-	sb.WriteString("5. 找不到合适内容时如实说明，不要勉强凑数。\n")
+//
+// 走 importing 的解析链：学科覆盖 → 全局模板 → 内置默认（importing/prompt.go）。
+// 没配模板时拿到的正文与改造前的硬编码版本逐字一致，因此"接上配置"这件事
+// 本身不会改变任何一次对话的行为。
+//
+// 解析链内部已经保证不会失败：读不到模板、模板渲染为空，一律回落到内置默认。
+// 这里因此没有 error 返回——一轮对话不该因为一段提示词发不出去。
+func (s *ChatService) systemPrompt(ctx context.Context, scene aiagent.Scene, subjectID uint) string {
+	// 三个键必须先占位再决定填不填值：渲染规则是"取值为空就删掉整行"，
+	// 而键缺失会被当成未知占位符原样留在提示词里。少了这一步，
+	// 没有学科的会话就会把 {{subject_name}} 原样发给模型。
+	vars := importing.Vars{
+		"subject_name":        "",
+		"subject_description": "",
+		"scene_hint":          sceneHint(scene),
+	}
 
+	// 学科名与说明是可选的：会话可以没有学科（跨学科提问），
+	// 因此这里刻意吞掉读取错误，只在没有学科上下文时少两个占位符的取值。
+	var subjectIDPtr *uint
+	if subjectID > 0 {
+		subjectIDPtr = &subjectID
+		if subject, err := s.repos.Subjects.Get(ctx, subjectID); err == nil {
+			vars["subject_name"] = subject.Name
+			vars["subject_description"] = importing.DescribeSubject(subject.Description)
+		} else {
+			slog.Warn("读取学科信息失败，助手提示词将缺少学科上下文",
+				"subject_id", subjectID, "error", err)
+		}
+	}
+
+	return importing.ResolveSystemPrompt(ctx, importing.PromptKeyAssistant, subjectIDPtr, vars).Text
+}
+
+// sceneHint 页面场景的一段提示。
+//
+// 单独拆出来是因为它属于**请求**而不是提示词模板：场景由客户端上报、
+// 每一轮都可能不同，不该被管理员写死在模板里。可配置模板通过
+// {{scene_hint}} 拿到它，因此管理员依然能决定这段话出现在什么位置。
+func sceneHint(scene aiagent.Scene) string {
 	switch scene {
 	case aiagent.SceneCompositionEditor:
-		sb.WriteString("\n当前用户在组卷编辑器里。用户的卷子可能有未保存的改动，" +
-			"要改动试卷结构时请使用客户端工具，这样改动会体现在用户眼前的编辑器里。\n")
+		return "当前用户在组卷编辑器里。用户的卷子可能有未保存的改动，" +
+			"要改动试卷结构时请使用客户端工具，这样改动会体现在用户眼前的编辑器里。"
 	case aiagent.SceneImportReview:
-		sb.WriteString("\n当前用户在审核导入的题目。请帮助核对题干、选项与答案是否合理。\n")
+		return "当前用户在审核导入的题目。请帮助核对题干、选项与答案是否合理。"
 	case aiagent.SceneQuestionLibrary:
-		sb.WriteString("\n当前用户在题库页面。请帮助检索、筛选和理解题目。\n")
+		return "当前用户在题库页面。请帮助检索、筛选和理解题目。"
 	}
-	return sb.String()
+	return ""
 }
 
 // ResolveClientTool 处理前端的工具结果回传。
