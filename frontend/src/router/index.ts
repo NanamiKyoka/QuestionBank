@@ -50,6 +50,13 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '试卷' },
       },
       {
+        // 删除确认框承诺过"可在回收站中恢复"，这个路由就是那句话的落点。
+        path: 'recycle-bin',
+        name: 'recycle-bin',
+        component: () => import('@/views/RecycleBinView.vue'),
+        meta: { title: '回收站' },
+      },
+      {
         // 编辑台独占整页：组卷需要横向空间，塞进布局内容区会很挤。
         path: 'papers/:id/edit',
         name: 'paper-editor',

@@ -62,12 +62,61 @@ const pickerQuery = reactive({
 })
 const pickerHasMore = computed(() => pickerRows.value.length < pickerTotal.value)
 
+// ---- 节点属性契约 ----
+
+/** 答题区样式。取值与后端 domain / 导出 IR 一一对应，不要自造新词。 */
+type AnswerSpaceStyle = 'blank' | 'lined'
+
+/** 块编辑器覆盖的节点类型。
+ *
+ * 答题区也在其中：它只有"行数 + 样式"两个块属性，和标题的级别同性质，
+ * 再单开一个弹窗只会让工具栏多一个入口。
+ */
+type BlockEditorType = 'rich_text' | 'heading' | 'answer_space'
+
+/** 题目节点的 props。
+ *
+ * 分值必须落在 props 上而不是 content 里：服务端 sumScore 与导出器都只读
+ * props.score，写进 content 的话整卷总分永远是 0（这正是原来的死功能）。
+ */
+interface QuestionNodeProps {
+  score?: number
+}
+
+/** 答题区节点的 props。 */
+interface AnswerSpaceProps {
+  lines?: number
+  style?: AnswerSpaceStyle
+}
+
+/** 答题区默认行数。
+ *
+ * 老数据把留白高度写在 content.height 上（默认 120px），120/30 = 4 行，
+ * 与导出端一直硬编码的 4 个空段落吻合，所以老卷子翻译过来时版面不会跳。
+ */
+const ANSWER_LINE_HEIGHT_PX = 30
+const DEFAULT_ANSWER_LINES = 4
+/** 行数上下限，与参考实现的 1..50 一致，避免手滑输出一整页空白。 */
+const MIN_ANSWER_LINES = 1
+const MAX_ANSWER_LINES = 50
+
+function clampAnswerLines(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_ANSWER_LINES
+  return Math.min(Math.max(Math.round(n), MIN_ANSWER_LINES), MAX_ANSWER_LINES)
+}
+
+function nodeProps<T>(node: PaperNode): T {
+  return (node.props ?? {}) as T
+}
+
 // ---- 块编辑 ----
 const blockVisible = ref(false)
 const blockForm = reactive({
   id: '' as string,
-  nodeType: 'rich_text' as 'rich_text' | 'heading',
+  nodeType: 'rich_text' as BlockEditorType,
   level: 1,
+  lines: DEFAULT_ANSWER_LINES,
+  answerStyle: 'blank' as AnswerSpaceStyle,
   content: emptyDoc() as unknown,
 })
 
@@ -120,6 +169,88 @@ const questionNumbers = computed(() => {
 })
 
 const questionCount = computed(() => questionNumbers.value.size)
+
+// ---- 分值 ----
+
+/** 「启用分值统计」没开时整条分值链路都是死的：服务端 sumScore 直接返回 0，
+ *  导出器也不输出「（N 分）」。这时就不该让用户填一个不会被采用的数字。 */
+const scoringEnabled = computed(() => paper.value?.scoring_enabled ?? false)
+
+/** 单题分值。没设过或值非法时返回 null，让输入框显示占位符而不是摆一个 0——
+ *  「0 分」和「没设」是两回事，必须在数据上就分得开。
+ *
+ *  0 本身是合法输入（这题不计分），照原样存回去：否则用户敲个 0 会发现
+ *  输入框自己清空了，像是界面在跟他作对。 */
+function scoreOf(node: PaperNode): number | null {
+  const raw = nodeProps<QuestionNodeProps>(node).score
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null
+}
+
+function setScore(node: PaperNode, value: number | undefined | null) {
+  const props: Record<string, unknown> = { ...nodeProps<QuestionNodeProps>(node) }
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    props.score = value
+  } else {
+    // 清空输入框等于"这题不计分"，删键而不是写 0，避免总分里混进无意义的零。
+    delete props.score
+  }
+  node.props = props
+  dirty.value = true
+}
+
+/** 本地分值合计。
+ *
+ * paper.total_score 是服务端在**保存时**重算的，编辑过程中一直是旧值；
+ * 直接展示它会让人以为分值根本没写进去，所以这里实时求和。
+ */
+const localTotalScore = computed(() => {
+  let total = 0
+  for (const node of nodes.value) {
+    if (node.node_type === 'question') total += scoreOf(node) ?? 0
+  }
+  // 0.1 + 0.2 这类浮点尾巴会显示成 "3.0000000000000004"，统一收敛到两位。
+  return Math.round(total * 100) / 100
+})
+
+/** 顶栏展示的总分：有未保存改动时用本地实时值，否则用服务端已持久化的值。 */
+const displayTotalScore = computed(() =>
+  dirty.value ? localTotalScore.value : (paper.value?.total_score ?? 0),
+)
+
+/** 整卷统一分值。
+ *
+ * 选择题卷常常整卷同分，逐题点既慢又容易漏；而它无非是把同一个值写进各题的
+ * props.score，之后仍可逐题覆盖，所以给一个批量入口而不是做成对话框流程。
+ */
+async function setUniformScore() {
+  const targets = topNodes.value.filter((n) => n.node_type === 'question')
+  if (!targets.length) {
+    ElMessage.warning('试卷里还没有题目')
+    return
+  }
+  const avg = Math.round((localTotalScore.value / targets.length) * 10) / 10
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `把 ${targets.length} 道题的分值统一设为（留空表示清除分值）：`,
+      '统一分值',
+      {
+        confirmButtonText: '应用',
+        cancelButtonText: '取消',
+        inputValue: avg > 0 ? String(avg) : '5',
+        inputPattern: /^\d{0,3}(\.\d{1,2})?$/,
+        inputErrorMessage: '请输入 0 ~ 999 之间的数字',
+      },
+    )
+    const num = Number(String(value ?? '').trim())
+    const parsed = Number.isFinite(num) && num > 0 ? num : null
+    for (const node of targets) setScore(node, parsed)
+    ElMessage.success(
+      parsed ? `已把 ${targets.length} 道题设为 ${parsed} 分` : `已清除 ${targets.length} 道题的分值`,
+    )
+  } catch {
+    // 用户取消
+  }
+}
 
 onMounted(load)
 
@@ -277,8 +408,10 @@ function addAnswerSpace() {
     parent_id: null,
     node_kind: 'block',
     node_type: 'answer_space',
-    content: { height: 120 },
-    props: {},
+    // 行数与样式写在 props 里，这是导出器唯一认的契约；
+    // content 保持空，否则会把留白高度留在 JSON 里成为没人读的脏数据。
+    content: null,
+    props: { lines: DEFAULT_ANSWER_LINES, style: 'blank' } satisfies AnswerSpaceProps,
     schema_version: 1,
     source_question_node_id: null,
     anchor_before_node_id: null,
@@ -353,28 +486,83 @@ function removeNodeWithConfirm(node: PaperNode) {
     .catch(() => undefined)
 }
 
-function openBlockEditor(node: PaperNode | null, type: 'rich_text' | 'heading') {
+/** 返回类型谓词而非 boolean：模板里的 v-if 才能顺带把 node_type 收窄成
+ *  块编辑器的可编辑类型，省掉一次手动断言。 */
+function canEditBlock(node: PaperNode): node is PaperNode & { node_type: BlockEditorType } {
+  return (
+    node.node_type === 'rich_text' || node.node_type === 'heading' || node.node_type === 'answer_space'
+  )
+}
+
+function openEditableBlock(node: PaperNode) {
+  if (!canEditBlock(node)) return
+  openBlockEditor(node, node.node_type)
+}
+
+/** 答题区行数。老节点把留白高度写在 content.height 上，
+ *  这里读的时候顺手翻译成行数——否则一次编辑就会把用户先前设的
+ *  留白静默改回默认值，而界面上看不出任何异常。 */
+function answerLinesOf(node: PaperNode): number {
+  const { lines } = nodeProps<AnswerSpaceProps>(node)
+  if (typeof lines === 'number' && lines > 0) {
+    return clampAnswerLines(lines)
+  }
+  const legacyHeight = (node.content as { height?: number } | null)?.height
+  if (typeof legacyHeight === 'number' && legacyHeight > 0) {
+    return clampAnswerLines(legacyHeight / ANSWER_LINE_HEIGHT_PX)
+  }
+  return DEFAULT_ANSWER_LINES
+}
+
+function answerStyleOf(node: PaperNode): AnswerSpaceStyle {
+  return nodeProps<AnswerSpaceProps>(node).style === 'lined' ? 'lined' : 'blank'
+}
+
+function openBlockEditor(node: PaperNode | null, type: BlockEditorType) {
   if (node) {
     blockForm.id = node.id
-    blockForm.nodeType = node.node_type as 'rich_text' | 'heading'
+    blockForm.nodeType = node.node_type as BlockEditorType
     blockForm.content = node.content ?? emptyDoc()
-    const props = (node.props ?? {}) as { level?: number }
-    blockForm.level = props.level ?? 1
+    blockForm.level = nodeProps<{ level?: number }>(node).level ?? 1
+    blockForm.lines = answerLinesOf(node)
+    blockForm.answerStyle = answerStyleOf(node)
   } else {
     blockForm.id = ''
     blockForm.nodeType = type
     blockForm.content = type === 'heading' ? { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] } : emptyDoc()
     blockForm.level = 1
+    blockForm.lines = DEFAULT_ANSWER_LINES
+    blockForm.answerStyle = 'blank'
   }
   blockVisible.value = true
 }
 
+const blockDialogTitle = computed(() =>
+  blockForm.nodeType === 'heading'
+    ? '编辑标题'
+    : blockForm.nodeType === 'answer_space'
+      ? '编辑答题区'
+      : '编辑说明文字',
+)
+
+/** 把块编辑器的表单折成节点 props。 */
+function blockPropsOf(): Record<string, unknown> {
+  if (blockForm.nodeType === 'heading') return { level: blockForm.level }
+  if (blockForm.nodeType === 'answer_space') {
+    return { lines: clampAnswerLines(blockForm.lines), style: blockForm.answerStyle }
+  }
+  return {}
+}
+
 function submitBlock() {
-  const props = blockForm.nodeType === 'heading' ? { level: blockForm.level } : {}
+  const props = blockPropsOf()
+  // 答题区没有富文本正文，content 必须置空，否则会把上一次编辑标题时
+  // 留在表单里的富文本写进答题区节点。
+  const content = blockForm.nodeType === 'answer_space' ? null : blockForm.content
   if (blockForm.id) {
     const node = nodes.value.find((n) => n.id === blockForm.id)
     if (node) {
-      node.content = blockForm.content
+      node.content = content
       node.props = props
       dirty.value = true
     }
@@ -384,7 +572,7 @@ function submitBlock() {
       parent_id: null,
       node_kind: 'block',
       node_type: blockForm.nodeType,
-      content: blockForm.content,
+      content,
       props,
       schema_version: 1,
       source_question_node_id: null,
@@ -656,7 +844,9 @@ function answerText(questionID: number): string {
           </div>
           <div class="text-xs text-gray-400">
             共 {{ questionCount }} 题 · 修订 r{{ revision }}
-            <template v-if="paper?.scoring_enabled"> · 总分 {{ paper.total_score }}</template>
+            <template v-if="scoringEnabled">
+              · 总分 {{ displayTotalScore }}<template v-if="dirty">（未保存）</template>
+            </template>
           </div>
         </div>
 
@@ -758,6 +948,7 @@ function answerText(questionID: number): string {
               <el-button size="small" @click="addRichText">+ 说明</el-button>
               <el-button size="small" @click="addPageBreak">+ 分页符</el-button>
               <el-button size="small" @click="addAnswerSpace">+ 答题区</el-button>
+              <el-button v-if="scoringEnabled" size="small" @click="setUniformScore">统一分值</el-button>
               <el-button size="small" :type="answerModule ? 'warning' : 'default'" @click="toggleAnswerModule">
                 {{ answerModule ? '移除解析模块' : '+ 解析模块' }}
               </el-button>
@@ -792,6 +983,22 @@ function answerText(questionID: number): string {
                       ·
                       {{ '★'.repeat(questions[(node.content as QuestionRef)?.question_id]?.difficulty ?? 0) }}
                     </span>
+                    <!-- 分值只写在 props.score 上，服务端 sumScore 与导出器都只认这个键。 -->
+                    <div v-if="scoringEnabled" class="ml-auto flex shrink-0 items-center gap-1">
+                      <span class="text-xs text-gray-400">分值</span>
+                      <el-input-number
+                        :model-value="scoreOf(node) ?? undefined"
+                        :min="0"
+                        :max="999"
+                        :step="0.5"
+                        :disabled="!canEdit"
+                        size="small"
+                        class="!w-24"
+                        controls-position="right"
+                        placeholder="未设"
+                        @update:model-value="(v: number | undefined) => setScore(node, v)"
+                      />
+                    </div>
                   </div>
 
                   <template v-if="questions[(node.content as QuestionRef)?.question_id]">
@@ -835,8 +1042,19 @@ function answerText(questionID: number): string {
 
                 <!-- 答题区 -->
                 <template v-else-if="node.node_type === 'answer_space'">
-                  <div class="rounded border border-dashed border-gray-300 py-6 text-center text-xs text-gray-400">
-                    答题区（{{ (node.content as { height?: number })?.height ?? 120 }}px）
+                  <div class="mb-1 text-xs text-gray-400">
+                    {{ blockLabel(node) }}（{{ answerLinesOf(node) }} 行 ·
+                    {{ answerStyleOf(node) === 'lined' ? '横线' : '留白' }}）
+                  </div>
+                  <div class="rounded border border-dashed border-gray-300 px-2 py-1">
+                    <template v-if="answerStyleOf(node) === 'lined'">
+                      <div
+                        v-for="line in answerLinesOf(node)"
+                        :key="line"
+                        class="h-6 border-b border-dashed border-gray-300"
+                      />
+                    </template>
+                    <div v-else :style="{ height: `${answerLinesOf(node) * 24}px` }" />
                   </div>
                 </template>
 
@@ -875,10 +1093,10 @@ function answerText(questionID: number): string {
                   <el-icon><Bottom /></el-icon>
                 </el-button>
                 <el-button
-                  v-if="node.node_type === 'rich_text' || node.node_type === 'heading'"
+                  v-if="canEditBlock(node)"
                   text
                   size="small"
-                  @click="openBlockEditor(node, node.node_type)"
+                  @click="openEditableBlock(node)"
                 >
                   <el-icon><Edit /></el-icon>
                 </el-button>
@@ -895,7 +1113,7 @@ function answerText(questionID: number): string {
     <!-- 块编辑 -->
     <el-dialog
       v-model="blockVisible"
-      :title="blockForm.nodeType === 'heading' ? '编辑标题' : '编辑说明文字'"
+      :title="blockDialogTitle"
       width="720px"
     >
       <el-form label-width="70px">
@@ -906,7 +1124,28 @@ function answerText(questionID: number): string {
             <el-radio :value="3">三级</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="内容">
+        <template v-if="blockForm.nodeType === 'answer_space'">
+          <el-form-item label="行数">
+            <el-input-number
+              v-model="blockForm.lines"
+              :min="MIN_ANSWER_LINES"
+              :max="MAX_ANSWER_LINES"
+              :step="1"
+              size="small"
+            />
+            <span class="ml-2 text-xs text-gray-400">
+              导出时按这个行数预留作答空间
+            </span>
+          </el-form-item>
+          <el-form-item label="样式">
+            <el-radio-group v-model="blockForm.answerStyle">
+              <el-radio value="blank">留白</el-radio>
+              <el-radio value="lined">横线</el-radio>
+            </el-radio-group>
+            <span class="ml-2 text-xs text-gray-400">横线样式会在每行下面画一条答题线</span>
+          </el-form-item>
+        </template>
+        <el-form-item v-if="blockForm.nodeType !== 'answer_space'" label="内容">
           <RichTextEditor v-model="blockForm.content" placeholder="输入内容" />
         </el-form-item>
       </el-form>

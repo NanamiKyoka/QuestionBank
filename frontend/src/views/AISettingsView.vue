@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { aiApi, type ActiveConfig, type ModelInfo, type ModelType, type Provider } from '@/api/ai'
+import { ApiError, get } from '@/api/http'
 
 /**
  * AI 设置。
@@ -18,11 +19,30 @@ const loading = ref(false)
 const providers = ref<Provider[]>([])
 const active = ref<ActiveConfig | null>(null)
 
+/**
+ * 后端真正支持的接口协议，由 GET /ai/interface-types 下发。
+ *
+ * 刻意不在这里硬编码：前端写死的清单迟早会和后端对不上，
+ * 而"界面能选、后端不认"的协议要到第一次调用才暴露，
+ * 用户只会怀疑自己的账号和额度。
+ */
+const interfaceTypes = ref<string[]>([])
+/** 协议 id → 中文名。只影响展示，未收录的协议原样显示 id。 */
+const interfaceTypeLabels: Record<string, string> = {
+  openai: 'OpenAI 兼容',
+  gemini: 'Gemini',
+}
+function interfaceTypeLabel(type: string): string {
+  return interfaceTypeLabels[type] ?? type
+}
+
 const providerVisible = ref(false)
 const editingProviderId = ref<number | null>(null)
 const providerForm = reactive({
   name: '',
-  interface_type: 'openai' as 'openai' | 'gemini',
+  // 用 string 而非字面量联合：可选协议由上面的接口下发，写死类型等于把
+  // 后端的清单在类型层面又抄了一遍。
+  interface_type: 'openai' as string,
   base_url: '',
   api_key: '',
   is_active: true,
@@ -44,12 +64,18 @@ const modelForm = reactive({
 
 const testing = ref<number | null>(null)
 
-/** 常用服务商的预填地址，省去用户查文档。 */
+/**
+ * 常用服务商的预填地址，省去用户查文档。
+ *
+ * 全部走 OpenAI 兼容协议：连 Gemini 也一样，用它官方的兼容端点即可，
+ * 不需要为此单独支持一种原生协议。
+ */
 const presets = [
   { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
   { label: '阿里云百炼', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-plus', 'qwen-vl-plus', 'text-embedding-v3'] },
   { label: '智谱 AI', base_url: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-4-plus', 'embedding-3'] },
   { label: 'OpenAI', base_url: 'https://api.openai.com/v1', models: ['gpt-4o-mini', 'text-embedding-3-small'] },
+  { label: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/', models: ['gemini-2.0-flash', 'gemini-2.5-flash', 'text-embedding-004'] },
   { label: 'Ollama（本地）', base_url: 'http://127.0.0.1:11434/v1', models: ['qwen2.5:7b', 'nomic-embed-text'] },
 ]
 
@@ -68,9 +94,16 @@ onMounted(load)
 async function load() {
   loading.value = true
   try {
-    const [list, config] = await Promise.all([aiApi.listProviders(), aiApi.activeConfig()])
+    const [list, config, types] = await Promise.all([
+      aiApi.listProviders(),
+      aiApi.activeConfig(),
+      // 拿不到协议清单时不让整个页面瘫掉：宁可少几个选项，
+      // 也不要连供应商列表都加载不出来。
+      get<{ types: string[] }>('/ai/interface-types').catch(() => null),
+    ])
     providers.value = list ?? []
     active.value = config
+    interfaceTypes.value = types?.types ?? []
   } finally {
     loading.value = false
   }
@@ -81,7 +114,7 @@ async function load() {
 function openCreateProvider() {
   editingProviderId.value = null
   providerForm.name = ''
-  providerForm.interface_type = 'openai'
+  providerForm.interface_type = interfaceTypes.value[0] ?? 'openai'
   providerForm.base_url = ''
   providerForm.api_key = ''
   providerForm.is_active = true
@@ -114,30 +147,55 @@ async function submitProvider() {
     return
   }
 
-  if (editingProviderId.value) {
-    await aiApi.updateProvider(editingProviderId.value, {
-      name: providerForm.name.trim(),
-      base_url: providerForm.base_url.trim(),
-      is_active: providerForm.is_active,
-      // 只有用户主动换密钥时才带该字段。
-      // 留空表示不修改——绝不能把掩码回传，那会把真密钥覆盖掉。
-      ...(replacingKey.value && providerForm.api_key.trim()
-        ? { api_key: providerForm.api_key.trim() }
-        : {}),
-    })
-    ElMessage.success('已保存')
-  } else {
-    await aiApi.createProvider({
-      name: providerForm.name.trim(),
-      interface_type: providerForm.interface_type,
-      base_url: providerForm.base_url.trim(),
-      api_key: providerForm.api_key.trim(),
-      is_active: providerForm.is_active,
-    })
-    ElMessage.success('已创建')
+  try {
+    if (editingProviderId.value) {
+      await aiApi.updateProvider(editingProviderId.value, {
+        name: providerForm.name.trim(),
+        base_url: providerForm.base_url.trim(),
+        is_active: providerForm.is_active,
+        // 只有用户主动换密钥时才带该字段。
+        // 留空表示不修改——绝不能把掩码回传，那会把真密钥覆盖掉。
+        ...(replacingKey.value && providerForm.api_key.trim()
+          ? { api_key: providerForm.api_key.trim() }
+          : {}),
+      })
+      ElMessage.success('已保存')
+    } else {
+      await aiApi.createProvider({
+        name: providerForm.name.trim(),
+        // api/ai.ts 的入参类型是字面量联合，这里转一下即可：
+        // 真正可选的集合由后端下发，前端不再自己数一遍。
+        interface_type: providerForm.interface_type as Provider['interface_type'],
+        base_url: providerForm.base_url.trim(),
+        api_key: providerForm.api_key.trim(),
+        is_active: providerForm.is_active,
+      })
+      ElMessage.success('已创建')
+    }
+  } catch (err) {
+    showSaveError(err)
+    return // 留在弹窗里让用户改，别把已填的内容丢掉
   }
   providerVisible.value = false
   await load()
+}
+
+/**
+ * 原样展示后端拒绝保存的原因。
+ *
+ * 这类提示（如"不支持的接口类型"）就是给用户照着改的，
+ * 包一层"保存失败"只会把有用信息丢掉。closeAll 是为了吃掉
+ * http 拦截器已经弹的那一条，免得同一屏出现两条一模一样的错误。
+ */
+function showSaveError(err: unknown) {
+  const text =
+    err instanceof ApiError
+      ? err.detail
+        ? `${err.message}：${err.detail}`
+        : err.message
+      : '保存失败'
+  ElMessage.closeAll()
+  ElMessage.error(text)
 }
 
 async function removeProvider(provider: Provider) {
@@ -368,8 +426,8 @@ watch(active, syncSelection, { immediate: true })
       <div v-for="provider in providers" :key="provider.id" class="mb-3 rounded border border-gray-200 p-3">
         <div class="flex flex-wrap items-center gap-2">
           <span class="font-medium">{{ provider.name }}</span>
-          <el-tag size="small" :type="provider.interface_type === 'openai' ? 'primary' : 'success'">
-            {{ provider.interface_type === 'openai' ? 'OpenAI 兼容' : 'Gemini' }}
+          <el-tag size="small" type="primary">
+            {{ interfaceTypeLabel(provider.interface_type) }}
           </el-tag>
           <el-tag v-if="!provider.is_active" size="small" type="info">已停用</el-tag>
           <el-tag size="small" :type="provider.has_key ? 'success' : 'danger'" effect="plain">
@@ -435,9 +493,13 @@ watch(active, syncSelection, { immediate: true })
 
         <el-form-item label="接口协议">
           <el-radio-group v-model="providerForm.interface_type" :disabled="!!editingProviderId">
-            <el-radio value="openai">OpenAI 兼容</el-radio>
-            <el-radio value="gemini">Gemini</el-radio>
+            <el-radio v-for="type in interfaceTypes" :key="type" :value="type">
+              {{ interfaceTypeLabel(type) }}
+            </el-radio>
           </el-radio-group>
+          <div class="mt-1 text-xs text-gray-400">
+            可选协议由后端下发，只有它真正支持的才会出现在这里。
+          </div>
         </el-form-item>
 
         <el-form-item label="Base URL">

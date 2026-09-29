@@ -226,6 +226,27 @@ export interface QuestionDetail extends QuestionBrief {
   permissions: QuestionPermissions
 }
 
+/**
+ * 题目排序方式，必须与后端白名单逐字一致。
+ *
+ * 白名单是 `validQuestionSorts`（backend/internal/model/question.go:208-215），
+ * `Normalize()`（同文件 :225-236）遇到白名单外的值会**静默回落**到 created_desc——
+ * 早期这里既不报错也不打日志，于是前端传 'updated_at_desc' 时，
+ * 界面显示「更新于」而实际按创建时间排序，没有任何异常可见。
+ * 用联合类型把这份契约钉在编译期：拼错一个键就是 typecheck 失败，
+ * 而不是线上悄悄排错序。
+ *
+ * 新增取值前先改后端白名单，否则这里会先红。
+ */
+export type QuestionSort =
+  | 'created_desc'
+  | 'created_asc'
+  | 'updated_desc'
+  /** `updated_desc` 的历史别名，后端刻意保留（两种写法产生同一条 ORDER BY）。 */
+  | 'updated_at_desc'
+  | 'difficulty_asc'
+  | 'difficulty_desc'
+
 /** 列表查询参数。 */
 export interface QuestionQuery {
   keyword?: string
@@ -238,8 +259,11 @@ export interface QuestionQuery {
   tag_match?: 'and' | 'or'
   created_by?: number | null
   root_only?: boolean
+  /** 混入已软删除的题目。与 only_deleted 互斥，同时传以后端为准。 */
   include_deleted?: boolean
-  sort?: string
+  /** 只返回已软删除的题目——回收站列表用它（见 views/RecycleBinView.vue）。 */
+  only_deleted?: boolean
+  sort?: QuestionSort
   page?: number
   page_size?: number
 }

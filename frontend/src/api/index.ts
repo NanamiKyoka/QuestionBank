@@ -143,6 +143,23 @@ export const questionApi = {
       tag_ids: query.tag_ids?.length ? query.tag_ids : undefined,
     }),
 
+  /**
+   * 回收站列表：只返回已软删除的题目。
+   *
+   * 用 `only_deleted` 而不是 `include_deleted`：后者只是去掉 deleted_at 过滤，
+   * 返回的是"活的 + 删掉的"混在一起的合集，而 DeletedAt 是 `json:"-"`，
+   * 客户端拿到的每一行都长得一样，分不出哪条已经进了回收站。
+   *
+   * 后端没有彻底删除（硬删）接口——`DELETE /questions/:id` 不存在，
+   * `POST /questions/batch-delete` 也是软删除，所以这里只提供恢复。
+   */
+  listDeleted: (subjectId: number, query: Omit<QuestionQuery, 'include_deleted'>) =>
+    get<PageResult<QuestionBrief>>(`/subjects/${subjectId}/questions`, {
+      ...query,
+      only_deleted: true,
+      tag_ids: query.tag_ids?.length ? query.tag_ids : undefined,
+    }),
+
   get: (id: number) => get<QuestionDetail>(`/questions/${id}`),
   create: (subjectId: number, payload: QuestionCreatePayload) =>
     post<QuestionDetail>(`/subjects/${subjectId}/questions`, payload),

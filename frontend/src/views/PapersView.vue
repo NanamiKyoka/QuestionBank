@@ -258,10 +258,13 @@ function formatTime(value: string): string {
 
           <el-button @click="reload">搜索</el-button>
 
+          <el-button text size="small" class="ml-auto" @click="router.push({ name: 'recycle-bin' })">
+            <el-icon class="mr-1"><Delete /></el-icon>回收站
+          </el-button>
+
           <el-button
             v-if="canEdit"
             type="primary"
-            class="ml-auto"
             :disabled="!subject.currentId"
             @click="openCreate"
           >

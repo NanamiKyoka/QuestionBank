@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { knowledgePointApi, questionApi, tagApi } from '@/api'
 import type {
@@ -8,6 +8,7 @@ import type {
   QuestionBrief,
   QuestionDetail,
   QuestionQuery,
+  QuestionSort,
   QuestionStatus,
   QuestionType,
   Tag,
@@ -17,6 +18,7 @@ import QuestionEditDialog from '@/components/QuestionEditDialog.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const route = useRoute()
+const router = useRouter()
 const subject = useSubjectStore()
 
 const loading = ref(false)
@@ -43,10 +45,30 @@ const filters = reactive<QuestionQuery>({
   include_sub_knowledge: true,
   tag_ids: [],
   root_only: true,
-  sort: 'updated_at_desc',
+  sort: 'updated_desc',
   page: 1,
   page_size: 20,
 })
+
+/**
+ * 排序选项。
+ *
+ * 取值必须逐字等于后端白名单 validQuestionSorts
+ * （backend/internal/model/question.go:208-215）。白名单外的值会被
+ * Normalize 静默回落到 created_desc——所以选项写错一次，
+ * 「更新于」这一列就会开始撒谎。这里由 QuestionSort 联合类型在编译期兜底，
+ * label 只负责展示。
+ */
+const SORT_OPTIONS: { value: QuestionSort; label: string }[] = [
+  { value: 'updated_desc', label: '最近更新' },
+  { value: 'created_desc', label: '最新创建' },
+  { value: 'created_asc', label: '最早创建' },
+  { value: 'difficulty_desc', label: '难度由高到低' },
+  { value: 'difficulty_asc', label: '难度由低到高' },
+]
+
+/** 「更新于」列只有在按更新时间排序时才有意义。 */
+const sortedByUpdatedAt = computed(() => filters.sort === 'updated_desc')
 
 const canEdit = computed(() => subject.can('edit_question'))
 const canReview = computed(() => subject.can('review_question'))
@@ -114,6 +136,7 @@ function resetFilters() {
   filters.difficulty = null
   filters.knowledge_point_id = null
   filters.tag_ids = []
+  filters.sort = 'updated_desc'
   reload()
 }
 
@@ -275,6 +298,15 @@ function pad(n: number): string {
           <el-option v-for="n in 5" :key="n" :label="'★'.repeat(n)" :value="n" />
         </el-select>
 
+        <el-select v-model="filters.sort" class="w-32" @change="reload">
+          <el-option
+            v-for="option in SORT_OPTIONS"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+
         <el-select
           v-model="filters.knowledge_point_id"
           placeholder="知识点"
@@ -301,6 +333,9 @@ function pad(n: number): string {
         <el-button @click="resetFilters">重置</el-button>
 
         <div class="ml-auto flex items-center gap-2">
+          <el-button text size="small" @click="router.push({ name: 'recycle-bin' })">
+            <el-icon class="mr-1"><Delete /></el-icon>回收站
+          </el-button>
           <el-button
             v-if="canEdit"
             type="primary"
@@ -379,7 +414,17 @@ function pad(n: number): string {
           </template>
         </el-table-column>
 
-        <el-table-column label="更新于" width="130">
+        <el-table-column label="更新于" width="140">
+          <template #header>
+            <span>更新于</span>
+            <el-tooltip
+              v-if="!sortedByUpdatedAt"
+              content="当前列表没有按更新时间排序，这一列只显示每道题各自的最后更新时间。"
+              placement="top"
+            >
+              <el-icon class="ml-1 align-middle text-gray-400"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </template>
           <template #default="{ row }">
             <span class="text-xs text-gray-500">{{ formatTime(row.updated_at) }}</span>
           </template>

@@ -27,6 +27,7 @@ const menus: MenuItem[] = [
   { name: 'dashboard', title: '总览', icon: 'DataBoard' },
   { name: 'questions', title: '题库', icon: 'Collection', permission: 'view_question' },
   { name: 'papers', title: '试卷', icon: 'Document', permission: 'view_question' },
+  { name: 'recycle-bin', title: '回收站', icon: 'Delete', permission: 'view_question' },
   { name: 'import', title: '智能录题', icon: 'MagicStick', permission: 'edit_question' },
   { name: 'chat', title: 'AI 助手', icon: 'ChatDotRound', permission: 'view_question' },
   { name: 'knowledge-points', title: '知识点', icon: 'Share', permission: 'view_question' },

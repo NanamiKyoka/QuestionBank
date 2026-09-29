@@ -153,6 +153,21 @@ export interface ReplaceNodesResult {
   nodes: PaperNode[]
 }
 
+/** 试卷列表的查询参数。 */
+export interface PaperQuery {
+  keyword?: string
+  scope?: PaperScope | ''
+  folder_id?: number | null
+  unfiled?: boolean
+  status?: PaperStatus | ''
+  /** 混入已软删除的试卷。与 only_deleted 互斥。 */
+  include_deleted?: boolean
+  /** 只返回已软删除的试卷——回收站列表用它。 */
+  only_deleted?: boolean
+  page?: number
+  page_size?: number
+}
+
 export interface PaperVersion {
   id: number
   paper_id: number
@@ -184,17 +199,23 @@ export const paperApi = {
   deleteFolder: (id: number) => del<void>(`/paper-folders/${id}`),
 
   // ---- 试卷 ----
-  list: (
-    subjectId: number,
-    params: {
-      keyword?: string
-      scope?: PaperScope | ''
-      folder_id?: number | null
-      status?: PaperStatus | ''
-      page?: number
-      page_size?: number
-    },
-  ) => get<PageResult<PaperBrief>>(`/subjects/${subjectId}/papers`, params),
+  // 展开成新对象再传：接口类型没有索引签名，直接传 interface 给
+  // Record<string, unknown> 形参过不了类型检查（api/index.ts 的 list 同理）。
+  list: (subjectId: number, params: PaperQuery) =>
+    get<PageResult<PaperBrief>>(`/subjects/${subjectId}/papers`, { ...params }),
+
+  /**
+   * 回收站列表：只返回已软删除的试卷。
+   *
+   * 用 `only_deleted` 而不是 `include_deleted`：后者只是去掉 deleted_at 过滤，
+   * 返回的是"活的 + 删掉的"混在一起的合集，而 DeletedAt 是 `json:"-"`，
+   * 客户端分不出哪条已经进了回收站。
+   *
+   * 后端没有彻底删除（硬删）接口，`DELETE /papers/:id` 本身就是软删除，
+   * 所以这里只提供恢复。
+   */
+  listDeleted: (subjectId: number, params: Omit<PaperQuery, 'include_deleted'>) =>
+    get<PageResult<PaperBrief>>(`/subjects/${subjectId}/papers`, { ...params, only_deleted: true }),
 
   create: (
     subjectId: number,
@@ -225,6 +246,7 @@ export const paperApi = {
   ) => put<PaperDetail>(`/papers/${id}`, payload),
 
   remove: (id: number) => del<void>(`/papers/${id}`),
+  /** 从回收站恢复。传入的试卷必须处于已软删除状态，否则后端返回 422。 */
   restore: (id: number) => post<void>(`/papers/${id}/restore`),
   duplicate: (id: number, title?: string) =>
     post<PaperDetail>(`/papers/${id}/duplicate`, title ? { title } : {}),
