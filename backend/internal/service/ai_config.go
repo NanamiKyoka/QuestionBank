@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,9 @@ func (s *AIConfigService) ListProviders(ctx context.Context, actor *model.User) 
 
 func (s *AIConfigService) CreateProvider(ctx context.Context, actor *model.User, req *schema.ProviderCreateRequest) (*schema.ProviderResponse, error) {
 	if err := authorizeSuperuser(actor); err != nil {
+		return nil, err
+	}
+	if err := validateInterfaceType(req.InterfaceType); err != nil {
 		return nil, err
 	}
 
@@ -119,6 +123,10 @@ func (s *AIConfigService) UpdateProvider(ctx context.Context, actor *model.User,
 		fields["name"] = *req.Name
 	}
 	if req.InterfaceType != nil {
+		// 改协议同样要当场校验：否则等于留了个"改完才发现用不了"的坑。
+		if err := validateInterfaceType(*req.InterfaceType); err != nil {
+			return nil, err
+		}
 		fields["interface_type"] = *req.InterfaceType
 	}
 	if req.BaseURL != nil {
@@ -338,22 +346,27 @@ func (s *AIConfigService) GetActiveConfig(ctx context.Context, actor *model.User
 	resp.VisionModelID = visionID
 	resp.EmbeddingModelID = embeddingID
 
+	// 三种用途各自记一份"供应商是否真的能调用"，用于最后的就绪判断。
+	var textServable, visionServable, embeddingServable bool
 	if textID > 0 {
 		if m, err := s.repos.AIModels.Get(ctx, textID); err == nil {
 			item := schema.NewModelResponse(m)
 			resp.Text = &item
+			textServable = providerServable(m)
 		}
 	}
 	if visionID > 0 {
 		if m, err := s.repos.AIModels.Get(ctx, visionID); err == nil {
 			item := schema.NewModelResponse(m)
 			resp.Vision = &item
+			visionServable = providerServable(m)
 		}
 	}
 	if embeddingID > 0 {
 		if m, err := s.repos.AIModels.Get(ctx, embeddingID); err == nil {
 			item := schema.NewModelResponse(m)
 			resp.Embedding = &item
+			embeddingServable = providerServable(m)
 		}
 	}
 
@@ -361,14 +374,52 @@ func (s *AIConfigService) GetActiveConfig(ctx context.Context, actor *model.User
 	switch {
 	case resp.Text == nil:
 		resp.Message = "尚未配置文本模型，AI 助手与智能录题不可用"
+	case !textServable:
+		// 接口类型是唯一"存得下却一定用不了"的配置：密钥对错、额度高低
+		// 都得真发一次请求才知道，而这里能立刻判定。页面若还报"已就绪"，
+		// 用户会去怀疑账号和额度，白白浪费时间。
+		resp.Ready = false
+		resp.Message = unusableProviderMsg(resp.Text, "AI 助手与智能录题")
 	case resp.Vision == nil:
 		resp.Message = "已配置文本模型；未配置视觉模型，图片识题不可用"
+	case !visionServable:
+		resp.Message = unusableProviderMsg(resp.Vision, "图片识题")
 	case resp.Embedding == nil:
 		resp.Message = "已配置文本与视觉模型；未配置向量模型，知识点语义检索不可用"
+	case !embeddingServable:
+		resp.Message = unusableProviderMsg(resp.Embedding, "知识点语义检索")
 	default:
 		resp.Message = "AI 功能已就绪"
 	}
 	return resp, nil
+}
+
+// validateInterfaceType 挡下"能选、存得下、用不了"的协议。
+//
+// 接口类型的权威清单在 ai 包里（界面下拉框读的是同一个函数），
+// 这里不另抄一份：将来加了新协议，只改 ai 一处即可。
+func validateInterfaceType(t string) error {
+	if ai.SupportsInterfaceType(t) {
+		return nil
+	}
+	return apperr.New(apperr.CodeInvalidParam,
+		"不支持的接口类型，当前仅支持："+strings.Join(ai.InterfaceTypes(), "、")).
+		WithDetail("收到的值是 %q；该厂商若提供 OpenAI 兼容端点，请选择 %s 并填写对应的 base_url", t, ai.TypeOpenAI)
+}
+
+// providerServable 判断该模型所属供应商当前能否真正发起调用。
+func providerServable(m *model.AIModel) bool {
+	return m.Provider != nil && ai.SupportsInterfaceType(string(m.Provider.InterfaceType))
+}
+
+// unusableProviderMsg 组装"配好了但用不了"的用户提示。
+func unusableProviderMsg(item *schema.ModelResponse, feature string) string {
+	name := item.DisplayName
+	if name == "" {
+		name = item.Name
+	}
+	return fmt.Sprintf("模型「%s」所属供应商「%s」的接口类型不受支持，%s不可用；"+
+		"请在 AI 设置中改用 OpenAI 兼容协议，或重新选择模型", name, item.ProviderName, feature)
 }
 
 func (s *AIConfigService) SetActiveConfig(ctx context.Context, actor *model.User, req *schema.SetActiveConfigRequest) (*schema.ActiveConfigResponse, error) {
