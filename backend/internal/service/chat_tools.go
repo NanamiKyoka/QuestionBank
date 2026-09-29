@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/NanamiKyoka/questionmind/internal/aiagent"
 	"github.com/NanamiKyoka/questionmind/internal/importing"
@@ -281,11 +283,20 @@ func registerPaperTools(r *aiagent.Registry, deps toolDeps) {
 	// 后端只看到上一次保存的状态。如果 AI 直接改数据库，用户界面不会变，
 	// 而且下一次自动保存会把 AI 的改动整体覆盖掉。
 	// 让前端执行，AI 操作的才是"用户眼前的那份卷子"。
+	//
+	// 三条共同的前端契约（frontend/src/composables/usePaperAiTools.ts 逐条实现）：
+	//  1. 读的是**未保存**的工作副本；
+	//  2. 写操作一律先挂成待确认预览，用户点「应用」才落到工作副本；
+	//  3. 工具本身**立即**返回——人工确认可能要几分钟，
+	//     远超前端的 30 秒票据与服务端的运行预算。等到用户点确认再回执，
+	//     等于每次都要白等一次超时。
 
 	r.MustRegister(&aiagent.Tool{
 		Name: "read_paper_outline",
 		Description: "读取用户当前正在编辑的试卷结构（含未保存的改动）。" +
-			"在改动试卷之前先调用它，避免基于过期的结构做修改。",
+			"在改动试卷之前先调用它，避免基于过期的结构做修改。" +
+			"返回的每一行都带 node_id，edit_paper 的 node_id / before_id 只能取这些值。" +
+			"仅在组卷编辑器页面内可用，在其它页面调用会直接失败。",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -297,7 +308,9 @@ func registerPaperTools(r *aiagent.Registry, deps toolDeps) {
 	r.MustRegister(&aiagent.Tool{
 		Name: "add_questions_to_paper",
 		Description: "把题目加入用户当前正在编辑的试卷末尾。用户说「把这几道题加进去」时使用。" +
-			"改动会先在前端预览，由用户决定是否应用。",
+			"改动会先在前端预览，由用户点「应用」后才生效；本工具立即返回预览结果，" +
+			"请据此告诉用户还有若干处改动等待确认，不要重复提交同一批题目。" +
+			"仅在组卷编辑器页面内可用。",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -313,31 +326,22 @@ func registerPaperTools(r *aiagent.Registry, deps toolDeps) {
 		// 预处理：在服务端先确认这些题目确实存在且对用户可见。
 		// 不先查一遍的话，请求推给前端才发现引用无效，
 		// 用户要白等一轮 30 秒超时才看到"题目不存在"。
-		Prepare: func(ctx context.Context, call aiagent.ToolCall) (map[string]any, error) {
-			ids := call.ArgUintSlice("question_ids")
-			if len(ids) == 0 {
-				return nil, apperr.New(apperr.CodeInvalidParam, "question_ids 不能为空")
-			}
-			if len(ids) > 50 {
-				return nil, apperr.New(apperr.CodeInvalidParam,
-					"一次最多加入 50 道题").WithDetail("实际 %d 道", len(ids))
-			}
-			for _, id := range ids {
-				if _, err := deps.questions.Get(ctx, call.User, id); err != nil {
-					return nil, err
-				}
-			}
-			return map[string]any{"question_ids": ids}, nil
-		},
+		Prepare: prepareAddQuestions(deps),
 	})
 
 	r.MustRegister(&aiagent.Tool{
 		Name: "edit_paper",
 		Description: "修改用户当前正在编辑的试卷：新增说明文字、插入分页符、删除节点、调整顺序等。" +
-			"所有改动都会先在前端展示差异，由用户决定是否应用。",
+			"所有改动都会先在前端展示差异，由用户点「应用」确认后才生效；本工具立即返回预览结果。" +
+			"node_id / before_id 只能取自 read_paper_outline 返回的值。" +
+			"仅在组卷编辑器页面内可用。",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"summary": map[string]any{
+					"type":        "string",
+					"description": "一句话说明这批改动做了什么，显示给用户确认，建议填写",
+				},
 				"operations": map[string]any{
 					"type":        "array",
 					"description": "操作列表",
@@ -367,10 +371,84 @@ func registerPaperTools(r *aiagent.Registry, deps toolDeps) {
 	})
 }
 
+// ---- 客户端工具的预处理 ----
+
+const (
+	// maxAddQuestions 单次 add_questions_to_paper 的题目数上限。
+	maxAddQuestions = 50
+	// maxEditPaperOps 单次 edit_paper 的操作数上限。
+	//
+	// 没有上限时，模型一次吐出上千条操作会让那一帧 SSE 膨胀到几 MB，
+	// 前端也要照单全收地重排上千次——而人类根本不会逐条确认这么长的改动。
+	maxEditPaperOps = 50
+	// maxInsertContentRunes 单条插入内容的字符数上限。
+	//
+	// 一份试卷的说明文字不会有几万字；超了基本可以断定是模型把整篇参考资料
+	// 原样灌了进来（提示注入的典型表现），直接拦掉。
+	maxInsertContentRunes = 20000
+	// maxSummaryRunes 改动摘要的字数上限，展示用，超出即截断。
+	maxSummaryRunes = 200
+	// maxNodeIDLen 节点 id 长度上限，与 nodeIDPattern 的 {1,64} 保持一致。
+	maxNodeIDLen = 64
+)
+
+// nodeIDPattern 节点 id 的形状。
+//
+// 节点 id 由客户端的 crypto.randomUUID() 生成，服务端保存时也用 uuid，
+// 因此永远是 [A-Za-z0-9_-] 这类不透明标识符，模型给不出别的形状，
+// 而"给不出"正是这里要的：这条 id 一路走到前端的节点查找与写回，
+// 放任任意字符串穿过去，等于把一段模型可控文本当成内部标识符使用。
+// （提示注入的载体正是外部文档：模型完全可能被文档里的文字
+// "指挥"去操作一个看起来很正常的路径或 URL。）
+var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// prepareAddQuestions 校验加题请求并去重。
+//
+// 返回的参数会**替换**下发给前端的入参，因此去重放在这里比放在前端更合适：
+// 前端拿到的必然是排好序、不含重复的列表，界面上的"N 处改动"
+// 也就与实际将要插入的节点数一致。
+func prepareAddQuestions(deps toolDeps) aiagent.ToolPreparer {
+	return func(ctx context.Context, call aiagent.ToolCall) (map[string]any, error) {
+		ids := call.ArgUintSlice("question_ids")
+		if len(ids) == 0 {
+			return nil, apperr.New(apperr.CodeInvalidParam, "question_ids 不能为空")
+		}
+		if len(ids) > maxAddQuestions {
+			return nil, apperr.New(apperr.CodeInvalidParam,
+				fmt.Sprintf("一次最多加入 %d 道题", maxAddQuestions)).
+				WithDetail("实际 %d 道", len(ids))
+		}
+
+		seen := make(map[uint]struct{}, len(ids))
+		uniq := make([]uint, 0, len(ids))
+		for _, id := range ids {
+			// ArgUintSlice 会把模型写的 0 也当成合法 id 收进来，
+			// 而它会在下面的 Get 里变成一条看不懂的 404，这里直接说清楚。
+			if id == 0 {
+				return nil, apperr.New(apperr.CodeInvalidParam, "question_ids 含有无效的题目 id 0")
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			uniq = append(uniq, id)
+		}
+
+		for _, id := range uniq {
+			if _, err := deps.questions.Get(ctx, call.User, id); err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{"question_ids": uniq}, nil
+	}
+}
+
 // prepareEditPaper 校验并富化 edit_paper 的操作列表。
 //
 // 放在服务端做的价值：前端不必再实现一遍 Markdown → 富文本的转换，
-// 两条路径（AI 改卷与用户手动编辑）产出的节点结构也完全一致。
+// 两条路径（AI 改卷与用户手动编辑）产出的节点结构也完全一致；
+// 同时这里就成了唯一一道闸——模型给出的每个字符串在进入前端之前
+// 都要先过形状与长度校验。
 func prepareEditPaper(_ context.Context, call aiagent.ToolCall) (map[string]any, error) {
 	raw, ok := call.Arguments["operations"]
 	if !ok {
@@ -379,6 +457,11 @@ func prepareEditPaper(_ context.Context, call aiagent.ToolCall) (map[string]any,
 	list, ok := raw.([]any)
 	if !ok || len(list) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidParam, "operations 必须是非空数组")
+	}
+	if len(list) > maxEditPaperOps {
+		return nil, apperr.New(apperr.CodeInvalidParam,
+			fmt.Sprintf("一次最多提交 %d 个操作", maxEditPaperOps)).
+			WithDetail("实际 %d 个", len(list))
 	}
 
 	out := make([]map[string]any, 0, len(list))
@@ -392,34 +475,31 @@ func prepareEditPaper(_ context.Context, call aiagent.ToolCall) (map[string]any,
 
 		normalized := map[string]any{"op": kind}
 		switch kind {
-		case "insert_text":
+		case "insert_text", "insert_heading":
 			content, _ := op["content"].(string)
 			if strings.TrimSpace(content) == "" {
 				return nil, apperr.New(apperr.CodeInvalidParam, "操作缺少 content").
 					WithDetail("第 %d 个", i+1)
 			}
-			normalized["content"] = importing.MarkdownToRichDoc(content)
-			normalized["markdown"] = content
-		case "insert_heading":
-			content, _ := op["content"].(string)
-			if strings.TrimSpace(content) == "" {
-				return nil, apperr.New(apperr.CodeInvalidParam, "操作缺少 content").
-					WithDetail("第 %d 个", i+1)
-			}
-			level := 1
-			if v, ok := op["level"].(float64); ok && v >= 1 && v <= 6 {
-				level = int(v)
+			if n := utf8.RuneCountInString(content); n > maxInsertContentRunes {
+				return nil, apperr.New(apperr.CodeInvalidParam, "插入内容过长").
+					WithDetail("第 %d 个：%d 字，上限 %d 字", i+1, n, maxInsertContentRunes)
 			}
 			normalized["content"] = importing.MarkdownToRichDoc(content)
 			normalized["markdown"] = content
-			normalized["level"] = level
+			if kind == "insert_heading" {
+				level := 1
+				if v, ok := op["level"].(float64); ok && v >= 1 && v <= 6 {
+					level = int(v)
+				}
+				normalized["level"] = level
+			}
 		case "insert_page_break":
 			// 无附加参数
 		case "remove_node", "move_node":
-			nodeID, _ := op["node_id"].(string)
-			if strings.TrimSpace(nodeID) == "" {
-				return nil, apperr.New(apperr.CodeInvalidParam, "操作缺少 node_id").
-					WithDetail("第 %d 个", i+1)
+			nodeID, err := readNodeID(op, "node_id", i+1)
+			if err != nil {
+				return nil, err
 			}
 			normalized["node_id"] = nodeID
 			if kind == "move_node" {
@@ -432,13 +512,56 @@ func prepareEditPaper(_ context.Context, call aiagent.ToolCall) (map[string]any,
 				WithDetail("第 %d 个 op=%q", i+1, kind)
 		}
 
-		if before, ok := op["before_id"].(string); ok && before != "" {
+		if _, has := op["before_id"]; has {
+			before, err := readNodeID(op, "before_id", i+1)
+			if err != nil {
+				return nil, err
+			}
 			normalized["before_id"] = before
 		}
 		out = append(out, normalized)
 	}
 
-	return map[string]any{"operations": out}, nil
+	prepared := map[string]any{"operations": out}
+	if summary := truncateRunes(call.ArgString("summary"), maxSummaryRunes); summary != "" {
+		prepared["summary"] = summary
+	}
+	return prepared, nil
+}
+
+// readNodeID 读一个节点标识。
+//
+// 节点 id 由前端的 crypto.randomUUID() 与服务端的 uuid 生成，永远是字符串。
+// 因此模型把它写成数字**不是可以宽容一点的笔误**，而是它手上根本没有这个节点：
+// 转成字符串只会把问题推迟成一句更难懂的"找不到节点 42"。
+// 形状对不上（路径、URL、一段注入文本）同样在这里拦下——
+// 这条 id 会一路走到前端的节点查找与写回。
+func readNodeID(op map[string]any, key string, at int) (string, error) {
+	raw, has := op[key]
+	if !has {
+		return "", apperr.New(apperr.CodeInvalidParam, "操作缺少 "+key).
+			WithDetail("第 %d 个", at)
+	}
+
+	id, isString := raw.(string)
+	// 空串算"缺失"、非字符串算"无效"：两句引导会把模型带去完全不同的地方
+	// （前者去补参数，后者去读大纲），不能混成一句。
+	invalid := func() error {
+		return apperr.New(apperr.CodeInvalidParam, key+" 不是有效的节点标识").
+			WithDetail("第 %d 个：请先用 read_paper_outline 取得真实节点 id", at)
+	}
+	if !isString {
+		return "", invalid()
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", apperr.New(apperr.CodeInvalidParam, "操作缺少 "+key).
+			WithDetail("第 %d 个", at)
+	}
+	if !nodeIDPattern.MatchString(id) {
+		return "", invalid()
+	}
+	return id, nil
 }
 
 // ---- 结果组装 ----

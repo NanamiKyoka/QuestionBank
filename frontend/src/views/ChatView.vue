@@ -4,6 +4,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { chatApi, type ChatMessage, type ChatSession } from '@/api/ai'
 import { ApiError } from '@/api/http'
 import { useSubjectStore } from '@/stores/subject'
+import {
+  abandonInflightClientTools,
+  answerClientToolFrame,
+} from '@/composables/useAiClientTools'
+import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 
 /**
  * AI 助手对话。
@@ -157,95 +162,30 @@ async function send() {
 }
 
 /**
- * 发起 SSE 请求并解析事件流。
+ * 发起 SSE 请求并处理事件流。
  *
- * 用原生 fetch 而不是 axios：axios 在浏览器端拿不到流式的 response.body，
- * 会等整个响应结束才返回，流式就白做了。
+ * 传输层（fetch + ReadableStream + 帧解析 + done 校验）搬到了
+ * composables/useChatStream.ts：组卷编辑器里的对话面板要消费同一条流，
+ * 两边各写一份迟早会在协议细节上分叉。
+ * 这里只保留"这个页面怎么把帧画出来"。
  */
 async function stream(sessionId: number, content: string, assistant: Bubble) {
-  const response = await fetch(`/api/v1/chat/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${localStorage.getItem('qm_token') ?? ''}`,
-    },
-    body: JSON.stringify({ content, scene: scene.value || undefined }),
+  await streamChatReply({
+    sessionId,
+    content,
+    scene: scene.value || undefined,
     signal: controller?.signal,
+    onFrame: (frame) => {
+      handleFrame(frame, assistant)
+      // 跟帧滚动，而不是等整条流结束——那和没有流式没区别。
+      void scrollToBottom()
+    },
   })
-
-  // 写流之前的错误是普通 JSON。
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!contentType.includes('text/event-stream')) {
-    const body = await response.json().catch(() => null)
-    if (!response.ok || (body && body.code !== 0)) {
-      throw new ApiError(
-        response.status,
-        body?.code ?? 0,
-        body?.message ?? `请求失败（${response.status}）`,
-        body?.detail,
-      )
-    }
-    return
-  }
-
-  if (!response.body) throw new Error('当前浏览器不支持流式响应')
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let sawDone = false
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE 以空行分隔事件；最后一段可能不完整，留到下一轮。
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() ?? ''
-
-    for (const chunk of chunks) {
-      const frame = parseFrame(chunk)
-      if (!frame) continue
-      if (frame.event === 'done') sawDone = true
-      handleFrame(frame.event, frame.data, assistant)
-    }
-    await scrollToBottom()
-  }
-
-  // 处理残留的最后一段。
-  if (buffer.trim()) {
-    const frame = parseFrame(buffer)
-    if (frame) {
-      if (frame.event === 'done') sawDone = true
-      handleFrame(frame.event, frame.data, assistant)
-    }
-  }
-
-  // 没有终止帧说明流被中断了，必须告诉用户，不能让它停在"正在输入"。
-  if (!sawDone) {
-    assistant.error = '连接中断，回答可能不完整'
-  }
 }
 
-function parseFrame(raw: string): { event: string; data: unknown } | null {
-  let event = 'message'
-  const dataLines: string[] = []
-  for (const line of raw.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice(6).trim()
-    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
-  }
-  if (!dataLines.length) return null
-  try {
-    return { event, data: JSON.parse(dataLines.join('\n')) }
-  } catch {
-    return null
-  }
-}
-
-function handleFrame(event: string, data: unknown, assistant: Bubble) {
-  const payload = (data ?? {}) as Record<string, unknown>
-  switch (event) {
+function handleFrame(frame: ChatStreamFrame, assistant: Bubble) {
+  const payload = frame.data
+  switch (frame.event) {
     case 'message':
       // 后端约定：message 的 data 也是 JSON 对象，不是被引号包起来的字符串。
       assistant.content += String(payload.text ?? '')
@@ -269,9 +209,12 @@ function handleFrame(event: string, data: unknown, assistant: Bubble) {
       break
     }
     case 'client_tool':
-      // 对话页没有组卷编辑器，无法执行客户端工具。
-      // 必须立刻回传一个"失败"，否则后端的运行会一直等到超时。
-      void voidRespondClientTool(payload, assistant)
+      // 这个页面没有组卷编辑器，客户端工具一个都执行不了。
+      // 但**必须立刻回执**：不回的代价是后端挂满 30 秒超时，
+      // 而不是"礼貌地失败"。answerClientToolFrame 负责这条纪律，
+      // 工具没注册时它会自己回一句"当前页面没有实现工具 X"。
+      assistant.tools.push({ name: String(payload.tool ?? '客户端工具'), running: true })
+      answerClientToolFrame(payload)
       break
     case 'error':
       assistant.error = String(payload.message ?? '出错了')
@@ -288,23 +231,6 @@ function handleFrame(event: string, data: unknown, assistant: Bubble) {
   }
 }
 
-async function voidRespondClientTool(payload: Record<string, unknown>, assistant: Bubble) {
-  const runId = String(payload.run_id ?? '')
-  const ticket = String(payload.ticket ?? '')
-  const tool = String(payload.tool ?? '')
-  if (!runId || !ticket) return
-  assistant.tools.push({ name: tool, running: false, output: '当前页面无法执行' })
-  try {
-    await chatApi.resolveClientTool(runId, {
-      ticket,
-      ok: false,
-      content: `当前页面无法执行 ${tool}。请在对应的编辑页面里让我执行，或用文字说明。`,
-    })
-  } catch {
-    // 回传失败说明运行已经结束了，无需再处理。
-  }
-}
-
 function stop() {
   controller?.abort()
 }
@@ -317,7 +243,11 @@ async function onKeydown(event: KeyboardEvent) {
   }
 }
 
-onBeforeUnmount(() => controller?.abort())
+onBeforeUnmount(() => {
+  controller?.abort()
+  // 离开页面时把还在途的客户端工具票据结清，别让后端白等满 30 秒。
+  abandonInflightClientTools('离开对话页')
+})
 
 function formatTime(value: string): string {
   const d = new Date(value)
@@ -379,6 +309,11 @@ function formatTime(value: string): string {
             <el-option label="审核场景" value="import_review" />
           </el-select>
           <span class="text-xs text-gray-400">场景决定助手能用哪些工具</span>
+          <!-- 组卷场景会解锁三个客户端工具，而它们只认"用户正在编辑的那份卷子"。
+               与其让模型反复撞墙，不如在这里把话说清楚。 -->
+          <span v-if="scene === 'composition_editor'" class="text-xs text-amber-600">
+            改卷请到组卷编辑器里的「AI 助手」，本页没有编辑器，助手无法改动试卷。
+          </span>
         </div>
       </template>
 

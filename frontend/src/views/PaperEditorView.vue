@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/http'
 import { questionApi } from '@/api'
+import { chatApi } from '@/api/ai'
 import {
   paperApi,
   toNodeInput,
@@ -21,8 +22,13 @@ import type { QuestionBrief } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
 import CompositionNumberingPanel from '@/components/CompositionNumberingPanel.vue'
 import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
+import CompositionAiChangesBar from '@/components/CompositionAiChangesBar.vue'
 import RichTextEditor from '@/components/editor/RichTextEditor.vue'
 import { emptyDoc } from '@/lib/richdoc'
+import { abandonInflightClientTools, answerClientToolFrame } from '@/composables/useAiClientTools'
+import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
+import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
+import { useSubjectStore } from '@/stores/subject'
 
 /**
  * 组卷工作台。
@@ -761,6 +767,230 @@ async function syncStaleQuestions() {
   ElMessage.success(`已同步 ${result.synced.length} 道题的最新内容（修订 r${result.revision}）`)
 }
 
+// ---- AI 改动的暂存区 ----
+//
+// 组卷工具算出的是一份**候选树**：AI 落笔之前用户也还没点头。
+// 应用之前工作副本一个字节都不动；放弃只需要丢掉这份候选，不用回滚任何东西。
+
+/** 等待用户确认的改动。同一时刻只允许存在一批：叠第二批会攒出一份没人看得懂的差异。 */
+const pendingChange = ref<PendingPaperChange | null>(null)
+const applyingChange = ref(false)
+
+/** 把候选树并入工作副本。 */
+function adoptPendingChange(change: PendingPaperChange) {
+  nodes.value = change.nodes
+  const ids = Object.keys(change.projections)
+  if (ids.length && paper.value) {
+    paper.value = {
+      ...paper.value,
+      questions: { ...questions.value, ...change.projections },
+    }
+  }
+  dirty.value = true
+}
+
+async function applyPendingChange() {
+  const change = pendingChange.value
+  if (!change) return
+  applyingChange.value = true
+  try {
+    adoptPendingChange(change)
+    pendingChange.value = null
+    // 应用完立即落库：模型已经告诉用户"改动已排入待确认"，
+    // 只停在工作副本里的话，用户一关页面这批改动就没了。
+    // 整树覆盖带 revision 乐观锁——期间别人改过会被 409 挡下，
+    // save() 内部已经处理好冲突弹窗，绝不会拿一份过期整树覆盖回去。
+    await save({ silent: true })
+  } finally {
+    applyingChange.value = false
+  }
+}
+
+function discardPendingChange() {
+  // 候选树是一次性产物：直接丢掉，工作副本从未被碰过。
+  pendingChange.value = null
+}
+
+const aiHost: PaperAiHost = {
+  getTitle: () => paper.value?.title ?? '',
+  getNodes: () => nodes.value,
+  getProjections: () => questions.value,
+  isScoringEnabled: () => scoringEnabled.value,
+  isDirty: () => dirty.value,
+  getRevision: () => revision.value,
+  canEdit: () => canEdit.value,
+  hasPending: () => pendingChange.value !== null,
+  stagePending: (change) => {
+    pendingChange.value = change
+    // 助手算完就把面板拉开：用户得能立刻看到"有什么改动等我点头"，
+    // 否则一个静静躺在别处的确认条等于没有。
+    chatVisible.value = true
+  },
+}
+
+usePaperAiTools(aiHost)
+
+// ---- 内嵌对话 ----
+//
+// 为什么必须在这里：read_paper_outline / add_questions_to_paper / edit_paper
+// 是客户端工具，只有"用户正在编辑的那份卷子"能执行它们。
+// 对话若只存在于一个独立路由里，模型拿到票据时页面上根本没有编辑器，
+// 每一次调用都只能回一句"当前页面无法执行"。
+
+const subject = useSubjectStore()
+
+const chatVisible = ref(false)
+const chatSessionId = ref<number | null>(null)
+const chatInput = ref('')
+const chatSending = ref(false)
+const chatScroll = ref<HTMLElement | null>(null)
+const chatBubbles = ref<ChatBubble[]>([])
+
+interface ChatToolTrace {
+  name: string
+  output?: string
+  running: boolean
+}
+
+interface ChatBubble {
+  role: 'user' | 'assistant'
+  content: string
+  streaming?: boolean
+  tools: ChatToolTrace[]
+  error?: string
+}
+
+let chatController: AbortController | null = null
+
+async function scrollChatToBottom() {
+  await nextTick()
+  const box = chatScroll.value
+  if (box) box.scrollTop = box.scrollHeight
+}
+
+function newChatSession() {
+  chatSessionId.value = null
+  chatBubbles.value = []
+}
+
+/**
+ * 处理一帧对话事件。
+ *
+ * 客户端工具那一支只负责"把票据交出去"（answerClientToolFrame 保证它一定有回执），
+ * 工具轨迹卡片的收尾交给随后必然到达的 tool_result 帧。
+ */
+function handleChatFrame(frame: ChatStreamFrame, assistant: ChatBubble) {
+  const payload = frame.data
+  switch (frame.event) {
+    case 'message':
+      assistant.content += String(payload.text ?? '')
+      break
+    case 'tool_call':
+      assistant.tools.push({ name: String(payload.tool ?? '工具'), running: true })
+      break
+    case 'tool_result': {
+      const name = String(payload.tool ?? '')
+      for (let i = assistant.tools.length - 1; i >= 0; i--) {
+        if (assistant.tools[i].name === name && assistant.tools[i].running) {
+          assistant.tools[i].running = false
+          assistant.tools[i].output = String(payload.output ?? '完成')
+          break
+        }
+      }
+      break
+    }
+    case 'client_tool':
+      assistant.tools.push({ name: String(payload.tool ?? '客户端工具'), running: true })
+      answerClientToolFrame(payload)
+      break
+    case 'error':
+      assistant.error = String(payload.message ?? '出错了')
+      break
+    case 'proposal':
+      assistant.content += `\n（另有 ${((payload.ids ?? []) as number[]).length} 道候选题目待定）`
+      break
+    case 'usage':
+    case 'done':
+      break
+    default:
+      break
+  }
+  void scrollChatToBottom()
+}
+
+async function sendChat() {
+  const content = chatInput.value.trim()
+  if (!content || chatSending.value) return
+  const subjectID = paper.value?.subject_id ?? subject.currentId
+  if (!subjectID) {
+    ElMessage.warning('请先选择学科')
+    return
+  }
+
+  let sessionId = chatSessionId.value
+  if (sessionId === null) {
+    const session = await chatApi.createSession({
+      subject_id: subjectID,
+      title: '组卷助手',
+      // 固定组卷场景：只有这一组工具能在编辑器里落地，
+      // 在这里放开其它场景只会换来一串"当前页面无法执行"。
+      scene: 'composition_editor',
+    })
+    chatSessionId.value = session.id
+    sessionId = session.id
+  }
+
+  chatBubbles.value.push({ role: 'user', content, tools: [] })
+  chatInput.value = ''
+  const assistant: ChatBubble = { role: 'assistant', content: '', streaming: true, tools: [] }
+  chatBubbles.value.push(assistant)
+  await scrollChatToBottom()
+
+  chatSending.value = true
+  chatController = new AbortController()
+  try {
+    await streamChatReply({
+      sessionId,
+      content,
+      scene: 'composition_editor',
+      signal: chatController.signal,
+      onFrame: (frame) => handleChatFrame(frame, assistant),
+    })
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      assistant.error = '已停止生成'
+    } else if (error instanceof ApiError) {
+      assistant.error = error.detail ? `${error.message}：${error.detail}` : error.message
+    } else {
+      assistant.error = (error as Error).message || '请求失败'
+    }
+  } finally {
+    assistant.streaming = false
+    chatSending.value = false
+    chatController = null
+    await scrollChatToBottom()
+  }
+}
+
+async function onChatKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault()
+    await sendChat()
+  }
+}
+
+/** 中断本轮流式生成。 */
+function stopChat() {
+  chatController?.abort()
+}
+
+onBeforeUnmount(() => {
+  chatController?.abort()
+  // 离开页面时把还在途的票据结清：处理器多半只是没跑完，
+  // 留着不管等于让后端白等满 30 秒。
+  abandonInflightClientTools('离开组卷页面')
+})
+
 // ---- 设置 / 定稿 / 导出 ----
 
 function openSettings() {
@@ -973,6 +1203,9 @@ function answerText(questionID: number): string {
         </div>
 
         <div class="ml-auto flex items-center gap-2">
+          <el-badge :value="pendingChange ? pendingChange.changes.length : 0" :hidden="!pendingChange" type="warning">
+            <el-button @click="chatVisible = true">AI 助手</el-button>
+          </el-badge>
           <el-button v-if="canEdit" :disabled="!dirty" :loading="saving" type="primary" @click="save()">
             保存
           </el-button>
@@ -1006,6 +1239,16 @@ function answerText(questionID: number): string {
         </div>
       </template>
     </el-alert>
+
+    <!-- AI 改动闸门：候选树在用户点「应用」之前，一个字节都没进工作副本 -->
+    <CompositionAiChangesBar
+      v-if="pendingChange"
+      :summary="pendingChange.summary"
+      :changes="pendingChange.changes"
+      :applying="applyingChange"
+      @apply="applyPendingChange"
+      @discard="discardPendingChange"
+    />
 
     <div class="flex gap-3">
       <!-- 左：题目选择器 -->
@@ -1423,6 +1666,84 @@ function answerText(questionID: number): string {
         </el-button>
       </template>
     </el-dialog>
+  <!--
+      内嵌对话。放在组卷编辑器里而不是只留一个 /chat 路由，
+      是因为三个客户端工具只认"用户正在编辑的那份卷子"——
+      对话不在这里，票据就永远没有执行器。
+    -->
+    <el-drawer v-model="chatVisible" title="组卷助手" size="420px" append-to-body>
+      <template #header>
+        <div class="flex w-full items-center justify-between pr-2">
+          <span class="text-sm font-medium">组卷助手</span>
+          <el-button text size="small" @click="newChatSession">新对话</el-button>
+        </div>
+      </template>
+
+      <div class="flex h-full flex-col">
+        <div ref="chatScroll" class="flex-1 space-y-3 overflow-y-auto pr-1">
+          <el-empty v-if="chatBubbles.length === 0" description="让助手帮你排这份卷子" :image-size="48">
+            <div class="space-y-1 text-left text-xs text-gray-500">
+              <div>· 这份卷子现在什么结构？</div>
+              <div>· 找 3 道二次函数的题加进来</div>
+              <div>· 在每道大题前加一行「（本大题 12 分）」</div>
+            </div>
+          </el-empty>
+
+          <div
+            v-for="(bubble, index) in chatBubbles"
+            :key="index"
+            class="flex"
+            :class="bubble.role === 'user' ? 'justify-end' : 'justify-start'"
+          >
+            <div
+              class="max-w-[85%] rounded-lg px-3 py-2"
+              :class="bubble.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100'"
+            >
+              <div v-if="bubble.tools.length" class="mb-1.5 space-y-1">
+                <div
+                  v-for="(tool, ti) in bubble.tools"
+                  :key="ti"
+                  class="flex items-center gap-1 rounded bg-white/70 px-2 py-1 text-xs text-gray-600"
+                >
+                  <el-icon v-if="tool.running" class="is-loading"><Loading /></el-icon>
+                  <el-icon v-else><Select /></el-icon>
+                  <span>{{ tool.name }}</span>
+                  <span v-if="tool.output" class="truncate text-gray-400">{{ tool.output }}</span>
+                </div>
+              </div>
+
+              <div v-if="bubble.content" class="whitespace-pre-wrap break-words text-sm">
+                {{ bubble.content }}
+              </div>
+
+              <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-gray-400">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                思考中…
+              </div>
+
+              <div v-if="bubble.error" class="mt-1 text-xs text-red-500">{{ bubble.error }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 border-t border-gray-200 pt-3">
+          <el-input
+            v-model="chatInput"
+            type="textarea"
+            :rows="3"
+            resize="none"
+            placeholder="问助手，或直接说「把这几道题加进来」"
+            :disabled="chatSending"
+            @keydown="onChatKeydown"
+          />
+          <div class="mt-2 flex items-center gap-2">
+            <el-button v-if="chatSending" type="danger" plain @click="stopChat">停止生成</el-button>
+            <el-button v-else type="primary" :disabled="!chatInput.trim()" @click="sendChat">发送</el-button>
+            <span class="text-xs text-gray-400">改动会先预览，等你点「应用」。</span>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
