@@ -348,6 +348,8 @@ func registerImportRoutes(g *gin.RouterGroup, d Deps) {
 	{
 		imports.POST("/extract", h.Extract)
 		imports.POST("/commit", h.Commit)
+		// upload 是静态路径，必须排在 :task_id 之前。
+		imports.POST("/upload", h.Upload)
 		imports.GET("", h.ListTasks)
 		// queue-status 必须排在 :task_id 之前：gin 的路由树是按段匹配的，
 		// 反过来会让 "queue-status" 被 :task_id 接住，然后在 parseID 上 400。

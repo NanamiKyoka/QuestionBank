@@ -16,7 +16,21 @@ import (
 type Draft struct {
 	TempID       string `json:"temp_id,omitempty"`
 	ParentTempID string `json:"parent_temp_id,omitempty"`
-	SourceNumber int    `json:"source_number,omitempty"`
+
+	// SourceNumber 原卷里的题号。
+	//
+	// 刻意**不是**草稿数组的下标：审核界面同时打印「第 N 题」和
+	//「原卷第 N 题」，两个数字相等时后者是句假话——原卷从「三、」起算、
+	// 每个大题重新编号、或中间跳号时，下标和题号根本不是一回事。
+	// 规则解析时由切题时捕获的题号决定；模型路径则从题干开头的
+	// 「3.」里取，取不到才退回下标。
+	SourceNumber int `json:"source_number,omitempty"`
+
+	// SourceFile 这道题来自哪个文件。
+	//
+	// 一次 zip 导入会覆盖多个文件，界面要靠它把草稿按来源分组；
+	// 单文件导入时是那一个文件名，粘贴文本时是服务生成的可读描述。
+	SourceFile string `json:"source_file"`
 
 	QuestionType model.QuestionType `json:"question_type"`
 	TypeLabel    string             `json:"type_label"`
@@ -105,10 +119,17 @@ func linkParents(drafts []Draft) {
 }
 
 func normalizeOne(q *ai.ExtractedQuestion, index int) Draft {
+	// 题号优先从题干开头的「3.」里取：模型经常原样保留原卷编号，
+	// 取不到（下标是最常见的实际情况）才退回数组下标。
+	sourceNumber := captureSourceNumber(q.Stem)
+	if sourceNumber == 0 {
+		sourceNumber = index
+	}
+
 	d := Draft{
 		TempID:          q.TempID,
 		ParentTempID:    q.ParentTempID,
-		SourceNumber:    index,
+		SourceNumber:    sourceNumber,
 		StemMarkdown:    strings.TrimSpace(q.Stem),
 		Difficulty:      normalizeDifficulty(q.Difficulty),
 		KnowledgePoints: cleanStrings(q.KnowledgePoints),

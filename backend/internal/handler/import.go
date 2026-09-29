@@ -1,15 +1,23 @@
 package handler
 
 import (
+	"io"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/NanamiKyoka/questionmind/internal/middleware"
 	"github.com/NanamiKyoka/questionmind/internal/model"
+	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/pagination"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/response"
 	"github.com/NanamiKyoka/questionmind/internal/schema"
 	"github.com/NanamiKyoka/questionmind/internal/service"
 )
+
+// maxUploadBytes 单个上传文件的上限。
+// 与 importing.MaxDocFileBytes 对齐：这里多读的那一字节是用来判断"超了"的，
+// 不能因为读满了就以为刚好没超。
+const maxUploadBytes = 32 << 20 // 32MB
 
 // ImportHandler 智能录题接口。
 type ImportHandler struct {
@@ -18,6 +26,53 @@ type ImportHandler struct {
 
 func NewImportHandler(imports *service.ImportService) *ImportHandler {
 	return &ImportHandler{imports: imports}
+}
+
+// Upload POST /subjects/:subject_id/imports/upload
+//
+// 表单字段：file（必填，单个）、method（ai|template）、mode（extract|solve）。
+// 响应体与 /extract 完全一致，因此前端两条路径共用同一套审核界面。
+func (h *ImportHandler) Upload(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	subjectID, ok := parseID(c, "subject_id")
+	if !ok {
+		return
+	}
+
+	fh, err := c.FormFile("file")
+	if err != nil {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "请选择要导入的文件"))
+		return
+	}
+	f, err := fh.Open()
+	if err != nil {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "无法读取上传的文件"))
+		return
+	}
+	defer f.Close()
+
+	// LimitReader 多读 1 字节，用来分辨"刚好 32MB"与"超过 32MB"。
+	data, err := io.ReadAll(io.LimitReader(f, maxUploadBytes+1))
+	if err != nil {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "无法读取上传的文件"))
+		return
+	}
+	if len(data) > maxUploadBytes {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam,
+			"文件过大").WithDetail("单个文件上限 %d MB", maxUploadBytes>>20))
+		return
+	}
+
+	res, err := h.imports.Upload(c.Request.Context(), user, subjectID,
+		fh.Filename, data, c.PostForm("method"), c.PostForm("mode"))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
 }
 
 // Extract POST /subjects/:subject_id/imports/extract

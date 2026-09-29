@@ -94,33 +94,56 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		return nil, err
 	}
 
+	// 抽取方式：规则解析完全不走模型。
+	//
+	// 它存在的意义不是"更省钱"，而是"没配模型也能录题"——
+	// 未配置任何 AI 时，模型路径会直接失败，而带标签的电子稿本来
+	// 就不需要模型来看。
+	method, ok := importing.ParseMethod(req.Method)
+	if !ok {
+		return nil, apperr.New(apperr.CodeInvalidParam, "不支持的抽取方式").
+			WithDetail("method=%s，可选 ai（调用模型）或 template（规则解析）", req.Method)
+	}
+	if method == importing.MethodTemplate && len(req.Images) > 0 {
+		return nil, apperr.New(apperr.CodeInvalidParam,
+			"规则解析只处理文本，请改用 ai 方式提交图片")
+	}
+
 	// 解析当前配置的模型。带图时必须用视觉模型：
 	// 把图片塞给纯文本模型，供应商多半直接报错或者"看不见"地胡编一通，
 	// 用户拿到的是一份看似正常、实则完全臆造的题目——比明确失败危险得多。
-	modelType := model.AIModelText
-	if len(req.Images) > 0 {
-		modelType = model.AIModelVision
-	}
-	resolved, err := s.aiConfig.Resolve(ctx, modelType)
-	if err != nil {
-		if modelType == model.AIModelVision && apperr.Is(err, apperr.CodeAIUnavailable) {
-			// 未配置视觉模型是可预期的配置状态，给出能照着做的提示，
-			// 而不是把"AI 服务不可用"甩给用户。
-			return nil, apperr.New(apperr.CodeAIUnavailable,
-				"图片识题需要先配置视觉模型，请在 AI 设置中选择视觉模型后再试；"+
-					"若只想录文字题，请改用文本方式导入").WithCause(err)
+	var resolved *ResolvedModel
+	if method == importing.MethodAI {
+		modelType := model.AIModelText
+		if len(req.Images) > 0 {
+			modelType = model.AIModelVision
 		}
-		return nil, err
+		r, err := s.aiConfig.Resolve(ctx, modelType)
+		if err != nil {
+			if modelType == model.AIModelVision && apperr.Is(err, apperr.CodeAIUnavailable) {
+				// 未配置视觉模型是可预期的配置状态，给出能照着做的提示，
+				// 而不是把"AI 服务不可用"甩给用户。
+				return nil, apperr.New(apperr.CodeAIUnavailable,
+					"图片识题需要先配置视觉模型，请在 AI 设置中选择视觉模型后再试；"+
+						"若只想录文字题，请改用文本方式导入").WithCause(err)
+			}
+			return nil, err
+		}
+		resolved = r
 	}
 
 	// 把已有知识点与标签喂给模型，让它优先复用而不是新造名字。
-	kpNames, err := s.repos.KnowledgePoints.NamesBySubject(ctx, subjectID)
-	if err != nil {
-		return nil, apperr.ErrInternal.WithCause(err)
-	}
-	tagNames, err := s.repos.Tags.NamesBySubject(ctx, subjectID)
-	if err != nil {
-		return nil, apperr.ErrInternal.WithCause(err)
+	// 规则解析用不到它们：它只按字面匹配已有名称，不生成新名字。
+	var kpNames, tagNames []string
+	if method == importing.MethodAI {
+		kpNames, err = s.repos.KnowledgePoints.NamesBySubject(ctx, subjectID)
+		if err != nil {
+			return nil, apperr.ErrInternal.WithCause(err)
+		}
+		tagNames, err = s.repos.Tags.NamesBySubject(ctx, subjectID)
+		if err != nil {
+			return nil, apperr.ErrInternal.WithCause(err)
+		}
 	}
 
 	promptOpts := importing.PromptOptions{
@@ -157,26 +180,63 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	}
 
 	started := time.Now()
-	extracted, err := resolved.Provider.ExtractQuestions(callCtx, ai.ExtractRequest{
-		Model:   resolved.ModelName,
-		Prompt:  importing.BuildSystemPrompt(promptOpts),
-		Content: importing.BuildUserContent(content, promptOpts),
-		Images:  req.Images,
-		Schema:  "", // schema 已经写进系统提示词
-	})
-	elapsed := time.Since(started)
+	var (
+		drafts      []importing.Draft
+		modelLabel  string
+		docWarnings []string
+		sourceFiles = []string{task.OriginalFilename}
+	)
 
-	// 抽取失败也要留痕：用户会问"为什么没结果"。
-	if err != nil {
-		task.MarkFailed(humanizeAIError(err))
-		// 留痕失败不应盖掉真正的失败原因——用户需要知道的是模型为什么出错。
-		if saveErr := s.saveTaskState(ctx, task); saveErr != nil {
-			slog.Warn("写入导入任务失败状态出错", "task_id", task.ID, "error", saveErr)
+	if method == importing.MethodTemplate {
+		// 规则解析：确定性的，毫秒级返回，不消耗任何额度。
+		drafts, docWarnings = importing.ParseTemplate(content, task.OriginalFilename)
+		modelLabel = "规则解析（未调用模型）"
+	} else {
+		extracted, err := resolved.Provider.ExtractQuestions(callCtx, ai.ExtractRequest{
+			Model:   resolved.ModelName,
+			Prompt:  importing.BuildSystemPrompt(promptOpts),
+			Content: importing.BuildUserContent(content, promptOpts),
+			Images:  req.Images,
+			Schema:  "", // schema 已经写进系统提示词
+		})
+		elapsed := time.Since(started)
+
+		// 抽取失败也要留痕：用户会问"为什么没结果"。
+		if err != nil {
+			task.MarkFailed(humanizeAIError(err))
+			// 留痕失败不应盖掉真正的失败原因——用户需要知道的是模型为什么出错。
+			if saveErr := s.saveTaskState(ctx, task); saveErr != nil {
+				slog.Warn("写入导入任务失败状态出错", "task_id", task.ID, "error", saveErr)
+			}
+			return nil, apperr.New(apperr.CodeAIUnavailable, humanizeAIError(err)).WithCause(err)
 		}
-		return nil, apperr.New(apperr.CodeAIUnavailable, humanizeAIError(err)).WithCause(err)
+		drafts = importing.Normalize(extracted)
+		modelLabel = resolved.Display
+		task.TotalCount = len(drafts)
+		task.MarkCompleted()
+		if err := s.saveTaskState(ctx, task); err != nil {
+			return nil, err
+		}
+		// 任务里存 elapsed 不合适，这里只用于响应。
+		warnings := 0
+		for i := range drafts {
+			if len(drafts[i].Warnings) > 0 {
+				warnings++
+			}
+		}
+		return &schema.ExtractResponse{
+			TaskID:       task.ID,
+			Drafts:       drafts,
+			Total:        len(drafts),
+			WarningCount: warnings,
+			Model:        modelLabel,
+			Method:       string(method),
+			SourceFiles:  sourceFiles,
+			ElapsedMs:    elapsed.Milliseconds(),
+		}, nil
 	}
 
-	drafts := importing.Normalize(extracted)
+	// ---- 规则解析的收尾 ----
 
 	// 用题干做一次语义检索，给出知识点候选。
 	//
@@ -223,9 +283,192 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		Drafts:       drafts,
 		Total:        len(drafts),
 		WarningCount: warnings,
-		Model:        resolved.Display,
-		ElapsedMs:    elapsed.Milliseconds(),
+		Model:        modelLabel,
+		Method:       string(method),
+		SourceFiles:  sourceFiles,
+		Warnings:     docWarnings,
+		ElapsedMs:    time.Since(started).Milliseconds(),
 	}, nil
+}
+
+// Upload 从上传的文档文件中抽取题目。
+//
+// 与 Extract 的区别只在于"文本从哪来"：这里由摄取层把
+// .md / .txt / .docx / .zip 变成文本，之后完全走 Extract 的同一条管线。
+//
+// 刻意**一次只收一个文件**：抽取是同步的，一个包塞十个 Word 会让
+// 一个 HTTP 请求跑十几分钟，超时之后用户既不知道跑到哪了，
+// 也无法中途叫停。多文件排队是后台任务的事，不该混在这里假装支持。
+func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID uint, filename string, data []byte, method, mode string) (*schema.ExtractResponse, error) {
+	name := sanitizeUploadName(filename)
+	if name == "" {
+		return nil, apperr.New(apperr.CodeInvalidParam, "缺少文件名")
+	}
+	if !importing.UploadSupported(name) {
+		return nil, apperr.New(apperr.CodeInvalidParam,
+			"暂不支持这种文件").WithDetail("filename=%s；目前支持 .md / .txt / .docx / .zip", name)
+	}
+
+	// 权限先判：不该让无权用户靠"文件能不能解析"探测系统能力。
+	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
+		return nil, err
+	}
+
+	res, err := importing.Ingest(data, name, s.imageSaver())
+	if err != nil {
+		return nil, apperr.New(apperr.CodeInvalidParam, humanizeIngestError(err)).WithCause(err)
+	}
+
+	source := res.Files
+	if len(source) == 0 {
+		source = []string{name}
+	}
+
+	// 多份文档必须逐份解析：文末答案区是按题号回填的，两份都用 1/2/3 编号时，
+	// 合成一段再解析会把第一份的答案贴到第二份的题上——而且表面上完全看不出来。
+	// 模型路径是一次调用返回一整份草稿，天然没有这个问题，所以那里仍然合并。
+	if len(res.Docs) > 1 && isTemplateMethod(method) {
+		return s.extractDocsIndependently(ctx, user, subjectID, method, mode, name, source, res)
+	}
+
+	content := res.Docs[0].Text
+	if len(res.Docs) > 1 {
+		parts := make([]string, 0, len(res.Docs))
+		for _, d := range res.Docs {
+			parts = append(parts, d.Text)
+		}
+		content = strings.Join(parts, "\n\n")
+	}
+
+	resp, err := s.Extract(ctx, user, subjectID, &schema.ExtractRequest{
+		Content:  content,
+		Method:   method,
+		Mode:     mode,
+		Filename: sourceLabel(name, len(source)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp.SourceFiles = source
+	if len(res.Warnings) > 0 {
+		resp.Warnings = append(resp.Warnings, res.Warnings...)
+	}
+	return resp, nil
+}
+
+// extractDocsIndependently 逐份文档各跑一次抽取，再把草稿汇总成一次响应。
+//
+// 每份文档各留一条任务记录：出错时用户能看出是包里哪一份没解析出来，
+// 而不是面对一个"共 8 题、2 题失败"的笼统结果。
+func (s *ImportService) extractDocsIndependently(
+	ctx context.Context, user *model.User, subjectID uint,
+	method, mode, archiveName string, source []string, res *importing.IngestResult,
+) (*schema.ExtractResponse, error) {
+	var (
+		all     []importing.Draft
+		warns   []string
+		lastID  uint
+		totalMs int64
+	)
+	for _, doc := range res.Docs {
+		sub, err := s.Extract(ctx, user, subjectID, &schema.ExtractRequest{
+			Content: doc.Text, Method: method, Mode: mode, Filename: doc.Name,
+		})
+		if err != nil {
+			warns = append(warns, fmt.Sprintf("%s：%v", doc.Name, err))
+			continue
+		}
+		all = append(all, sub.Drafts...)
+		warns = append(warns, sub.Warnings...)
+		lastID = sub.TaskID
+		totalMs += sub.ElapsedMs
+	}
+	if len(all) == 0 {
+		return nil, apperr.New(apperr.CodeUnprocessable,
+			"压缩包里的文档都没有解析出题目").WithDetail("%s：%v", archiveName, warns)
+	}
+
+	n := 0
+	for i := range all {
+		if len(all[i].Warnings) > 0 {
+			n++
+		}
+	}
+	return &schema.ExtractResponse{
+		TaskID:       lastID,
+		Drafts:       all,
+		Total:        len(all),
+		WarningCount: n,
+		Model:        "规则解析（未调用模型）",
+		Method:       string(importing.MethodTemplate),
+		SourceFiles:  source,
+		Warnings:     append(res.Warnings, warns...),
+		ElapsedMs:    totalMs,
+	}, nil
+}
+
+// isTemplateMethod 判断请求走的是否是规则解析。
+func isTemplateMethod(method string) bool {
+	m, ok := importing.ParseMethod(method)
+	return ok && m == importing.MethodTemplate
+}
+
+// sourceLabel 给一次导入起一个人类可读的任务标题。
+func sourceLabel(name string, docCount int) string {
+	if docCount > 1 {
+		return fmt.Sprintf("%s（%d 个文档）", name, docCount)
+	}
+	return name
+}
+
+// imageSaver 把摄取到的内嵌图片交给存储层。
+func (s *ImportService) imageSaver() importing.ImageSaver {
+	if s.storage == nil {
+		return nil
+	}
+	return storageImageSaver{s.storage}
+}
+
+// storageImageSaver 适配 storage.Local 到 importing.ImageSaver。
+type storageImageSaver struct{ st *storage.Local }
+
+func (a storageImageSaver) Save(data []byte, name string) (string, error) {
+	saved, err := a.st.Save(data, name)
+	if err != nil {
+		return "", err
+	}
+	// Saved.URL 已经是可直接写进文档的公开地址（/media/… 前缀），
+	// 不需要再拼一次，否则会出现前缀套前缀。
+	return saved.URL, nil
+}
+
+// sanitizeUploadName 只取路径末段并剥掉控制字符，
+// 让 "../../etc/passwd" 这类名字既不会落盘也不会进历史记录。
+func sanitizeUploadName(name string) string {
+	name = strings.TrimSpace(name)
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+}
+
+// humanizeIngestError 把摄取层的错误翻译成用户看得懂的话。
+func humanizeIngestError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "压缩包"):
+		return msg
+	case strings.Contains(msg, "Word"):
+		return "无法读取这个 Word 文档，请确认它是 .docx 而不是 .doc 等旧格式"
+	case strings.Contains(msg, "不支持"):
+		return msg
+	}
+	return "文件解析失败：" + msg
 }
 
 // Commit 把审核后的草稿写入题库。

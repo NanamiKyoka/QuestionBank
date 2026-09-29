@@ -24,6 +24,10 @@ type ExtractRequest struct {
 	//（如「粘贴文本」「图片识别（3 张）」），历史列表不会因此一片空白。
 	// 落库前只取路径末段并过滤控制字符，因此传 "../../etc/passwd" 也不会被原样存下。
 	Filename string `json:"filename" binding:"omitempty,max=255"`
+	// Method 抽取方式：ai（调用模型，默认）| template（确定性规则解析）。
+	//
+	// 留空按 ai 处理：老客户端不带这个字段时，行为必须与从前完全一致。
+	Method string `json:"method" binding:"omitempty,oneof=ai template"`
 }
 
 // ExtractResponse 抽取结果。**不写库**，由用户审核后再提交。
@@ -42,6 +46,17 @@ type ExtractResponse struct {
 	Model string `json:"model"`
 	// ElapsedMs 耗时。
 	ElapsedMs int64 `json:"elapsed_ms"`
+
+	// Method 实际走的哪条路径（ai / template）。
+	//
+	// 必须回显而不是让前端自己记：用户看到一份解析结果时，
+	// 需要知道它到底有没有经过模型——这直接决定了他该多信这份结果。
+	Method string `json:"method"`
+	// SourceFiles 本次覆盖到的文件（压缩包会包含包内的各个文档）。
+	// 审核界面靠它把题目按来源分组。
+	SourceFiles []string `json:"source_files"`
+	// Warnings 文档级提示（如压缩包里跳过了不安全的条目），与逐题警告不同。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // CommitRequest 审核完成后提交入库。
