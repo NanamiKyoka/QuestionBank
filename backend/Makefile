@@ -1,5 +1,7 @@
 APP := qm-server
+DESKTOP := qm-desktop
 BIN := build/$(APP)
+DESKTOP_BIN := build/$(DESKTOP)
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -14,11 +16,17 @@ LDFLAGS := -s -w \
 	-X github.com/NanamiKyoka/questionmind/internal/version.Commit=$(COMMIT) \
 	-X github.com/NanamiKyoka/questionmind/internal/version.BuildTime=$(BUILT)
 
-.PHONY: build run test fmt vet tidy clean cross check web web-clean full
+.PHONY: build run test fmt vet tidy clean cross check web web-clean full desktop
 
-## build: 编译当前平台的单文件可执行程序（内嵌已构建的前端，无需 CGO）
+## build: 编译服务器版与桌面版（均内嵌前端，无需 CGO）
 build: web
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/server
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DESKTOP_BIN) ./cmd/desktop
+	@echo "==> 产出: $(BIN) $(DESKTOP_BIN)"
+
+## desktop: 只编译桌面版
+desktop: web
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DESKTOP_BIN) ./cmd/desktop
 
 ## build-api: 只编译后端，不内嵌前端（前端改坏了也能出后端产物）
 build-api:
@@ -79,6 +87,9 @@ cross:
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o build/$(APP)-linux-amd64 ./cmd/server
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o build/$(APP)-windows-amd64.exe ./cmd/server
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o build/$(APP)-darwin-arm64 ./cmd/server
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o build/$(DESKTOP)-windows-amd64.exe ./cmd/desktop
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o build/$(DESKTOP)-darwin-arm64 ./cmd/desktop
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o build/$(DESKTOP)-linux-amd64 ./cmd/desktop
 
 ## full: 前端 + 后端 + 测试，交付前跑一遍
 full: web check

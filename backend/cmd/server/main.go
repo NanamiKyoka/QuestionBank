@@ -1,216 +1,46 @@
 // Command server 启动 QuestionMind HTTP 服务。
+//
+// 服务器版：监听配置里的固定地址，日志写 stdout 与日志文件，
+// 收到 SIGINT / SIGTERM 后优雅关闭。桌面版见 cmd/desktop。
 package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/NanamiKyoka/questionmind/internal/aiagent"
+	"github.com/NanamiKyoka/questionmind/internal/app"
 	"github.com/NanamiKyoka/questionmind/internal/config"
-	"github.com/NanamiKyoka/questionmind/internal/db"
-	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
-	"github.com/NanamiKyoka/questionmind/internal/pkg/cryptox"
-	"github.com/NanamiKyoka/questionmind/internal/pkg/jwtx"
-	"github.com/NanamiKyoka/questionmind/internal/router"
-	"github.com/NanamiKyoka/questionmind/internal/service"
-	"github.com/NanamiKyoka/questionmind/internal/version"
 )
 
 func main() {
-	if err := run(); err != nil {
+	configPath := flag.String("config", "", "配置文件路径（默认 config.yaml）")
+	addr := flag.String("addr", "", "监听地址，如 127.0.0.1:8080（覆盖配置文件）")
+	flag.Parse()
+
+	if err := run(*configPath, *addr); err != nil {
 		fmt.Fprintf(os.Stderr, "启动失败: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	configPath := flag.String("config", "", "配置文件路径（默认 config.yaml）")
-	flag.Parse()
-
-	cfg, err := config.Load(*configPath)
+func run(configPath, addr string) error {
+	cfg, err := config.LoadOverrides(configPath, map[string]string{"server.addr": addr})
 	if err != nil {
 		return err
 	}
-
-	closeLog, err := setupLogger(cfg)
-	if err != nil {
-		return err
-	}
-	defer closeLog()
-
-	info := version.Get()
-	slog.Info("QuestionMind 启动中",
-		"version", info.Version,
-		"commit", info.Commit,
-		"go", info.GoVersion,
-		"config", cfg.Addr(),
-		"data_dir", cfg.App.DataDir,
-		"database", cfg.Database.Driver,
-	)
-
-	gdb, err := db.Open(cfg)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = db.Close(gdb) }()
-
-	if cfg.Database.AutoMigrate {
-		if err := db.AutoMigrate(gdb); err != nil {
-			return err
-		}
-	}
-
-	repos := service.NewRepos(gdb)
-	tokens := jwtx.NewManager(cfg.JWT.Secret, cfg.JWT.Issuer, cfg.JWT.AccessTTL)
-
-	// 字段加密器用 JWT 主密钥派生，因此不需要额外配置项；
-	// 但它对密钥做了不同的盐，两者不会互相削弱。
-	cipher, err := cryptox.NewCipher(cfg.JWT.Secret)
-	if err != nil {
-		return err
-	}
-
-	state := service.NewSetupState()
-	if err := state.Refresh(context.Background(), repos.Users); err != nil {
-		// 判定失败不阻断启动：中间件会保守地按"未初始化"处理。
-		slog.Warn("初始化状态判定失败", "error", err)
-	}
-	if state.Required() {
-		slog.Warn("系统尚未初始化，所有业务接口将返回 503，请访问安装向导")
-	}
-
-	activitySvc := service.NewActivityService(repos)
-	activitySvc.Start(context.Background())
-
-	authSvc := service.NewAuthService(repos, tokens, cfg.App.Name, state)
-	aiConfigSvc := service.NewAIConfigService(repos, cipher,
-		cfg.AI.RequestTimeout, cfg.AI.MaxRetries)
-	questionSvc := service.NewQuestionService(repos)
-	vectorSvc := service.NewVectorService(repos, aiConfigSvc)
-	kpSvc := service.NewKnowledgePointService(repos)
-	// 知识点变更后同步向量索引。索引失败不影响知识点本身——
-	// 用户后续可以整体重建索引来补上。
-	kpSvc.SetIndexHook(func(subjectID uint, kpIDs []uint) {
-		for _, id := range kpIDs {
-			vectorSvc.IndexKnowledgePoint(context.Background(), subjectID, id)
-		}
-	})
-	kpSvc.SetDeleteHook(func(kpIDs []uint) {
-		vectorSvc.DeleteKnowledgePointVectors(context.Background(), kpIDs)
-	})
-
-	// 媒体存储既给导出用（把富文本里的图片地址解析成字节），
-	// 也给上传用（落盘并返回对外地址）。
-	mediaStore := storage.NewLocal(cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)
-
-	engine := router.New(router.Deps{
-		Config:          cfg,
-		DB:              gdb,
-		Tokens:          tokens,
-		Auth:            authSvc,
-		Subjects:        service.NewSubjectService(repos),
-		KnowledgePoints: kpSvc,
-		Tags:            service.NewTagService(repos),
-		Questions:       questionSvc,
-		Users:           service.NewUserService(repos),
-		Papers:          service.NewPaperService(repos),
-		Exports:         service.NewExportService(repos, mediaStore),
-		AIConfig:        aiConfigSvc,
-		Imports:         service.NewImportService(repos, aiConfigSvc, questionSvc).WithVectors(vectorSvc),
-		Chat: service.NewChatService(repos, aiConfigSvc, questionSvc,
-			kpSvc,
-			service.NewTagService(repos),
-			service.NewPaperService(repos),
-			aiagent.NewChannel(0),
-			aiagent.Budget{
-				MaxTurns:     cfg.AI.MaxTurns,
-				MaxToolCalls: cfg.AI.MaxToolCalls,
-				WallClock:    cfg.AI.WallClock,
-			}),
-		Vectors:    vectorSvc,
-		Stats:      service.NewStatsService(repos),
-		Activities: activitySvc,
-		Uploads:    service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
-		Media:      mediaStore,
-	})
-
-	srv := &http.Server{
-		Addr:    cfg.Addr(),
-		Handler: engine,
-		// 读超时保护慢速请求头攻击；写超时留空，因为 AI 对话使用 SSE 长连接。
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		slog.Info("HTTP 服务已就绪", "addr", cfg.Addr())
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("HTTP 服务异常退出: %w", err)
-	case <-ctx.Done():
-		slog.Info("收到退出信号，正在优雅关闭…")
+	instance, err := app.Build(ctx, app.Options{Cfg: cfg, Addr: addr})
+	if err != nil {
+		return err
 	}
+	defer instance.Close()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("优雅关闭失败: %w", err)
-	}
-	slog.Info("已退出")
-	return nil
-}
-
-// setupLogger 配置结构化日志。配置了 log.file 时同时写入文件和控制台。
-func setupLogger(cfg *config.Config) (func(), error) {
-	var level slog.Level
-	switch cfg.Log.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-
-	var writers []io.Writer
-	writers = append(writers, os.Stdout)
-
-	var file *os.File
-	if cfg.Log.File != "" {
-		f, err := os.OpenFile(cfg.Log.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			return nil, fmt.Errorf("打开日志文件失败: %w", err)
-		}
-		file = f
-		writers = append(writers, f)
-	}
-
-	handler := slog.NewJSONHandler(io.MultiWriter(writers...), &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(handler))
-
-	return func() {
-		if file != nil {
-			_ = file.Close()
-		}
-	}, nil
+	return instance.Serve(ctx)
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -258,6 +259,85 @@ func (c *Config) finalize() error {
 		c.JWT.Secret = secret
 	}
 	return nil
+}
+
+// SetAddr 覆盖监听地址。传入 "host:port"、"host" 或 ":port" 均可。
+//
+// 独立成一个函数而不是让调用方直接改 cfg.Server：
+// 地址字符串的解析（IPv6 方括号、只给端口、只给主机）有几个容易出错的边界，
+// 集中在一处处理更省心。空字符串表示不改动。
+func SetAddr(c *Config, addr string) error {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil
+	}
+
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		// 没带冒号时按"只有主机"处理。
+		if !strings.Contains(addr, ":") {
+			c.Server.Host = addr
+			return nil
+		}
+		return fmt.Errorf("解析监听地址 %q 失败: %w", addr, err)
+	}
+
+	if host != "" {
+		c.Server.Host = host
+	}
+	if portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("端口 %q 不是数字: %w", portStr, err)
+		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("端口 %d 超出范围 1-65535", port)
+		}
+		c.Server.Port = port
+	}
+	return nil
+}
+
+// LoadOverrides 加载配置并应用覆盖项，供命令行参数使用。
+//
+// 支持的键：server.addr / server.host / server.port / server.mode。
+//
+// 遇到不认识的键会**报错而不是忽略**。这一点是有教训的：
+// 之前这里静默跳过了 "server.mode"，结果桌面版明明传了 release，
+// gin 仍以 debug 模式启动，把整张路由表打到控制台上——
+// 传了参数却没生效，比参数写错更难发现。
+func LoadOverrides(path string, overrides map[string]string) (*Config, error) {
+	cfg, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range overrides {
+		if value == "" {
+			continue
+		}
+		switch key {
+		case "server.addr", "addr":
+			if err := SetAddr(cfg, value); err != nil {
+				return nil, err
+			}
+		case "server.host":
+			cfg.Server.Host = value
+		case "server.port":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, fmt.Errorf("端口 %q 不是数字: %w", value, err)
+			}
+			cfg.Server.Port = port
+		case "server.mode":
+			if value != "debug" && value != "release" {
+				return nil, fmt.Errorf("server.mode 只能是 debug 或 release，收到 %q", value)
+			}
+			cfg.Server.Mode = value
+		default:
+			return nil, fmt.Errorf("不支持的配置覆盖项 %q", key)
+		}
+	}
+	return cfg, nil
 }
 
 // loadOrCreateSecret 从 <data_dir>/secret.key 读取密钥，不存在则生成。
