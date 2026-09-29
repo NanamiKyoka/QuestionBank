@@ -23,6 +23,12 @@ import (
 	"github.com/NanamiKyoka/questionmind/internal/model"
 )
 
+// sqliteMaxOpenConns SQLite 连接池上限。
+//
+// 刻意是一个很小的数字：SQLite 的并发瓶颈只在写，读本来就该放开；
+// 这个值要解决的是"请求之间互相排队"，不是"要多大吞吐"。
+const sqliteMaxOpenConns = 4
+
 // Open 建立数据库连接。
 func Open(cfg *config.Config) (*gorm.DB, error) {
 	gormCfg := &gorm.Config{
@@ -60,10 +66,27 @@ func Open(cfg *config.Config) (*gorm.DB, error) {
 	}
 
 	if cfg.IsSQLite() {
-		// SQLite 是单写者模型：并发写会串行化。
-		// 限制连接数反而能减少 SQLITE_BUSY，同时 busy_timeout 兜底等待。
-		sqlDB.SetMaxOpenConns(1)
-		sqlDB.SetMaxIdleConns(1)
+		// SQLite 是"单写多读"模型（WAL + busy_timeout 已在 DSN 里开启，
+		// 见 config.finalize）：读本来就不该和写互相阻塞。
+		//
+		// 曾经这里钉死 SetMaxOpenConns(1)，理由是"限制连接数能减少 SQLITE_BUSY"。
+		// 代价却远大于收益——连接池只有一条连接，意味着**所有**请求共用它：
+		// 一条慢查询或一个 SSE 长连接占住它，整个服务（题库、对话、向量检索、
+		// 审计写入）一起排队。写冲突本来就由 busy_timeout 兜底，
+		// 多开几条连接并不会让写更频繁地撞车，却能让读真正并发起来。
+		//
+		// 现在的取舍：
+		//   - 上限取 sqliteMaxOpenConns（4）。SQLite 的并发瓶颈只在写，
+		//     而写路径本身有事务与乐观锁保护；4 条连接足以让读请求排队之外
+		//     还有余量，又不至于把文件锁的争抢放大到不可控。
+		//   - 空闲连接数与上限相同，避免高并发后频繁重建连接
+		//     （重建一次 SQLite 连接要重新解析 DSN 里的 pragma）。
+		//   - **不设置** ConnMaxLifetime：SQLite 无网络往返，
+		//     连接不会像 MySQL 那样被服务端断开，按期重建纯属无谓开销。
+		// 若将来部署为多进程共享同一个 .db 文件，仍应先解决进程级互斥
+		//（见 G18：双进程打开同一个 SQLite 文件），而不是继续调这个数字。
+		sqlDB.SetMaxOpenConns(sqliteMaxOpenConns)
+		sqlDB.SetMaxIdleConns(sqliteMaxOpenConns)
 	} else {
 		sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
 		sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)

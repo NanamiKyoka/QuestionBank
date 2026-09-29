@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,9 +79,22 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		return nil, err
 	}
 
-	// 解析当前配置的文本模型。未配置时给出可操作的提示，而不是笼统报错。
-	resolved, err := s.aiConfig.Resolve(ctx, model.AIModelText)
+	// 解析当前配置的模型。带图时必须用视觉模型：
+	// 把图片塞给纯文本模型，供应商多半直接报错或者"看不见"地胡编一通，
+	// 用户拿到的是一份看似正常、实则完全臆造的题目——比明确失败危险得多。
+	modelType := model.AIModelText
+	if len(req.Images) > 0 {
+		modelType = model.AIModelVision
+	}
+	resolved, err := s.aiConfig.Resolve(ctx, modelType)
 	if err != nil {
+		if modelType == model.AIModelVision && apperr.Is(err, apperr.CodeAIUnavailable) {
+			// 未配置视觉模型是可预期的配置状态，给出能照着做的提示，
+			// 而不是把"AI 服务不可用"甩给用户。
+			return nil, apperr.New(apperr.CodeAIUnavailable,
+				"图片识题需要先配置视觉模型，请在 AI 设置中选择视觉模型后再试；"+
+					"若只想录文字题，请改用文本方式导入").WithCause(err)
+		}
 		return nil, err
 	}
 
@@ -215,12 +229,56 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 		Failures:   []schema.CommitFailure{},
 	}
 
-	createdIDs := make([]uint, 0, len(req.Drafts))
 	failures := make([]schema.CommitFailure, 0)
 	unresolvedNames := map[string]bool{}
 
-	for i := range req.Drafts {
+	// 母子题结构：模型用 temp_id / parent_temp_id 表达层级，而 parent_id 必须等
+	// 母题建出来才知道真实主键，所以按层级深度分批落库——母题永远排在子题前面。
+	// 一份 1 道母题 + 20 道小问的材料题如果不这么处理，就会变成 21 道互不相干的
+	// 独立大题，而且没有任何提示（这是导入链路里最隐蔽的一种数据损坏）。
+	depths, parents := draftDepths(req.Drafts)
+	order := make([]int, len(req.Drafts))
+	for i := range order {
+		order[i] = i
+	}
+	// SliceStable：同层之间保持用户审核时的原始顺序，列表才对得上。
+	sort.SliceStable(order, func(a, b int) bool { return depths[order[a]] < depths[order[b]] })
+
+	// createdIDOf[i] 为 0 表示该草稿没有入库；失败原因记在 failReasonOf 里，
+	// 子题据此判断"母题没了"，并把同样的原因继续传给自己的子题。
+	createdIDOf := make([]uint, len(req.Drafts))
+	failReasonOf := make([]string, len(req.Drafts))
+
+	for _, i := range order {
 		draft := &req.Drafts[i]
+
+		fail := func(f schema.CommitFailure) {
+			failures = append(failures, f)
+			failReasonOf[i] = f.Error
+		}
+
+		if depths[i] >= maxDraftDepth {
+			// 成环（a→b→a）意味着没有合法的落库顺序，只能整串拒绝。
+			fail(failureOf(i, draft, apperr.New(apperr.CodeInvalidParam,
+				"母子题结构无法解析（母题引用成环）")))
+			continue
+		}
+
+		var parentID *uint
+		if p := parents[i]; p >= 0 {
+			if failReasonOf[p] != "" {
+				// 母题没入库就跳过它的小问：否则子题会挂在空父节点上，
+				// 用户既看不到它属于谁，也没法连着母题一起删。
+				fail(failureOf(i, draft, apperr.New(apperr.CodeMissingRef,
+					"母题未能入库，小问已一并跳过").
+					WithDetail("母题 temp_id=%q 未入库：%s",
+						draft.ParentTempID, failReasonOf[p])))
+				continue
+			}
+			if pid := createdIDOf[p]; pid > 0 {
+				parentID = &pid
+			}
+		}
 
 		// 名称解析：草稿里的知识点/标签名称，能在本学科找到就关联，
 		// 找不到就记下来提示用户，**不自动创建**。
@@ -231,9 +289,9 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 			unresolvedNames[n] = true
 		}
 
-		createReq, err := s.draftToCreateRequest(draft, subjectID, req)
+		createReq, err := s.draftToCreateRequest(draft, subjectID, req, parentID)
 		if err != nil {
-			failures = append(failures, failureOf(i, draft, err))
+			fail(failureOf(i, draft, err))
 			continue
 		}
 		createReq.KnowledgePointIDs = mergeIDs(kpIDs, req.DefaultKnowledgePointIDs)
@@ -241,10 +299,19 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 
 		created, err := s.questions.Create(ctx, user, createReq)
 		if err != nil {
-			failures = append(failures, failureOf(i, draft, err))
+			fail(failureOf(i, draft, err))
 			continue
 		}
-		createdIDs = append(createdIDs, created.ID)
+		createdIDOf[i] = created.ID
+	}
+
+	// 响应里的 id 仍按请求里的原始顺序给出：前端按草稿下标回填界面，
+	// 顺序变了会让用户对不上号（落库顺序与响应顺序是两件事）。
+	createdIDs := make([]uint, 0, len(req.Drafts))
+	for i := range req.Drafts {
+		if createdIDOf[i] > 0 {
+			createdIDs = append(createdIDs, createdIDOf[i])
+		}
 	}
 
 	resp.CreatedIDs = createdIDs
@@ -284,8 +351,92 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 	return resp, nil
 }
 
+// maxDraftDepth 母子层级深度的上限。
+//
+// 正常试卷只有"母题 → 小问"两层，但模型偶尔会写出 a→b→a 这种环。
+// 递归求深度时用它兜底：超过上限即判定为成环，宁可整串拒绝也不能无限递归。
+const maxDraftDepth = 32
+
+// draftDepths 计算每个草稿的母子层级深度，并给出它在本批次内的母题下标。
+//
+// 返回值：
+//   - depths[i]：0 表示母题（无 parent_temp_id），子题 = 母题深度 + 1；
+//     成环时返回 >= maxDraftDepth。
+//   - parents[i]：母题在 drafts 里的下标；-1 表示没有可解析的母题
+//     （parent_temp_id 为空、指向批次外的 temp_id、自引用或重复 temp_id）。
+//
+// 只用迭代 + 记忆化求深度，不做递归：链再长也不会把栈压爆。
+func draftDepths(drafts []importing.Draft) (depths []int, parents []int) {
+	n := len(drafts)
+	depths = make([]int, n)
+	parents = make([]int, n)
+	for i := range parents {
+		parents[i] = -1
+	}
+
+	// temp_id → 下标。重复的 temp_id 只认第一次出现的：
+	// 模型给两道题编了同一个临时 id 时，无法判断谁才是母题，
+	// 猜错会把一道普通题挂到另一道题下面。
+	byTempID := make(map[string]int, n)
+	for i := range drafts {
+		tid := strings.TrimSpace(drafts[i].TempID)
+		if tid == "" {
+			continue
+		}
+		if _, dup := byTempID[tid]; dup {
+			continue
+		}
+		byTempID[tid] = i
+	}
+	for i := range drafts {
+		pid := strings.TrimSpace(drafts[i].ParentTempID)
+		if pid == "" || pid == strings.TrimSpace(drafts[i].TempID) {
+			continue
+		}
+		if p, ok := byTempID[pid]; ok {
+			parents[i] = p
+		}
+	}
+
+	memo := make([]int, n)
+	for i := range memo {
+		memo[i] = -1 // -1 = 尚未计算
+	}
+	var depthOf func(i int, path map[int]bool) int
+	depthOf = func(i int, path map[int]bool) int {
+		if memo[i] >= 0 {
+			return memo[i]
+		}
+		p := parents[i]
+		if p < 0 {
+			memo[i] = 0
+			return 0
+		}
+		if path[i] {
+			// 回到自己身上：这条链成环，没有合法的落库顺序。
+			memo[i] = maxDraftDepth
+			return maxDraftDepth
+		}
+		path[i] = true
+		d := depthOf(p, path) + 1
+		delete(path, i)
+		if d > maxDraftDepth {
+			d = maxDraftDepth
+		}
+		memo[i] = d
+		return d
+	}
+	for i := range drafts {
+		depths[i] = depthOf(i, map[int]bool{})
+	}
+	return depths, parents
+}
+
 // draftToCreateRequest 把草稿转换为建题请求。
-func (s *ImportService) draftToCreateRequest(draft *importing.Draft, subjectID uint, req *schema.CommitRequest) (*schema.QuestionCreateRequest, error) {
+//
+// parentID 为 nil 表示独立题；非 nil 时由 Commit 在母题入库后回填真实主键
+// （模型给的 temp_id 不是数据库主键，不能直接写进 parent_id）。
+func (s *ImportService) draftToCreateRequest(draft *importing.Draft, subjectID uint, req *schema.CommitRequest, parentID *uint) (*schema.QuestionCreateRequest, error) {
 	if !draft.QuestionType.Valid() {
 		return nil, apperr.New(apperr.CodeInvalidParam, "题型不合法").
 			WithDetail("question_type=%q", draft.QuestionType)
@@ -312,6 +463,7 @@ func (s *ImportService) draftToCreateRequest(draft *importing.Draft, subjectID u
 
 	createReq := &schema.QuestionCreateRequest{
 		SubjectID:    subjectID,
+		ParentID:     parentID,
 		QuestionType: draft.QuestionType,
 		Stem:         stem,
 		Options:      options,

@@ -69,12 +69,44 @@ func Normalize(extracted []ai.ExtractedQuestion) []Draft {
 	for i := range extracted {
 		out = append(out, normalizeOne(&extracted[i], i+1))
 	}
+	linkParents(out)
 	return out
+}
+
+// linkParents 校正母子关系：统一临时 id 的空白，并给**无法解析**的母题引用附上警告。
+//
+// temp_id / parent_temp_id 是模型给出的临时编号，最终要换成数据库主键，
+// 两边必须逐字符相等才能配上——一个多余空格就会让整组材料题在入库时散架，
+// 而这个错误用户完全看不见（题都建出来了，只是彼此不认识）。
+//
+// 指向批次外的母题（模型只抽出了小问、没抽出母题）和自引用同理：入库时不可能
+// 建立父子关系，与其静默按独立题处理，不如在这里就明确告诉用户"这一组没保住"。
+func linkParents(drafts []Draft) {
+	ids := make(map[string]bool, len(drafts))
+	for i := range drafts {
+		drafts[i].TempID = strings.TrimSpace(drafts[i].TempID)
+		drafts[i].ParentTempID = strings.TrimSpace(drafts[i].ParentTempID)
+		if drafts[i].TempID != "" {
+			ids[drafts[i].TempID] = true
+		}
+	}
+	for i := range drafts {
+		switch {
+		case drafts[i].ParentTempID == "":
+		case drafts[i].ParentTempID == drafts[i].TempID:
+			drafts[i].ParentTempID = ""
+			drafts[i].Warnings = append(drafts[i].Warnings, "母题引用指向自身，将作为独立题目导入")
+		case !ids[drafts[i].ParentTempID]:
+			drafts[i].ParentTempID = ""
+			drafts[i].Warnings = append(drafts[i].Warnings,
+				"本次抽取结果中没有对应母题，该小问将作为独立题目导入")
+		}
+	}
 }
 
 func normalizeOne(q *ai.ExtractedQuestion, index int) Draft {
 	d := Draft{
-		TempID:          firstNonEmpty(q.TempID, ""),
+		TempID:          q.TempID,
 		ParentTempID:    q.ParentTempID,
 		SourceNumber:    index,
 		StemMarkdown:    strings.TrimSpace(q.Stem),
@@ -586,15 +618,6 @@ func cleanStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // plainTextOfRichDoc 从富文本 JSON 提取纯文本（与 domain.PlainText 等价，
