@@ -63,6 +63,24 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '标签' },
       },
       {
+        path: 'import',
+        name: 'import',
+        component: () => import('@/views/ImportView.vue'),
+        meta: { title: '智能录题' },
+      },
+      {
+        path: 'chat',
+        name: 'chat',
+        component: () => import('@/views/ChatView.vue'),
+        meta: { title: 'AI 助手' },
+      },
+      {
+        path: 'ai-settings',
+        name: 'ai-settings',
+        component: () => import('@/views/AISettingsView.vue'),
+        meta: { title: 'AI 设置', admin: true },
+      },
+      {
         path: 'subjects',
         name: 'subjects',
         component: () => import('@/views/SubjectsView.vue'),

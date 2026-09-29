@@ -27,10 +27,13 @@ const menus: MenuItem[] = [
   { name: 'dashboard', title: '总览', icon: 'DataBoard' },
   { name: 'questions', title: '题库', icon: 'Collection', permission: 'view_question' },
   { name: 'papers', title: '试卷', icon: 'Document', permission: 'view_question' },
+  { name: 'import', title: '智能录题', icon: 'MagicStick', permission: 'edit_question' },
+  { name: 'chat', title: 'AI 助手', icon: 'ChatDotRound', permission: 'view_question' },
   { name: 'knowledge-points', title: '知识点', icon: 'Share', permission: 'view_question' },
   { name: 'tags', title: '标签', icon: 'PriceTag', permission: 'view_question' },
   { name: 'subjects', title: '学科管理', icon: 'School', admin: true },
   { name: 'users', title: '用户管理', icon: 'User', admin: true },
+  { name: 'ai-settings', title: 'AI 设置', icon: 'Setting', admin: true },
 ]
 
 const visibleMenus = computed(() =>

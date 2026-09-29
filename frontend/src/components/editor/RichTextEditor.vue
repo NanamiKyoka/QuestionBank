@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
+import Image from '@tiptap/extension-image'
 import Placeholder from '@tiptap/extension-placeholder'
 import Subscript from '@tiptap/extension-subscript'
 import Superscript from '@tiptap/extension-superscript'
@@ -50,6 +51,7 @@ const editor = useEditor({
     InlineMath,
     BlockMath,
     Blank,
+    Image.configure({ inline: false }),
     Placeholder.configure({ placeholder: props.placeholder }),
     Subscript,
     Superscript,
@@ -99,6 +101,33 @@ async function insertBlockMath() {
 /** 插入填空空位。 */
 function insertBlank() {
   editor.value?.chain().focus().insertContent({ type: 'blank' }).run()
+}
+
+const uploading = ref(false)
+
+/**
+ * 上传图片并插入正文。
+ *
+ * 走后端 /uploads/images：那里会按文件头校验真实格式、
+ * 限制尺寸并拒绝 SVG（SVG 可内嵌脚本，当图片直接提供出去等于给了 XSS 机会）。
+ * 因此这里不做本地格式判断——客户端校验只是体验优化，说了算的是服务端。
+ */
+async function pickImage(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许连续选择同一个文件
+  if (!file) return
+
+  uploading.value = true
+  try {
+    const { uploadApi } = await import('@/api/ai')
+    const saved = await uploadApi.image(file)
+    editor.value?.chain().focus().setImage({ src: saved.url }).run()
+  } catch {
+    // 具体原因（过大、格式不支持）由接口层统一提示
+  } finally {
+    uploading.value = false
+  }
 }
 
 async function promptLatex(title: string, placeholder: string): Promise<string | null> {
@@ -203,6 +232,16 @@ defineExpose({
         </el-button>
       </el-button-group>
 
+
+      <label class="ml-1 inline-block">
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          class="hidden"
+          @change="pickImage"
+        />
+        <el-button size="small" :loading="uploading" tag="span">🖼 图片</el-button>
+      </label>
 
       <el-button size="small" class="ml-auto" @click="editor.chain().focus().clearNodes().unsetAllMarks().run()">
         清除格式
