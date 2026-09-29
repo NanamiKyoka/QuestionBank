@@ -21,10 +21,20 @@ export interface ModelInfo {
   created_at: string
 }
 
+/**
+ * 供应商接口类型。
+ *
+ * 刻意不写成字面量联合（如 'openai' | 'gemini'）：可用协议由后端的
+ * `GET /ai/interface-types` 决定，并在保存时强校验。写死一份联合等于在前端
+ * 复制一份会过期的清单——那正是"界面能选、后端不认"的由来。
+ * 用 string 让服务端成为唯一权威，界面直接读那个端点。
+ */
+export type ProviderInterfaceType = string
+
 export interface Provider {
   id: number
   name: string
-  interface_type: 'openai' | 'gemini'
+  interface_type: ProviderInterfaceType
   base_url: string
   /**
    * 密钥掩码（形如 sk-abc…wxyz）。
@@ -63,7 +73,7 @@ export const aiApi = {
   listProviders: () => get<Provider[]>('/ai/providers'),
   createProvider: (payload: {
     name: string
-    interface_type: 'openai' | 'gemini'
+    interface_type: ProviderInterfaceType
     base_url?: string
     api_key: string
     is_active?: boolean
@@ -82,7 +92,7 @@ export const aiApi = {
     id: number,
     payload: {
       name?: string
-      interface_type?: 'openai' | 'gemini'
+      interface_type?: ProviderInterfaceType
       base_url?: string
       api_key?: string
       is_active?: boolean

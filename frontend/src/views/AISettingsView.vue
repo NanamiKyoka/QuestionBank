@@ -163,9 +163,9 @@ async function submitProvider() {
     } else {
       await aiApi.createProvider({
         name: providerForm.name.trim(),
-        // api/ai.ts 的入参类型是字面量联合，这里转一下即可：
-        // 真正可选的集合由后端下发，前端不再自己数一遍。
-        interface_type: providerForm.interface_type as Provider['interface_type'],
+        // 可选集合由后端 /ai/interface-types 下发并在保存时强校验，
+        // 前端不再自己维护一份会过期的字面量清单。
+        interface_type: providerForm.interface_type,
         base_url: providerForm.base_url.trim(),
         api_key: providerForm.api_key.trim(),
         is_active: providerForm.is_active,
