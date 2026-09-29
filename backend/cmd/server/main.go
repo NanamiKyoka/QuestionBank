@@ -108,6 +108,10 @@ func run() error {
 		vectorSvc.DeleteKnowledgePointVectors(context.Background(), kpIDs)
 	})
 
+	// 媒体存储既给导出用（把富文本里的图片地址解析成字节），
+	// 也给上传用（落盘并返回对外地址）。
+	mediaStore := storage.NewLocal(cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)
+
 	engine := router.New(router.Deps{
 		Config:          cfg,
 		DB:              gdb,
@@ -119,10 +123,9 @@ func run() error {
 		Questions:       questionSvc,
 		Users:           service.NewUserService(repos),
 		Papers:          service.NewPaperService(repos),
-		Exports: service.NewExportService(repos, storage.NewLocal(
-			cfg.Storage.MediaDir, cfg.Storage.PublicPrefix)),
-		AIConfig: aiConfigSvc,
-		Imports:  service.NewImportService(repos, aiConfigSvc, questionSvc).WithVectors(vectorSvc),
+		Exports:         service.NewExportService(repos, mediaStore),
+		AIConfig:        aiConfigSvc,
+		Imports:         service.NewImportService(repos, aiConfigSvc, questionSvc).WithVectors(vectorSvc),
 		Chat: service.NewChatService(repos, aiConfigSvc, questionSvc,
 			kpSvc,
 			service.NewTagService(repos),
@@ -136,6 +139,8 @@ func run() error {
 		Vectors:    vectorSvc,
 		Stats:      service.NewStatsService(repos),
 		Activities: activitySvc,
+		Uploads:    service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
+		Media:      mediaStore,
 	})
 
 	srv := &http.Server{

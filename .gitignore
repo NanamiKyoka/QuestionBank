@@ -34,3 +34,7 @@ Thumbs.db
 
 # TypeScript 增量构建信息
 *.tsbuildinfo
+
+# 内嵌前端产物：由 make web 从 frontend/dist 复制而来，不入库
+backend/internal/web/dist/*
+!backend/internal/web/dist/.gitkeep

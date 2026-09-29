@@ -10,12 +10,14 @@ import (
 
 	"github.com/NanamiKyoka/questionmind/internal/config"
 	"github.com/NanamiKyoka/questionmind/internal/handler"
+	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
 	"github.com/NanamiKyoka/questionmind/internal/middleware"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/jwtx"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/response"
 	"github.com/NanamiKyoka/questionmind/internal/repository"
 	"github.com/NanamiKyoka/questionmind/internal/service"
+	"github.com/NanamiKyoka/questionmind/internal/web"
 )
 
 // Deps 路由依赖。
@@ -38,6 +40,8 @@ type Deps struct {
 	Vectors         *service.VectorService
 	Stats           *service.StatsService
 	Activities      *service.ActivityService
+	Uploads         *service.UploadService
+	Media           *storage.Local
 }
 
 const apiPrefix = "/api/v1"
@@ -100,10 +104,30 @@ func New(d Deps) *gin.Engine {
 	registerVectorRoutes(v1, d)
 	registerStatsRoutes(v1, d)
 	registerActivityRoutes(v1, d)
+	registerUploadRoutes(v1, d)
+
+	// 媒体文件（题目配图）直接由后端提供。
+	// 不做鉴权：地址里含 16 字节随机名，猜不出来；而图片要能嵌进
+	// 导出的文档与浏览器缓存，带上鉴权头反而处处掣肘。
+	if d.Media != nil {
+		r.StaticFS(d.Media.PublicPrefix(), http.Dir(d.Media.MediaDir()))
+	}
 
 	r.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, apiPrefix) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, apiPrefix) {
 			response.Fail(c, apperr.ErrNotFound.WithDetail("接口不存在"))
+			return
+		}
+		// 前端产物已内嵌时，其余路径交给单页应用处理。
+		if web.Available() {
+			// gin 在调用 NoRoute 之前已经用 serveError 把状态码预置成 404。
+			// 前端路由必须先把状态改回 200，否则页面能渲染出来，
+			// 但浏览器控制台会一直报 404——这类问题很难从现象定位到原因。
+			if web.IsSPARoute(path) {
+				c.Status(http.StatusOK)
+			}
+			web.ServeSPA().ServeHTTP(c.Writer, c.Request)
 			return
 		}
 		c.JSON(http.StatusNotFound, gin.H{"message": "not found"})
@@ -347,6 +371,16 @@ func registerActivityRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewActivityHandler(d.Activities)
 	// 审计日志含全部用户的操作记录，仅管理员可见。
 	g.GET("/activity-logs", middleware.RequireAuth(), h.List)
+}
+
+func registerUploadRoutes(g *gin.RouterGroup, d Deps) {
+	h := handler.NewUploadHandler(d.Uploads)
+	up := g.Group("/uploads")
+	up.Use(middleware.RequireAuth())
+	{
+		up.POST("/images", h.UploadImages)
+		up.DELETE("/images", h.DeleteImage)
+	}
 }
 
 func registerStatsRoutes(g *gin.RouterGroup, d Deps) {

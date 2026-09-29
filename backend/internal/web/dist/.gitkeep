@@ -1,0 +1,6 @@
+前端构建产物会被复制到这个目录，再由 Go 的 embed 打进二进制。
+
+这里保留一个占位文件是为了让 `go build` 在**没有构建过前端**时也能通过：
+此时 internal/web.Available() 返回 false，服务端只提供 API。
+
+构建顺序由 backend/Makefile 的 `web` 目标保证，不要手动往这里塞文件。
