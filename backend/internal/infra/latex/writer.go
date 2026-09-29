@@ -76,6 +76,8 @@ func writeBlock(sb *strings.Builder, r *Result, b export.Block) error {
 		sb.WriteString("\\par " + writeInlines(r, n.Runs) + "\n")
 	case *export.PageBreak:
 		sb.WriteString("\\newpage\n")
+	case *export.AnswerSpace:
+		writeAnswerSpace(sb, n)
 	case *export.ListItem:
 		// LaTeX 的列表需要 \begin/\end 成对出现，这里用简化写法：
 		// 每个条目单独成段并手工加编号前缀，避免跨段落维护列表状态。
@@ -90,6 +92,33 @@ func writeBlock(sb *strings.Builder, r *Result, b export.Block) error {
 		return fmt.Errorf("latex: 不支持的块类型 %T", b)
 	}
 	return nil
+}
+
+// answerSpaceLineHeight 每行作答空间的高度。
+// 与 DOCX 端 Normal 样式的 1.5 倍行距对齐：行距在两边都必须由格式本身决定，
+// 写进 IR 就等于把这个常量复制一份，两种格式迟早会调歪。
+const answerSpaceLineHeight = "1.5\\baselineskip"
+
+// writeAnswerSpace 预留作答空间。
+//
+// lined 用 \noindent\rule{\linewidth} 画满宽横线，与 Word 段落下边框落在
+// 同一基线位置；blank 只给等高的垂直空白。两种样式行数相同、占高相同，
+// 所以教师在 Word 里校过的版面换到 LaTeX 不会变样。
+func writeAnswerSpace(sb *strings.Builder, a *export.AnswerSpace) {
+	lines := a.Lines
+	if lines < 1 {
+		lines = 1
+	}
+	if a.Lined {
+		row := "\\noindent\\rule{\\linewidth}{0.4pt}\\par\\vspace{" + answerSpaceLineHeight + "}\n"
+		for i := 0; i < lines; i++ {
+			sb.WriteString(row)
+		}
+		return
+	}
+	for i := 0; i < lines; i++ {
+		sb.WriteString("\\par\\noindent\\mbox{}\\par\\vspace{" + answerSpaceLineHeight + "}\n")
+	}
 }
 
 func writeTable(sb *strings.Builder, r *Result, t *export.Table) {

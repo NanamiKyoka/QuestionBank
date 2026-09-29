@@ -53,6 +53,23 @@ type Paragraph struct {
 // PageBreak 分页符。
 type PageBreak struct{}
 
+// AnswerSpace 作答留白。
+//
+// 单独成一个块，而不是预先摊平成若干空段落：blank 与 lined 在两个渲染器里
+// 的实现方式完全不同（Word 靠段落下边框、LaTeX 靠 \rule），
+// 摊平成 Paragraph 之后就只能靠"这一段是不是横线"去反推，
+// 渲染器必须跟着组装层的内部表示一起变。
+//
+// 几何刻意留在渲染器里决定（行高、行距）：IR 只描述"留几行、画不画线"，
+// 这类排版常量由格式本身决定，放进 IR 只会让两种格式的横线越调越不一致。
+type AnswerSpace struct {
+	// Lines 预留行数。小于 1 时渲染器按 1 行兜底——
+	// 导出结果里答题区凭空消失，比行数差一行更难排查。
+	Lines int
+	// Lined 为 true 时每行下方画一条答题横线；false 只留垂直空白。
+	Lined bool
+}
+
 // Table 简单表格。第一行视为表头。
 type Table struct {
 	Rows [][]Cell
@@ -112,11 +129,12 @@ type Image struct {
 // LineBreak 强制换行。
 type LineBreak struct{}
 
-func (*Heading) isBlock()   {}
-func (*Paragraph) isBlock() {}
-func (*PageBreak) isBlock() {}
-func (*Table) isBlock()     {}
-func (*ListItem) isBlock()  {}
+func (*Heading) isBlock()     {}
+func (*Paragraph) isBlock()   {}
+func (*PageBreak) isBlock()   {}
+func (*AnswerSpace) isBlock() {}
+func (*Table) isBlock()       {}
+func (*ListItem) isBlock()    {}
 
 func (*Text) isInline()      {}
 func (*Math) isInline()      {}

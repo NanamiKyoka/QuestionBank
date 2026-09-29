@@ -2,6 +2,7 @@ package export
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -117,13 +118,7 @@ func Assemble(in Input, loader ImageLoader) *Document {
 			doc.Blocks = append(doc.Blocks, &PageBreak{})
 
 		case model.NodeTypeAnswerSpace:
-			lines := attrIntFromJSON(root.Props, "lines")
-			if lines <= 0 {
-				lines = 4
-			}
-			for j := 0; j < lines; j++ {
-				doc.Blocks = append(doc.Blocks, &Paragraph{Runs: []Inline{&Text{Value: " "}}})
-			}
+			doc.Blocks = append(doc.Blocks, answerSpaceOf(root))
 
 		case model.NodeTypeQuestion:
 			blocks := assembleQuestion(root, in, loader, counter)
@@ -161,6 +156,63 @@ func Assemble(in Input, loader ImageLoader) *Document {
 	}
 
 	return doc
+}
+
+// 答题区样式。取值来自节点 props.style，与参考实现一致，不要自造新词。
+const (
+	AnswerStyleBlank = "blank"
+	AnswerStyleLined = "lined"
+)
+
+const (
+	// defaultAnswerLines 未指定行数时的默认值。
+	defaultAnswerLines = 4
+	// maxAnswerLines 行数上限。与参考实现的 1..50 对齐，
+	// 同时兜住前端被改坏时的离谱值——否则一个 nodes=100000 的节点
+	// 会让一次导出写出十万个段落，导出接口直接被拖垮。
+	maxAnswerLines = 50
+	// legacyAnswerLineHeightPx 旧版把留白高度写在 content.height 里，
+	// 按每行 30 像素折算成行数。120/30 = 4 行，与 defaultAnswerLines 一致，
+	// 所以老卷子迁移过来时版面不会出现"跳了一截"。
+	legacyAnswerLineHeightPx = 30
+)
+
+// answerSpaceOf 读出一个答题区块。
+//
+// 契约只有一个：props.lines + props.style。
+//
+// 曾经的坑是前端把高度写在 content.height、这里却只读 props.lines，
+// 于是用户的设置被静默丢弃、永远退化成 4 个空段落。因此对没有 props.lines
+// 的老节点，这里按像素折算把高度翻译回行数，而不是直接忽略。
+func answerSpaceOf(node *model.PaperNode) *AnswerSpace {
+	lines := attrIntFromJSON(node.Props, "lines")
+	if lines <= 0 {
+		lines = legacyAnswerLines(node.Content)
+	}
+	lines = clampAnswerLines(lines)
+	return &AnswerSpace{
+		Lines: lines,
+		Lined: attrStringFromJSON(node.Props, "style") == AnswerStyleLined,
+	}
+}
+
+// legacyAnswerLines 把旧版 content.height（像素）折算成行数。
+func legacyAnswerLines(content model.JSON) int {
+	height := attrFloatFromJSON(content, "height")
+	if height <= 0 {
+		return defaultAnswerLines
+	}
+	return int(math.Round(height / legacyAnswerLineHeightPx))
+}
+
+func clampAnswerLines(n int) int {
+	if n < 1 {
+		return 1
+	}
+	if n > maxAnswerLines {
+		return maxAnswerLines
+	}
+	return n
 }
 
 // counter 题号计数器。
@@ -545,4 +597,16 @@ func attrFloatFromJSON(raw model.JSON, key string) float64 {
 // attrIntFromJSON 从 JSON 属性里取整数。
 func attrIntFromJSON(raw model.JSON, key string) int {
 	return int(attrFloatFromJSON(raw, key))
+}
+
+// attrStringFromJSON 从 JSON 属性里取字符串。
+func attrStringFromJSON(raw model.JSON, key string) string {
+	if raw.IsEmpty() {
+		return ""
+	}
+	var m map[string]any
+	if err := raw.Into(&m); err != nil {
+		return ""
+	}
+	return attrString(m, key)
 }

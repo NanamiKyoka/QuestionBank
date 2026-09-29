@@ -181,6 +181,8 @@ func (w *writer) writeBlock(sb *strings.Builder, b export.Block) error {
 		w.writeHeading(sb, n)
 	case *export.PageBreak:
 		sb.WriteString(`<w:p><w:r><w:br w:type="page"/></w:r></w:p>`)
+	case *export.AnswerSpace:
+		w.writeAnswerSpace(sb, n)
 	case *export.ListItem:
 		w.writeListItem(sb, n)
 	case *export.Table:
@@ -214,6 +216,28 @@ func (w *writer) writeHeading(sb *strings.Builder, h *export.Heading) {
 		w.writeInline(sb, r)
 	}
 	sb.WriteString("</w:p>")
+}
+
+// writeAnswerSpace 预留作答空间。
+//
+// 每行一个空段落，行高沿用 Normal 样式的 1.5 倍行距（见 styles.xml），
+// 与 LaTeX 端的 1.5\baselineskip 是同一套版面参数，两种格式才不会一高一矮。
+// lined 时给每段加一条下边框，横线就落在段落基线上——Word 里没有比这更
+// 简单的"满宽细线"，而表格边框会额外画出左右竖线。
+func (w *writer) writeAnswerSpace(sb *strings.Builder, a *export.AnswerSpace) {
+	lines := a.Lines
+	if lines < 1 {
+		lines = 1
+	}
+	for i := 0; i < lines; i++ {
+		sb.WriteString("<w:p>")
+		if a.Lined {
+			sb.WriteString(`<w:pPr><w:pBdr>` +
+				`<w:bottom w:val="single" w:sz="4" w:space="1" w:color="808080"/>` +
+				`</w:pBdr></w:pPr>`)
+		}
+		sb.WriteString("</w:p>")
+	}
 }
 
 func (w *writer) writeListItem(sb *strings.Builder, li *export.ListItem) {
