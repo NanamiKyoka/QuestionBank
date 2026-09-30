@@ -338,12 +338,23 @@ export function applyPaperOperations(
           results.push({ op: op.op, ok: false, message: `找不到节点 ${id}，未移动` })
           break
         }
-        const to =
-          op.before_id !== undefined
-            ? order.indexOf(op.before_id)
-            : clampIndex(op.position ?? from, order.length)
+        // 两种定位方式活在**不同的坐标系**里，混用会错位一格：
+        //
+        //   before_id —— 「放到某个节点**之前**」，解出来的是**摘除前**的下标。
+        //                 把 [a,b,c] 的 a 放到 c 之前，c 当时在 2；摘掉 a 之后
+        //                 那个位置变成 1，所以要补偿。
+        //   position  —— 「最终落在第几位」，就是目标下标本身，**不补偿**。
+        //                 摘除只改变 from 之后那些节点的下标，不改变"自己
+        //                 该落在哪"。
+        //
+        // 之前两者共用一条补偿，结果 position 永远差一位：向后移落到目标前
+        // 一格，而 position 被 clamp 到末位时前后同下标，直接变成空操作——
+        // 「把第一题移到最后」这种最常见的诉求做不出来。
+        const anchor = op.before_id ?? ''
+        const byAnchor = anchor !== ''
+        const to = byAnchor ? order.indexOf(anchor) : clampIndex(op.position ?? from, order.length)
         if (to === -1) {
-          results.push({ op: op.op, ok: false, message: `找不到节点 ${op.before_id}，未移动` })
+          results.push({ op: op.op, ok: false, message: `找不到节点 ${anchor}，未移动` })
           break
         }
         if (to === from) {
@@ -351,9 +362,7 @@ export function applyPaperOperations(
           break
         }
         order.splice(from, 1)
-        // 摘掉自己之后，后面的下标整体前移一位：
-        // 不补这一步，"移到第 3 位"会落到第 4 位上。
-        const target = to > from ? to - 1 : to
+        const target = byAnchor && to > from ? to - 1 : to
         order.splice(target, 0, id)
         results.push({ op: op.op, ok: true, message: `已移动到第 ${target + 1} 位` })
         break
