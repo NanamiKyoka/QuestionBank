@@ -44,6 +44,12 @@ type ImportService struct {
 	// 而原始试卷常常是尚未公开的教研材料，把它放进去等于顺手发布。
 	// 它用的是 uploads 目录——只在本机，不对外。
 	uploadDir string
+	// papers 用于整卷导入：入库之后按大纲建一份可编辑的试卷。
+	//
+	// 单列一个字段而不是复用 questions：两条路径的生命周期不同
+	// （题目逐题校验后写入，试卷是整棵树一次替换），混在一起会让
+	// 构造函数的参数列表长到看不出依赖。
+	papers *PaperService
 }
 
 func NewImportService(repos *Repos, aiConfig *AIConfigService, questions *QuestionService) *ImportService {
@@ -68,6 +74,12 @@ func (s *ImportService) WithStorage(st *storage.Local) *ImportService {
 // 静默换个位置存用户材料，比直接拒绝更糟。
 func (s *ImportService) WithUploadDir(dir string) *ImportService {
 	s.uploadDir = dir
+	return s
+}
+
+// WithPapers 注入试卷服务，用于整卷导入。
+func (s *ImportService) WithPapers(p *PaperService) *ImportService {
+	s.papers = p
 	return s
 }
 
@@ -203,12 +215,14 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		drafts      []importing.Draft
 		modelLabel  string
 		docWarnings []string
+		outline     []importing.Outline
 		sourceFiles = []string{task.OriginalFilename}
 	)
 
 	if method == importing.MethodTemplate {
 		// 规则解析：确定性的，毫秒级返回，不消耗任何额度。
-		drafts, docWarnings = importing.ParseTemplate(content, task.OriginalFilename)
+		// 走 Full 版本是为了拿到版面大纲——整卷导入要靠它还原卷面。
+		drafts, outline, docWarnings = importing.ParseTemplateFull(content, task.OriginalFilename)
 		modelLabel = "规则解析（未调用模型）"
 	} else {
 		extracted, err := resolved.Provider.ExtractQuestions(callCtx, ai.ExtractRequest{
@@ -231,6 +245,10 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		}
 		drafts = importing.Normalize(extracted)
 		modelLabel = resolved.Display
+		// 模型只吐题目、不吐版面。这里给一份"只有题目引用"的大纲：
+		// 整卷导入仍然可用，只是没有标题与说明文字——
+		// 凭空造出原文没有的标题比没有标题糟糕得多。
+		outline = importing.OutlineForDrafts(len(drafts))
 		task.TotalCount = len(drafts)
 		task.MarkCompleted()
 		if err := s.saveTaskState(ctx, task); err != nil {
@@ -251,6 +269,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 			Model:        modelLabel,
 			Method:       string(method),
 			SourceFiles:  sourceFiles,
+			Outline:      outline,
 			ElapsedMs:    elapsed.Milliseconds(),
 		}, nil
 	}
@@ -305,6 +324,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		Model:        modelLabel,
 		Method:       string(method),
 		SourceFiles:  sourceFiles,
+		Outline:      outline,
 		Warnings:     docWarnings,
 		ElapsedMs:    time.Since(started).Milliseconds(),
 	}, nil
@@ -649,6 +669,20 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 	if err := s.repos.Questions.SetImportTask(ctx, createdIDs, task.ID); err != nil {
 		slog.Warn("回填题目溯源失败",
 			"task_id", task.ID, "count", len(createdIDs), "error", err)
+	}
+
+	// 整卷导入：题目入库之后，按大纲建一份可编辑的试卷。
+	//
+	// 放在最后、且失败不影响题目：题目此刻已经落库并回传了 created_ids，
+	// 丢一份排版远比丢几十道题轻。所以失败只写进响应，不返回 error。
+	if req.SaveAsPaper {
+		paperID, err := s.paperFromImport(ctx, user, subjectID, req, createdIDOf)
+		if err != nil {
+			resp.PaperError = err.Error()
+			slog.Warn("整卷导入建卷失败", "task_id", task.ID, "error", err)
+		} else {
+			resp.PaperID = paperID
+		}
 	}
 
 	// 记录本次入库结果。

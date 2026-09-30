@@ -199,7 +199,6 @@ export interface ExtractResult {
   model: string
   elapsed_ms: number
 }
-
 export interface CommitResult {
   task_id: number
   created_count: number
@@ -208,6 +207,14 @@ export interface CommitResult {
   failures: { index: number; temp_id?: string; stem?: string; error: string }[]
   /** 未能匹配到的知识点/标签名。系统不会自动创建它们。 */
   unresolved_names?: string[]
+
+  /** 整卷导入建出来的试卷 id；没勾选建卷或建卷失败时缺席。 */
+  paper_id?: number
+  /**
+   * 建卷失败的原因。题目此刻**已经入库**，所以这不是导入失败，
+   * 界面上必须把两者分开说，否则用户会以为整批白导了而重复导入。
+   */
+  paper_error?: string
 }
 
 export const importApi = {
@@ -228,6 +235,22 @@ export const importApi = {
       default_tag_ids?: number[]
       default_knowledge_point_ids?: number[]
       status?: QuestionStatus
+      /**
+       * 整卷导入：入库的同时按大纲建一份可编辑的试卷。
+       * 默认关闭——只想把题存进题库的人不该凭空多出一份试卷。
+       */
+      save_as_paper?: boolean
+      paper_title?: string
+      /** 版面大纲，draft_index 指向本次提交的 drafts 下标。 */
+      outline?: {
+        kind: 'heading' | 'rich_text' | 'question' | 'page_break' | 'answer_space' | 'degraded'
+        text?: string
+        level?: number
+        draft_index?: number
+        lines?: number
+        style?: string
+        note?: string
+      }[]
     },
   ) => post<CommitResult>(`/subjects/${subjectId}/imports/commit`, payload),
 

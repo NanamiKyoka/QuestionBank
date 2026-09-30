@@ -11,6 +11,7 @@ import {
   type ImportDraftNode,
   type ImportExtractResponse,
   type ImportMode,
+  type ImportOutline,
   type ImportParseMethod,
 } from '@/api/importTask'
 import type { KnowledgePoint, QuestionStatus, Tag } from '@/api/types'
@@ -70,9 +71,19 @@ const runMeta = ref<{
   elapsed_ms: number
   task_id: number
   source_files: string[]
+  /** 版面大纲：标题、说明文字与题目引用的顺序。整卷导入靠它还原卷面。 */
+  outline: ImportOutline[]
   total: number
 } | null>(null)
 const commitResult = ref<CommitResult | null>(null)
+
+/**
+ * 整卷导入：把这份卷子还原成可编辑的试卷。
+ *
+ * 默认关闭。只想把 200 道题存进题库的用户，凭空多出一份试卷只是垃圾数据。
+ */
+const wholePaperEnabled = ref(false)
+const wholePaperTitle = ref('')
 
 const knowledgePoints = ref<KnowledgePoint[]>([])
 const tags = ref<Tag[]>([])
@@ -382,6 +393,7 @@ function acceptResult(result: ImportExtractResponse) {
     elapsed_ms: result.elapsed_ms,
     task_id: result.task_id,
     source_files: result.source_files ?? [],
+    outline: result.outline ?? [],
     total: result.total,
   }
 
@@ -497,13 +509,41 @@ async function commit() {
   }
   committing.value = true
   try {
+    // 整卷导入：只把**已勾选**的草稿按大纲排进新试卷。
+    // 大纲里的下标是相对整个草稿数组的，这里必须换算成
+    // "第几个被勾选的"，否则跳选题会让整张卷子错位。
+    const pickedIndexes = drafts.value
+      .map((_, i) => i)
+      .filter((i) => selected.value.has(i))
+    const outline: ImportOutline[] = runMeta.value?.outline ?? []
+    const remapped: ImportOutline[] = wholePaperEnabled.value
+      ? outline
+          .map((it: ImportOutline): ImportOutline => {
+            if (it.kind !== 'question') return it
+            const picked = pickedIndexes[it.draft_index ?? -1]
+            // 被取消勾选的题在这次提交里不存在，换成 -1 让后端跳过它，
+            // 而不是把后面的题整体前移一位。
+            return { ...it, draft_index: picked ?? -1 }
+          })
+          .filter((it: ImportOutline) => it.kind !== 'question' || it.draft_index !== -1)
+      : []
+
     const result = await importApi.commit(subject.currentId, {
       drafts: selectedDrafts.value,
       default_tag_ids: defaults.default_tag_ids,
       default_knowledge_point_ids: defaults.default_knowledge_point_ids,
       status: defaults.status,
+      save_as_paper: wholePaperEnabled.value,
+      paper_title: wholePaperTitle.value.trim() || undefined,
+      outline: remapped,
     })
     commitResult.value = result
+
+    // 整卷导入失败**不影响题目入库**：题目此刻已经在库里了，
+    // 这里必须把话说清楚，否则用户会以为整批白导了。
+    if (result.paper_error) {
+      ElMessage.warning(`题目已入库，但试卷没能建出来：${result.paper_error}`)
+    }
 
     // 部分成功是常态：某道题校验不过不该让整批失败。
     // 这里如实告知两边各有多少，并把成功的那部分从草稿里摘掉，
@@ -547,6 +587,11 @@ async function commit() {
 
 function goToQuestions() {
   void router.push({ name: 'questions' })
+}
+
+/** 打开整卷导入建出来的那份试卷，直接进编辑台。 */
+function goToPaper(paperId: number) {
+  void router.push({ name: 'paper-editor', params: { id: String(paperId) } })
 }
 </script>
 
@@ -783,6 +828,23 @@ function goToQuestions() {
         </el-button>
         <span class="text-xs text-gray-400">只写入你勾选的题目。未匹配到的知识点名不会自动创建。</span>
       </div>
+
+      <!-- 整卷导入 -->
+      <div class="mt-3 border-t border-gray-100 pt-3">
+        <el-checkbox v-model="wholePaperEnabled">
+          同时把这份卷子还原成可编辑的试卷
+        </el-checkbox>
+        <div class="mt-1 text-xs text-gray-400">
+          保留大题标题与题间说明。建卷失败不影响题目入库。
+        </div>
+        <el-input
+          v-if="wholePaperEnabled"
+          v-model="wholePaperTitle"
+          placeholder="试卷标题（留空则用来源文件名）"
+          class="mt-2 max-w-md"
+          clearable
+        />
+      </div>
     </el-card>
 
     <!-- 结果 -->
@@ -793,6 +855,28 @@ function goToQuestions() {
         <el-tag v-if="commitResult.failed_count" type="danger">失败 {{ commitResult.failed_count }}</el-tag>
         <el-button text type="primary" size="small" @click="goToQuestions">去题库查看 →</el-button>
       </div>
+
+      <!-- 建卷结果必须和入库结果分开说：题目已经进库了 -->
+      <el-alert
+        v-if="commitResult.paper_id"
+        type="success"
+        :closable="false"
+        show-icon
+        class="mb-2"
+      >
+        已按版面创建试卷。
+        <el-button text type="primary" size="small" @click="goToPaper(commitResult.paper_id)">
+          打开试卷 →
+        </el-button>
+      </el-alert>
+      <el-alert
+        v-else-if="commitResult.paper_error"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-2"
+        :title="`题目已入库，但试卷没能建出来：${commitResult.paper_error}`"
+      />
 
       <el-table v-if="commitResult.failures.length" :data="commitResult.failures" size="small">
         <el-table-column prop="index" label="#" width="60" />

@@ -144,9 +144,19 @@ var cnNumPattern = regexp.MustCompile(`[一二三四五六七八九十百零]`)
 // 第二个返回值是**整篇文档级**的提示（不是某一道题的问题），
 // 例如"文末答案区有 5 道题找不到对应题目"。它只记日志，不污染单题 warnings。
 func ParseTemplate(text, sourceFile string) ([]Draft, []string) {
+	drafts, _, warns := ParseTemplateFull(text, sourceFile)
+	return drafts, warns
+}
+
+// ParseTemplateFull 与 ParseTemplate 相同，但额外返回版面大纲。
+//
+// 大纲描述的是"这份卷子长什么样"，而草稿描述的是"这里有哪些题"。
+// 两者分开，是因为导入一道题不需要版面，而把一份卷子还原成可编辑的
+// 组卷文档才需要——而丢掉大题标题就再也补不回来了。
+func ParseTemplateFull(text, sourceFile string) ([]Draft, []Outline, []string) {
 	lines := preprocessLines(text)
 
-	blocks, section, docWarn := scanDocument(lines)
+	blocks, section, outline, docWarn := scanDocument(lines)
 
 	answers, analyses := parseAnswerSection(section)
 
@@ -156,7 +166,7 @@ func ParseTemplate(text, sourceFile string) ([]Draft, []string) {
 	for i := range drafts {
 		drafts[i].SourceFile = sourceFile
 	}
-	return drafts, docWarn
+	return drafts, outline, docWarn
 }
 
 // preprocessLines 规范化行：统一换行、去掉引用前缀、
@@ -265,19 +275,45 @@ type rawBlock struct {
 	tagged bool
 }
 
-// scanDocument 把整篇文本切成题块 + 文末答案区。
-func scanDocument(lines []string) (blocks []rawBlock, answerSection []string, docWarn []string) {
+// scanDocument 把整篇文本切成题块 + 文末答案区 + 版面大纲。
+//
+// 大纲是从扫描过程里**顺带**记下来的，不是事后重新推断的：
+// 扫描时本来就要判断"这行是不是大题标题"，既然判了，把结论留下来
+// 几乎不花成本；而事后重推只能靠再扫一遍原文，且推得出来的更少。
+func scanDocument(lines []string) (blocks []rawBlock, answerSection []string, outline []Outline, docWarn []string) {
 	tagged := hasContentTag(lines)
 
 	var cur *rawBlock
 	// orphan 记下当前没有题块时经过的行：既用于兜底，也用于说明
 	// 为什么开头的几行没有被当成题目。
 	var orphan []string
-	flush := func() {
-		if cur != nil {
-			blocks = append(blocks, *cur)
-			cur = nil
+
+	// pendingText 攒题块之间的说明文字，等遇到下一个标题或题目再落成大纲节点。
+	// 不边扫边落是为了不产生大量单行节点——一段连续的说明应该是一个节点。
+	var pendingText []string
+	flushText := func() {
+		if t := strings.TrimSpace(strings.Join(pendingText, "\n")); t != "" {
+			outline = append(outline, RichText(t))
 		}
+		pendingText = nil
+	}
+
+	// flush 收尾当前题块，并**同时**往大纲里追一条题目引用。
+	//
+	// 把这一步放在 flush 里而不是散落在各个切题点上，是为了守住
+	// "每个题块恰好对应一条大纲引用"这个不变量：只要分散写，
+	// 迟早会出现某条切题路径忘了记、或记了两次的情况。
+	// 题号用 blocks 里的下标而不是题目 id：草稿要到入库之后才有 id，
+	// 而大纲必须能和草稿数组一一对应。
+	flush := func() {
+		if cur == nil {
+			return
+		}
+		// 攒着的说明文字属于"这道题之前"，先于题目落进大纲。
+		flushText()
+		blocks = append(blocks, *cur)
+		outline = append(outline, QuestionRef(len(blocks)-1))
+		cur = nil
 	}
 
 	for i := 0; i < len(lines); i++ {
@@ -296,12 +332,28 @@ func scanDocument(lines []string) (blocks []rawBlock, answerSection []string, do
 		seen := len(blocks) > 0 || cur != nil
 		if section, ok := matchAnswerSection(lines, i, seen); ok {
 			flush()
-			return blocks, section, docWarn
+			flushText()
+			return blocks, section, outline, docWarn
 		}
 
-		// 3) 大题标题：是版面结构，不是题目，结束当前题块。
+		// 3) 大题标题：是版面结构，不是题目，结束当前题块，
+		//    同时把标题本身记进大纲——它是这份卷子的一部分。
 		if isSectionHeading(line) {
 			flush()
+			flushText()
+			if text := strings.TrimSpace(headingMarkupPattern.ReplaceAllString(line, "")); text != "" {
+				outline = append(outline, Heading(sectionHeadingLevel(line), text))
+			}
+			continue
+		}
+
+		// Markdown 标题（"## 第二部分"）同样属于版面。
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			flush()
+			flushText()
+			if text := strings.TrimSpace(headingMarkupPattern.ReplaceAllString(line, "")); text != "" {
+				outline = append(outline, Heading(markdownHeadingLevel(line), text))
+			}
 			continue
 		}
 
@@ -318,6 +370,11 @@ func scanDocument(lines []string) (blocks []rawBlock, answerSection []string, do
 			cur.lines = append(cur.lines, line)
 		} else {
 			orphan = append(orphan, line)
+			// 题块之外的非空行属于版面（考生须知、注意事项），
+			// 攒起来等遇到下一个标题或题目时落成说明文字。
+			// 丢标题可以接受，丢说明文字不行——那往往是"本题不需..."之类的
+			// 作答要求，漏了会让导入出来的卷子误导考生。
+			pendingText = append(pendingText, line)
 		}
 		// 题块之外的散文（封面、说明、注意事项）不产生题目，也不报错：
 		// 试卷开头那几行说明文字本来就不是题。
@@ -335,9 +392,44 @@ func scanDocument(lines []string) (blocks []rawBlock, answerSection []string, do
 	// 只在**一个题块都没切出来**时启用；已经切出过题块时，开头那几行
 	// 就确实是卷头说明，不该硬凑成题目。
 	if !tagged && len(blocks) == 0 && len(orphan) > 0 {
+		flushText()
 		blocks = append(blocks, rawBlock{lines: orphan})
+		outline = append(outline, QuestionRef(0))
+		pendingText = nil
 	}
-	return blocks, nil, docWarn
+	flushText()
+	return blocks, nil, outline, docWarn
+}
+
+// sectionHeadingLevel 大题标题的层级。
+//
+// "一、选择题" 是一级；"（一）" 这种二级编号判成二级。
+// 判不准时一律给 1：层级猜错会让标题在导出的卷子里偏大或偏小，
+// 而漏判成标题才是最糟的（会变成一道奇怪的题）。
+func sectionHeadingLevel(line string) int {
+	if cnSectionHeadingPattern.MatchString(line) {
+		return 1
+	}
+	return 2
+}
+
+// cnSectionHeadingPattern 一级大题标题：「一、」「二．」开头。
+var cnSectionHeadingPattern = regexp.MustCompile(`^\s*[一二三四五六七八九十百]+\s*[、．.]`)
+
+// markdownHeadingLevel 取 Markdown 标题的层级（"# x" → 1）。
+func markdownHeadingLevel(line string) int {
+	t := strings.TrimLeft(line, " ")
+	level := 0
+	for level < len(t) && t[level] == '#' {
+		level++
+	}
+	if level == 0 {
+		return 1
+	}
+	if level > 6 {
+		level = 6
+	}
+	return level
 }
 
 // hasContentTag 判断文档是否使用了题目标签。

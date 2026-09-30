@@ -145,7 +145,9 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 		WithStorage(mediaStore).
 		// 原始上传件放 uploads 目录：它不对外提供静态服务，
 		// 未公开的试卷不该因为"图省事放进 media"而被发布出去。
-		WithUploadDir(cfg.Storage.UploadDir)
+		WithUploadDir(cfg.Storage.UploadDir).
+		// 整卷导入：入库之后按大纲建一份可编辑的试卷。
+		WithPapers(service.NewPaperService(repos))
 	importWorker := service.NewImportWorker(importSvc)
 	importSvc = importSvc.WithWorker(importWorker)
 	importWorker.Start(ctx)

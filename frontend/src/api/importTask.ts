@@ -67,10 +67,32 @@ export interface ImportExtractResponse {
   method?: string
   /** 本次覆盖的来源文件；.zip 会有多个。 */
   source_files?: string[]
+  /** 版面大纲：标题、说明文字与题目引用的顺序。整卷导入靠它还原卷面。 */
+  outline?: ImportOutline[]
   /** 文档级提示（例如压缩包里跳过了不安全的条目），与逐题警告不同。 */
   warnings?: string[]
   model: string
   elapsed_ms: number
+}
+
+/**
+ * 版面大纲的一个节点。
+ *
+ * 与草稿是两套东西：草稿回答"这里有哪些题"，大纲回答"这份卷子长什么样"。
+ * 合并成一个结构会让只想导题的人也被迫面对版面概念。
+ */
+export interface ImportOutline {
+  kind: 'heading' | 'rich_text' | 'question' | 'page_break' | 'answer_space' | 'degraded'
+  text?: string
+  /** heading 专用，1 起。 */
+  level?: number
+  /** question 专用：指向 drafts 数组里的第几道题。 */
+  draft_index?: number
+  /** answer_space 专用。 */
+  lines?: number
+  style?: string
+  /** degraded 专用：说明丢了什么、为什么。 */
+  note?: string
 }
 
 /**

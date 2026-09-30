@@ -55,6 +55,11 @@ type ExtractResponse struct {
 	// SourceFiles 本次覆盖到的文件（压缩包会包含包内的各个文档）。
 	// 审核界面靠它把题目按来源分组。
 	SourceFiles []string `json:"source_files"`
+	// Outline 版面大纲：标题、说明文字与题目引用的顺序。
+	//
+	// 模型路径下它只含题目引用（模型不吐版面，不该凭空编造标题）；
+	// 规则解析路径下还包含标题与说明文字。
+	Outline []importing.Outline `json:"outline"`
 	// Warnings 文档级提示（如压缩包里跳过了不安全的条目），与逐题警告不同。
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -73,6 +78,18 @@ type CommitRequest struct {
 
 	// Filename 本次入库批次的来源名称。语义同 ExtractRequest.Filename。
 	Filename string `json:"filename" binding:"omitempty,max=255"`
+
+	// ---- 整卷导入：顺手把这份卷子还原成可编辑的试卷 ----
+	//
+	// 默认关闭。导入题目和导入试卷是两种意图：用户只想把 200 道题存进
+	// 题库时，凭空多出一份试卷只是垃圾数据。
+
+	// SaveAsPaper 是否在入库的同时按大纲创建一份试卷。
+	SaveAsPaper bool `json:"save_as_paper"`
+	// PaperTitle 试卷标题；留空时用 Filename 或"导入 YYYY-MM-DD"。
+	PaperTitle string `json:"paper_title" binding:"omitempty,max=200"`
+	// Outline 版面大纲，draft_index 指向 Drafts 数组里的第几道题。
+	Outline []importing.Outline `json:"outline"`
 }
 
 // CommitFailure 单题入库失败。
@@ -102,6 +119,14 @@ type CommitResponse struct {
 	// （"函数单调性"/"单调性"/"函数的单调性"），事后清理远比当初手工选一次麻烦。
 	// 这里回传给前端，由用户决定是否去知识点/标签管理里补建。
 	UnresolvedNames []string `json:"unresolved_names,omitempty"`
+
+	// PaperID SaveAsPaper 为真且建卷成功时的试卷 id。
+	//
+	// 建卷失败**不影响题目入库**：题目已经落库并回传了 created_ids，
+	// 丢一份排版远比丢几十道题轻。失败原因放在 PaperError 里。
+	PaperID uint `json:"paper_id,omitempty"`
+	// PaperError 建卷失败的���因；成功时为空。
+	PaperError string `json:"paper_error,omitempty"`
 }
 
 // ImportTaskResponse 导入任务记录。
