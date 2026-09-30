@@ -17,24 +17,17 @@ import {
   type ModuleContent,
 } from '@/api/paper'
 import type { QuestionBrief } from '@/api/types'
-import RichContent from '@/components/RichContent.vue'
 import CompositionNumberingPanel from '@/components/CompositionNumberingPanel.vue'
 import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
 import CompositionAiChangesBar from '@/components/CompositionAiChangesBar.vue'
-import RichTextEditor from '@/components/editor/RichTextEditor.vue'
+import PaperTiptapCanvas from '@/components/editor/PaperTiptapCanvas.vue'
 import { emptyDoc } from '@/lib/richdoc'
 import {
-  answerTextOf,
-  blockLabel,
   computeNumbers,
-  displayNumbers,
-  headingLevelOf,
-  nodeProps,
   numberOf,
   propsWithNumber,
   propsWithScore,
   roundScore,
-  scoreOf,
   totalScoreOf,
 } from '@/lib/paperView'
 import { abandonInflightClientTools, answerClientToolFrame } from '@/composables/useAiClientTools'
@@ -91,13 +84,6 @@ const pickerHasMore = computed(() => pickerRows.value.length < pickerTotal.value
 /** 答题区样式。取值与后端 domain / 导出 IR 一一对应，不要自造新词。 */
 type AnswerSpaceStyle = 'blank' | 'lined'
 
-/** 块编辑器覆盖的节点类型。
- *
- * 答题区也在其中：它只有"行数 + 样式"两个块属性，和标题的级别同性质，
- * 再单开一个弹窗只会让工具栏多一个入口。
- */
-type BlockEditorType = 'rich_text' | 'heading' | 'answer_space'
-
 /** 题目节点的 props 类型来自 api/paper.ts（QuestionNodeProps）：
  *
  * 分值必须落在 props 上而不是 content 里——服务端 sumScore 与导出器都只读
@@ -115,17 +101,10 @@ interface AnswerSpaceProps {
  *
  * 老数据把留白高度写在 content.height 上（默认 120px），120/30 = 4 行，
  * 与导出端一直硬编码的 4 个空段落吻合，所以老卷子翻译过来时版面不会跳。
+ * 像素→行数的换算与行数上下限都在 `paperDocument` 里（画布的 NodeView
+ * 用的就是它），这里只剩新建块时的默认值。
  */
-const ANSWER_LINE_HEIGHT_PX = 30
 const DEFAULT_ANSWER_LINES = 4
-/** 行数上下限，与参考实现的 1..50 一致，避免手滑输出一整页空白。 */
-const MIN_ANSWER_LINES = 1
-const MAX_ANSWER_LINES = 50
-
-function clampAnswerLines(n: number): number {
-  if (!Number.isFinite(n)) return DEFAULT_ANSWER_LINES
-  return Math.min(Math.max(Math.round(n), MIN_ANSWER_LINES), MAX_ANSWER_LINES)
-}
 
 /**
  * 题号、分值、文案的计算全部来自 `@/lib/paperView`。
@@ -137,17 +116,6 @@ function clampAnswerLines(n: number): number {
  * 写入类的操作仍然留在这里，因为它们要顺带标脏——`dirty` 是视图的状态，
  * 不属于纯计算。
  */
-
-// ---- 块编辑 ----
-const blockVisible = ref(false)
-const blockForm = reactive({
-  id: '' as string,
-  nodeType: 'rich_text' as BlockEditorType,
-  level: 1,
-  lines: DEFAULT_ANSWER_LINES,
-  answerStyle: 'blank' as AnswerSpaceStyle,
-  content: emptyDoc() as unknown,
-})
 
 // ---- 设置 ----
 const settingsVisible = ref(false)
@@ -196,8 +164,10 @@ const questionNodes = computed(() => topNodes.value.filter((n) => n.node_type ==
  * 写进去的；没填过才按出现顺序数一遍。优先级必须和导出器一致
  * （backend/internal/export/assemble.go 的 numberLabelFromProps），
  * 否则界面上写着 1.1、导出来却是 3.，比没有覆盖还难查。
+ *
+ * 卷面题号现在由画布的 NodeView 自己算（`displayNumbers`），
+ * 这个视图不再需要一份——留两份只会各自过期。
  */
-const questionNumbers = computed(() => displayNumbers(topNodes.value))
 
 const questionCount = computed(() => questionNodes.value.length)
 
@@ -446,12 +416,39 @@ function addQuestions(rows: QuestionBrief[]) {
   ElMessage.success(`已加入 ${rows.length} 道题，记得保存`)
 }
 
+/**
+ * 插入一个说明文字块。
+ *
+ * 直接插入、就地编辑，不再弹对话框：画布上这个块本身就是可敲字的文本块，
+ * 弹窗等于把内容从它所在的位置拿走再放回来，反而绕远。
+ */
 function addRichText() {
-  openBlockEditor(null, 'rich_text')
+  appendNode({
+    id: newID(),
+    parent_id: null,
+    node_kind: 'block',
+    node_type: 'rich_text',
+    content: emptyDoc(),
+    props: {},
+    schema_version: 1,
+    source_question_node_id: null,
+    anchor_before_node_id: null,
+  })
 }
 
+/** 插入一个标题块。层级用默认的一级，插进去后可在块内切换。 */
 function addHeading() {
-  openBlockEditor(null, 'heading')
+  appendNode({
+    id: newID(),
+    parent_id: null,
+    node_kind: 'block',
+    node_type: 'heading',
+    content: emptyDoc(),
+    props: { level: 1 },
+    schema_version: 1,
+    source_question_node_id: null,
+    anchor_before_node_id: null,
+  })
 }
 
 function addPageBreak() {
@@ -508,144 +505,67 @@ function toggleAnswerModule() {
   dirty.value = true
 }
 
-function setModuleScope(scope: 'all' | 'before') {
-  const module = answerModule.value
-  if (!module) return
-  module.content = { scope } satisfies ModuleContent
+// ---- 画布 ----
+
+/**
+ * 画布报上来的新节点树。
+ *
+ * 画布不持有"当前节点数组"，事实源始终是这里的 `nodes`：它每次改动都把
+ * **完整**的树交回来，由这一层决定标脏与保存时机。
+ *
+ * 直接整体替换而不是逐块合并：排版是全局的，插入一道题会让后面所有题号
+ * 变化，逐块合并反而要处理"哪些块变了"这个更难的问题。
+ */
+function onCanvasUpdate(next: PaperNode[]) {
+  nodes.value = next
   dirty.value = true
+  scheduleAutoSave()
 }
 
-function moveNode(node: PaperNode, delta: number) {
-  const list = topNodes.value
-  const index = list.findIndex((n) => n.id === node.id)
-  const target = index + delta
-  if (index < 0 || target < 0 || target >= list.length) return
-
-  const other = list[target]
-  const tmp = node.position
-  node.position = other.position
-  other.position = tmp
-  renormalize()
-  dirty.value = true
-}
-
-function removeNode(node: PaperNode) {
-  // 连同其子节点（解析条目）一起移除，否则会留下孤儿节点。
-  nodes.value = nodes.value.filter((n) => n.id !== node.id && n.parent_id !== node.id)
-  renormalize()
-  dirty.value = true
-}
-
-function removeNodeWithConfirm(node: PaperNode) {
-  const label =
-    node.node_type === 'question'
-      ? `第 ${questionNumbers.value.get(node.id) ?? '?'} 题`
-      : node.node_type === 'question_details'
-        ? '解析模块'
-        : '该内容块'
-  ElMessageBox.confirm(`确定从试卷中移除${label}吗？`, '移除确认', {
-    type: 'warning',
-    confirmButtonText: '移除',
-    cancelButtonText: '取消',
-  })
-    .then(() => removeNode(node))
-    .catch(() => undefined)
-}
-
-/** 返回类型谓词而非 boolean：模板里的 v-if 才能顺带把 node_type 收窄成
- *  块编辑器的可编辑类型，省掉一次手动断言。 */
-function canEditBlock(node: PaperNode): node is PaperNode & { node_type: BlockEditorType } {
-  return (
-    node.node_type === 'rich_text' || node.node_type === 'heading' || node.node_type === 'answer_space'
+/**
+ * 画布转换时丢了节点（正常恒为空）。
+ *
+ * 不静默吞掉：会走到这里说明文档里出现了画布不认识的节点类型，
+ * 继续编辑就会把它写没了。宁可打断用户，也不能让排版悄悄消失。
+ */
+function onDroppedNodes(dropped: { id: string; type: string }[]) {
+  if (!dropped.length) return
+  ElMessage.warning(
+    `有 ${dropped.length} 个块的类型无法识别（${dropped.map((d) => d.type).join('、')}），已跳过；请保存前先确认内容。`,
   )
 }
 
-function openEditableBlock(node: PaperNode) {
-  if (!canEditBlock(node)) return
-  openBlockEditor(node, node.node_type)
+// ---- 自动保存 ----
+
+/** 自动保存的去抖窗口。 */
+const AUTO_SAVE_DELAY_MS = 1500
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 排一次自动保存。
+ *
+ * 只在"有编辑权限 + 没有待确认的 AI 改动"时才排：
+ *  - 没有权限时保存必然被拒，排了只会反复弹错；
+ *  - AI 的改动还挂在确认条上时落库，会把用户还没决定要不要的那版写进去。
+ *    （这条与参考实现的自动保存闸门一致。）
+ */
+function scheduleAutoSave() {
+  if (!canEdit.value) return
+  if (pendingChange.value) return
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null
+    // silent：自动保存不该每次弹一个"已保存"打断输入。
+    void save({ silent: true })
+  }, AUTO_SAVE_DELAY_MS)
 }
 
-/** 答题区行数。老节点把留白高度写在 content.height 上，
- *  这里读的时候顺手翻译成行数——否则一次编辑就会把用户先前设的
- *  留白静默改回默认值，而界面上看不出任何异常。 */
-function answerLinesOf(node: PaperNode): number {
-  const { lines } = nodeProps<AnswerSpaceProps>(node)
-  if (typeof lines === 'number' && lines > 0) {
-    return clampAnswerLines(lines)
+/** 取消尚未触发的自动保存（离开页面、手动保存、应用 AI 改动时用）。 */
+function cancelAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
   }
-  const legacyHeight = (node.content as { height?: number } | null)?.height
-  if (typeof legacyHeight === 'number' && legacyHeight > 0) {
-    return clampAnswerLines(legacyHeight / ANSWER_LINE_HEIGHT_PX)
-  }
-  return DEFAULT_ANSWER_LINES
-}
-
-function answerStyleOf(node: PaperNode): AnswerSpaceStyle {
-  return nodeProps<AnswerSpaceProps>(node).style === 'lined' ? 'lined' : 'blank'
-}
-
-function openBlockEditor(node: PaperNode | null, type: BlockEditorType) {
-  if (node) {
-    blockForm.id = node.id
-    blockForm.nodeType = node.node_type as BlockEditorType
-    blockForm.content = node.content ?? emptyDoc()
-    blockForm.level = headingLevelOf(node)
-    blockForm.lines = answerLinesOf(node)
-    blockForm.answerStyle = answerStyleOf(node)
-  } else {
-    blockForm.id = ''
-    blockForm.nodeType = type
-    blockForm.content = type === 'heading' ? { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] } : emptyDoc()
-    blockForm.level = 1
-    blockForm.lines = DEFAULT_ANSWER_LINES
-    blockForm.answerStyle = 'blank'
-  }
-  blockVisible.value = true
-}
-
-const blockDialogTitle = computed(() =>
-  blockForm.nodeType === 'heading'
-    ? '编辑标题'
-    : blockForm.nodeType === 'answer_space'
-      ? '编辑答题区'
-      : '编辑说明文字',
-)
-
-/** 把块编辑器的表单折成节点 props。 */
-function blockPropsOf(): Record<string, unknown> {
-  if (blockForm.nodeType === 'heading') return { level: blockForm.level }
-  if (blockForm.nodeType === 'answer_space') {
-    return { lines: clampAnswerLines(blockForm.lines), style: blockForm.answerStyle }
-  }
-  return {}
-}
-
-function submitBlock() {
-  const props = blockPropsOf()
-  // 答题区没有富文本正文，content 必须置空，否则会把上一次编辑标题时
-  // 留在表单里的富文本写进答题区节点。
-  const content = blockForm.nodeType === 'answer_space' ? null : blockForm.content
-  if (blockForm.id) {
-    const node = nodes.value.find((n) => n.id === blockForm.id)
-    if (node) {
-      node.content = content
-      node.props = props
-      dirty.value = true
-    }
-  } else {
-    appendNode({
-      id: newID(),
-      parent_id: null,
-      node_kind: 'block',
-      node_type: blockForm.nodeType,
-      content,
-      props,
-      schema_version: 1,
-      source_question_node_id: null,
-      anchor_before_node_id: null,
-    })
-  }
-  blockVisible.value = false
 }
 
 // ---- 保存 ----
@@ -660,6 +580,9 @@ async function save(options: { silent?: boolean } = {}) {
     ElMessage.warning('你没有编辑这份试卷的权限')
     return false
   }
+  // 手动保存要掐掉已经排上的自动保存：否则保存完成后 1.5 秒又来一次，
+  // 白白多一轮请求，还会把 revision 又推一格。
+  cancelAutoSave()
   saving.value = true
   try {
     const result = await paperApi.replaceNodes(paperId.value, revision.value, toInputs())
@@ -916,6 +839,9 @@ function stopChat() {
 }
 
 onBeforeUnmount(() => {
+  // 先掐掉待触发的自动保存：组件都拆了还去改 nodes/revision 没有意义，
+  // 而 silent 保存失败时的提示也无人可看。
+  cancelAutoSave()
   chatController?.abort()
   // 离开页面时把还在途的票据结清：处理器多半只是没跑完，
   // 留着不管等于让后端白等满 30 秒。
@@ -1064,10 +990,6 @@ function isUsed(row: QuestionBrief): boolean {
   return usedQuestionIds.value.has(row.id)
 }
 
-/** 卷内某道题的答案文本，供组卷时核对。 */
-function answerText(questionID: number): string {
-  return answerTextOf(questions.value[questionID])
-}
 </script>
 
 <template>
@@ -1218,219 +1140,23 @@ function answerText(questionID: number): string {
           </div>
         </template>
 
-        <div v-if="topNodes.length === 0" class="py-10">
-          <el-empty description="试卷还是空的，从左侧题库选题加入" />
-        </div>
-
-        <div v-else class="space-y-2">
-          <div
-            v-for="node in topNodes"
-            :key="node.id"
-            class="group rounded border border-gray-200 bg-white p-3"
-            :class="node.node_type === 'question' ? 'border-l-4 border-l-blue-400' : ''"
-          >
-            <div class="flex items-start gap-2">
-              <div class="min-w-0 flex-1">
-                <!-- 题目块 -->
-                <template v-if="node.node_type === 'question'">
-                  <div class="mb-1 flex items-center gap-2">
-                    <span v-if="!numberingEnabled" class="text-sm font-medium">
-                      第 {{ questionNumbers.get(node.id) }} 题
-                    </span>
-                    <!-- 题号是节点属性：占位符显示"自动编出来的那个"，
-                         填了就用填的，清空则退回自动编号。 -->
-                    <div v-else class="flex shrink-0 items-center gap-0.5">
-                      <span class="text-xs text-gray-400">第</span>
-                      <el-input
-                        :model-value="numberOf(node)"
-                        :placeholder="questionNumbers.get(node.id)"
-                        size="small"
-                        class="!w-20"
-                        :disabled="!canEdit"
-                        maxlength="16"
-                        @update:model-value="(v: string) => setNumber(node, v)"
-                      />
-                      <span class="text-xs text-gray-400">题</span>
-                    </div>
-                    <el-tag v-if="questions[(node.content as QuestionRef)?.question_id]?.stale" size="small" type="warning">
-                      内容已更新
-                    </el-tag>
-                    <span class="text-xs text-gray-400">
-                      {{ questions[(node.content as QuestionRef)?.question_id]?.question_type_label }}
-                      ·
-                      {{ '★'.repeat(questions[(node.content as QuestionRef)?.question_id]?.difficulty ?? 0) }}
-                    </span>
-                    <!-- 分值只写在 props.score 上，服务端 sumScore 与导出器都只认这个键。 -->
-                    <div v-if="scoringEnabled" class="ml-auto flex shrink-0 items-center gap-1">
-                      <span class="text-xs text-gray-400">分值</span>
-                      <el-input-number
-                        :model-value="scoreOf(node) ?? undefined"
-                        :min="0"
-                        :max="999"
-                        :step="0.5"
-                        :disabled="!canEdit"
-                        size="small"
-                        class="!w-24"
-                        controls-position="right"
-                        placeholder="未设"
-                        @update:model-value="(v: number | undefined) => setScore(node, v)"
-                      />
-                    </div>
-                  </div>
-
-                  <template v-if="questions[(node.content as QuestionRef)?.question_id]">
-                    <RichContent :doc="questions[(node.content as QuestionRef).question_id].stem" />
-                    <div v-if="questions[(node.content as QuestionRef).question_id].options.length" class="mt-1 space-y-0.5">
-                      <div
-                        v-for="option in questions[(node.content as QuestionRef).question_id].options"
-                        :key="option.id"
-                        class="flex gap-1 text-sm"
-                      >
-                        <span class="font-medium">{{ option.label }}.</span>
-                        <RichContent :doc="option.content" class="flex-1" />
-                      </div>
-                    </div>
-                    <!-- 组卷时把答案显出来：老师需要边排边核对答案，
-                         而导出时答案是否出现由「解析模块」与展示字段决定。 -->
-                    <div
-                      v-if="answerText((node.content as QuestionRef).question_id)"
-                      class="mt-1 text-xs text-green-700"
-                    >
-                      答案：{{ answerText((node.content as QuestionRef).question_id) }}
-                    </div>
-                  </template>
-                  <div v-else class="text-sm text-gray-400">题目内容不可用（可能已被删除）</div>
-                </template>
-
-                <!-- 标题 / 说明 -->
-                <template v-else-if="node.node_type === 'rich_text' || node.node_type === 'heading'">
-                  <div class="mb-1 text-xs text-gray-400">{{ blockLabel(node) }}</div>
-                  <RichContent :doc="node.content" :compact="node.node_type === 'rich_text'" />
-                </template>
-
-                <!-- 分页符 -->
-                <template v-else-if="node.node_type === 'page_break'">
-                  <div class="flex items-center gap-2 text-xs text-gray-400">
-                    <div class="h-px flex-1 bg-dashed bg-gray-300" />
-                    分页符
-                    <div class="h-px flex-1 bg-gray-300" />
-                  </div>
-                </template>
-
-                <!-- 答题区 -->
-                <template v-else-if="node.node_type === 'answer_space'">
-                  <div class="mb-1 text-xs text-gray-400">
-                    {{ blockLabel(node) }}（{{ answerLinesOf(node) }} 行 ·
-                    {{ answerStyleOf(node) === 'lined' ? '横线' : '留白' }}）
-                  </div>
-                  <div class="rounded border border-dashed border-gray-300 px-2 py-1">
-                    <template v-if="answerStyleOf(node) === 'lined'">
-                      <div
-                        v-for="line in answerLinesOf(node)"
-                        :key="line"
-                        class="h-6 border-b border-dashed border-gray-300"
-                      />
-                    </template>
-                    <div v-else :style="{ height: `${answerLinesOf(node) * 24}px` }" />
-                  </div>
-                </template>
-
-                <!-- 解析模块 -->
-                <template v-else-if="node.node_type === 'question_details'">
-                  <div class="mb-1 flex items-center gap-2">
-                    <span class="text-sm font-medium">解析模块</span>
-                    <el-select
-                      :model-value="(node.content as ModuleContent)?.scope ?? 'all'"
-                      size="small"
-                      class="w-32"
-                      :disabled="!canEdit"
-                      @change="(v: 'all' | 'before') => setModuleScope(v)"
-                    >
-                      <el-option label="卷末汇总" value="all" />
-                      <el-option label="每题之后" value="before" />
-                    </el-select>
-                  </div>
-                  <div class="text-xs text-gray-400">
-                    解析条目由服务端按当前题目顺序自动生成，共 {{ questionCount }} 条，无需手动维护。
-                  </div>
-                </template>
-              </div>
-
-              <!-- 节点操作 -->
-              <div v-if="canEdit" class="flex shrink-0 flex-col gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                <el-button text size="small" :disabled="topNodes[0]?.id === node.id" @click="moveNode(node, -1)">
-                  <el-icon><Top /></el-icon>
-                </el-button>
-                <el-button
-                  text
-                  size="small"
-                  :disabled="topNodes[topNodes.length - 1]?.id === node.id"
-                  @click="moveNode(node, 1)"
-                >
-                  <el-icon><Bottom /></el-icon>
-                </el-button>
-                <el-button
-                  v-if="canEditBlock(node)"
-                  text
-                  size="small"
-                  @click="openEditableBlock(node)"
-                >
-                  <el-icon><Edit /></el-icon>
-                </el-button>
-                <el-button text size="small" type="danger" @click="removeNodeWithConfirm(node)">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!--
+          整份试卷是一份 Tiptap 文档：块之间可以连续编辑、能拖动整块搬家、
+          撤销能一步退掉一次输入。旧的卡片列表（每个块一个独立 DOM +
+          弹窗编辑）已经被它取代，空卷的引导也由画布自己给。
+        -->
+        <PaperTiptapCanvas
+          :nodes="nodes"
+          :projections="questions"
+          :can-edit="canEdit"
+          :numbering-enabled="numberingEnabled"
+          :scoring-enabled="scoringEnabled"
+          @update="onCanvasUpdate"
+          @dropped-nodes="onDroppedNodes"
+        />
       </el-card>
     </div>
 
-    <!-- 块编辑 -->
-    <el-dialog
-      v-model="blockVisible"
-      :title="blockDialogTitle"
-      width="720px"
-    >
-      <el-form label-width="70px">
-        <el-form-item v-if="blockForm.nodeType === 'heading'" label="级别">
-          <el-radio-group v-model="blockForm.level">
-            <el-radio :value="1">一级</el-radio>
-            <el-radio :value="2">二级</el-radio>
-            <el-radio :value="3">三级</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <template v-if="blockForm.nodeType === 'answer_space'">
-          <el-form-item label="行数">
-            <el-input-number
-              v-model="blockForm.lines"
-              :min="MIN_ANSWER_LINES"
-              :max="MAX_ANSWER_LINES"
-              :step="1"
-              size="small"
-            />
-            <span class="ml-2 text-xs text-gray-400">
-              导出时按这个行数预留作答空间
-            </span>
-          </el-form-item>
-          <el-form-item label="样式">
-            <el-radio-group v-model="blockForm.answerStyle">
-              <el-radio value="blank">留白</el-radio>
-              <el-radio value="lined">横线</el-radio>
-            </el-radio-group>
-            <span class="ml-2 text-xs text-gray-400">横线样式会在每行下面画一条答题线</span>
-          </el-form-item>
-        </template>
-        <el-form-item v-if="blockForm.nodeType !== 'answer_space'" label="内容">
-          <RichTextEditor v-model="blockForm.content" placeholder="输入内容" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="blockVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitBlock">确定</el-button>
-      </template>
-    </el-dialog>
 
     <!-- 设置 -->
     <el-dialog v-model="settingsVisible" title="试卷设置" width="520px">

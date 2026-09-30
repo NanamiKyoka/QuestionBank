@@ -121,26 +121,45 @@ watch(
  *
  * 只在**确实不同**时才 setContent：每次输入都会让 props 走一圈回来，
  * 无条件 setContent 会把光标和撤销栈按在每一次按键上重置。
+ *
+ * 判定比的是**节点数组**而不是文档 JSON。这一点很要紧：文档里会有一些
+ * 不属于试卷的东西——空卷被补出来的空段落、删除/移动之后 ProseMirror
+ * 给光标落脚补的段落（都没有 nodeId）。`docToNodes` 会把它们滤掉，
+ * 于是 `nodesToDoc(nodes)` 永远比 `getJSON()` 少那几个段落，直接比 JSON
+ * 就会**每次都判为不同**，光标在用户刚删完一个块之后被重置。
+ * 反过来比节点数组，比的才是"编辑器是否已经表达了这份试卷"。
  */
 watch(
   () => props.nodes,
   (nodes) => {
     const instance = editor.value
     if (!instance) return
-    const next = nodesToDoc(nodes)
-    if (JSON.stringify(instance.getJSON()) === JSON.stringify(next)) {
+    const current = docToNodes(instance.getJSON()).nodes
+    if (sameNodes(current, nodes)) {
       refreshNumbers(nodes)
       return
     }
     syncing = true
     try {
-      instance.commands.setContent(next, { emitUpdate: false })
+      instance.commands.setContent(nodesToDoc(nodes), { emitUpdate: false })
     } finally {
       syncing = false
     }
     refreshNumbers(nodes)
   },
 )
+
+/**
+ * 两份节点树是否等价。
+ *
+ * 比 JSON 字符串而不是逐字段比：这里的节点来自同一套转换，
+ * 字段顺序稳定；而逐字段写一遍等于把 PaperNode 的契约抄第二遍，
+ * 服务端加一个字段就会让判定悄悄失效。
+ */
+function sameNodes(a: PaperNode[], b: PaperNode[]): boolean {
+  if (a.length !== b.length) return false
+  return JSON.stringify(a) === JSON.stringify(b)
+}
 
 onBeforeUnmount(() => editor.value?.destroy())
 
