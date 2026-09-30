@@ -46,7 +46,12 @@ const editor = useEditor({
       // 标题层级限制在 1-3 级：试卷排版用不到更深的层级，
       // 放开只会让用户排出无法导出的结构。
       heading: { levels: [1, 2, 3] },
-      codeBlock: false,
+      // 代码块**必须开着**。后端导出器认识 codeBlock
+      // （internal/export/richdoc.go 的 `case "codeBlock"`），
+      // 而 Tiptap v3 遇到 schema 里没有的节点类型是直接抛错的——
+      // 一道含代码块的题目会让编辑器在载入时整个炸掉，用户连改都改不了。
+      // 开着它只是让这类内容能被表示出来，不影响其它行为。
+      codeBlock: {},
     }),
     InlineMath,
     BlockMath,
