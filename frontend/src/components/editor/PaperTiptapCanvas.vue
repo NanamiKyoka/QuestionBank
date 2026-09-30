@@ -6,6 +6,7 @@ import type { PaperNode, PaperQuestionProjection } from '@/api/paper'
 import { docToNodes, nodesToDoc } from '@/lib/paperDocument'
 import { displayNumbers, topLevelOf } from '@/lib/paperView'
 import { canvasViewExtensions } from './canvasViewExtensions'
+import PaperRichToolbar from './PaperRichToolbar.vue'
 import { createPaperCanvasState, installPaperCanvasState } from './paper-node-views/canvasState'
 
 /**
@@ -177,6 +178,12 @@ defineExpose({
 
 <template>
   <div :class="rootClass">
+    <!--
+      富文本工具栏贴在画布顶部：它作用在这一份文档上，选区落进说明文字
+      或标题时才出现。没有它，画布里的富文本块就只能敲纯文本——
+      公式、填空、表格、图片会全部没有入口（这是画布切换时踩过的坑）。
+    -->
+    <PaperRichToolbar :editor="editor" :can-edit="props.canEdit" />
     <div v-if="isEmpty" class="qm-canvas__empty">试卷还是空的，从左侧题库选题加入</div>
     <EditorContent :editor="editor" class="qm-canvas__content" />
   </div>

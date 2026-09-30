@@ -10,8 +10,15 @@ import TextAlign from '@tiptap/extension-text-align'
 // Tiptap v3 把整个表格家族统一到 extension-table 一个包，
 // 不再需要分别安装 row / cell / header。
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
-import { ElMessageBox } from 'element-plus'
 import { Blank, BlockMath, InlineMath } from './mathNodes'
+import {
+  clearFormat as clearFormatMarks,
+  insertBlank as insertBlankNode,
+  insertTable as insertTableNode,
+  requestBlockMath,
+  requestInlineMath,
+  uploadAndInsertImage,
+} from './richEditorActions'
 
 /**
  * 富文本编辑器。
@@ -90,22 +97,28 @@ watch(
 onBeforeUnmount(() => editor.value?.destroy())
 
 /** 插入行内公式。 */
-async function insertInlineMath() {
-  const latex = await promptLatex('插入行内公式', '例如：x^2 + y^2 = r^2')
-  if (latex === null) return
-  editor.value?.chain().focus().insertContent({ type: 'inlineMath', attrs: { latex } }).run()
+function insertInlineMath() {
+  void requestInlineMath(editor.value)
 }
 
 /** 插入独立公式。 */
-async function insertBlockMath() {
-  const latex = await promptLatex('插入独立公式', '例如：\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}')
-  if (latex === null) return
-  editor.value?.chain().focus().insertContent({ type: 'blockMath', attrs: { latex } }).run()
+function insertBlockMath() {
+  void requestBlockMath(editor.value)
 }
 
 /** 插入填空空位。 */
 function insertBlank() {
-  editor.value?.chain().focus().insertContent({ type: 'blank' }).run()
+  insertBlankNode(editor.value)
+}
+
+/** 插入表格。 */
+function insertTableBlock() {
+  insertTableNode(editor.value)
+}
+
+/** 清除当前块的类型与所有行内标记。 */
+function clearAllFormat() {
+  clearFormatMarks(editor.value)
 }
 
 const uploading = ref(false)
@@ -113,9 +126,9 @@ const uploading = ref(false)
 /**
  * 上传图片并插入正文。
  *
- * 走后端 /uploads/images：那里会按文件头校验真实格式、
- * 限制尺寸并拒绝 SVG（SVG 可内嵌脚本，当图片直接提供出去等于给了 XSS 机会）。
- * 因此这里不做本地格式判断——客户端校验只是体验优化，说了算的是服务端。
+ * 动作本体在 richEditorActions 里，与画布的工具栏共用同一份——
+ * 两处各写一遍的话，能力迟早会分叉（画布切换时就因为工具栏没搬过去，
+ * 一度失去了公式/填空/表格/图片的入口）。
  */
 async function pickImage(event: Event) {
   const input = event.target as HTMLInputElement
@@ -125,30 +138,13 @@ async function pickImage(event: Event) {
 
   uploading.value = true
   try {
-    const { uploadApi } = await import('@/api/ai')
-    const saved = await uploadApi.image(file)
-    editor.value?.chain().focus().setImage({ src: saved.url }).run()
+    await uploadAndInsertImage(editor.value, file)
   } catch {
     // 具体原因（过大、格式不支持）由接口层统一提示
   } finally {
     uploading.value = false
   }
 }
-
-async function promptLatex(title: string, placeholder: string): Promise<string | null> {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入 LaTeX 源码（不需要写 $ 符号）', title, {
-      confirmButtonText: '插入',
-      cancelButtonText: '取消',
-      inputPlaceholder: placeholder,
-      inputValidator: (v) => (v && v.trim() ? true : '公式不能为空'),
-    })
-    return value.trim()
-  } catch {
-    return null // 用户取消
-  }
-}
-
 
 defineExpose({
   /** 让外部能取到编辑器实例（如插入内容、聚焦）。 */
@@ -229,9 +225,7 @@ defineExpose({
         <el-button
           size="small"
           :type="editor.isActive('table') ? 'primary' : 'default'"
-          @click="
-            editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
-          "
+          @click="insertTableBlock"
         >
           ▦ 表格
         </el-button>
@@ -248,9 +242,7 @@ defineExpose({
         <el-button size="small" :loading="uploading" tag="span">🖼 图片</el-button>
       </label>
 
-      <el-button size="small" class="ml-auto" @click="editor.chain().focus().clearNodes().unsetAllMarks().run()">
-        清除格式
-      </el-button>
+      <el-button size="small" class="ml-auto" @click="clearAllFormat">清除格式</el-button>
     </div>
 
     <EditorContent
