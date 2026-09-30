@@ -16,6 +16,7 @@ import type {
   QuestionRef,
 } from '@/api/paper'
 import { QUESTION_NUMBER_MAX_LENGTH } from '@/api/paper'
+import { richDocToPlain } from './richdoc'
 
 // ---- 读取 ----
 
@@ -36,10 +37,16 @@ export function headingLevelOf(node: PaperNode): number {
   return typeof level === 'number' && Number.isFinite(level) && level >= 1 ? Math.round(level) : 1
 }
 
-/** 题目块的分值。未填写时返回 null（null 与 0 分是两件事）。 */
+/**
+ * 题目块的分值。
+ *
+ * 未填写时返回 null——null 与 0 分是两件事：0 是一道真实存在的、
+ * 得分为零的题，而"没设分值"不该在合计里混进一个无意义的零。
+ * 负数一律按未设处理（负分没有业务含义，多半是输入事故）。
+ */
 export function scoreOf(node: PaperNode): number | null {
   const raw = nodeProps<QuestionNodeProps>(node).score
-  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null
 }
 
 /** 卷内的题目块，按顺序。 */
@@ -174,4 +181,83 @@ export function topLevelOf(nodes: PaperNode[]): PaperNode[] {
 /** 节点是否属于某个层级。用于渲染时决定可编辑性。 */
 export function isKind(node: PaperNode, kind: NodeKind): boolean {
   return node.node_kind === kind
+}
+
+// ---- 显示文案 ----
+
+/** 块的类型名，显示在块的左上角。 */
+export function blockLabel(node: PaperNode): string {
+  switch (node.node_type) {
+    case 'rich_text':
+      return '说明文字'
+    case 'heading':
+      return '标题'
+    case 'page_break':
+      return '分页符'
+    case 'answer_space':
+      return '答题区'
+    case 'question_details':
+      return '解析模块'
+    default:
+      return node.node_type
+  }
+}
+
+/**
+ * 把题目的答案渲染成一行可读文本。
+ *
+ * 组卷时要把答案显出来：老师需要边排边核对答案。导出时答案是否出现
+ * 由「解析模块」与展示字段决定，与这里无关。
+ *
+ * 只认投影（服务端给的题目快照），不接受 id 再回查——纯函数才测得动。
+ */
+export function answerTextOf(projection: QuestionProjectionLike | undefined | null): string {
+  if (!projection) return ''
+  const answer = projection.answer
+  if (!answer) return ''
+  switch (answer.kind) {
+    case 'single':
+    case 'multiple':
+      return (answer.correct ?? [])
+        .map((id) => projection.options?.find((o) => o.id === id)?.label ?? id)
+        .join('、')
+    case 'boolean':
+      return answer.bool_answer ? '正确' : '错误'
+    case 'blanks':
+      // 填空题的答案在契约里是 RichDoc 片段（一个空可能有多个可接受写法）。
+      // 必须真的把它转成文本：这里原先写的是 `group.map(() => '')`，
+      // 等价于把每个片段都换成空串，于是填空题的答案永远显示成空白——
+      // 老师看到"答案："后面什么都没有，会以为是数据没存上。
+      return (answer.blanks ?? [])
+        .map((blank) =>
+          (blank.accepts ?? [])
+            .map((group) => group.map((doc) => richDocToPlain(doc)).join(''))
+            .join('或'),
+        )
+        .join('；')
+    case 'reference':
+      return '见参考答案'
+    default:
+      return ''
+  }
+}
+
+/**
+ * answerTextOf 需要的最小投影形状。
+ *
+ * 刻意不直接依赖 PaperQuestionProjection：那个类型带着一大串画布用不到
+ * 的字段（stem_text、content_revision…），而这里的逻辑只关心答案与选项标签。
+ * 收窄之后，测试可以只造两个字段，也不必跟着服务端契约的增删而改。
+ *
+ * 富文本片段一律收成 `unknown`：这里不需要知道 RichDoc 的具体形状，
+ * 交给 richDocToPlain 去解析。
+ */
+export interface QuestionProjectionLike {
+  options?: { id: string; label: string }[]
+  answer?: {
+    kind?: string
+    correct?: string[]
+    bool_answer?: boolean | null
+    blanks?: { id?: string; accepts?: unknown[][] }[]
+  } | null
 }

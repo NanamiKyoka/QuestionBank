@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  answerTextOf,
+  blockLabel,
   computeNumbers,
   displayNumbers,
   headingLevelOf,
@@ -80,6 +82,11 @@ describe('numberOf / headingLevelOf / scoreOf', () => {
     expect(scoreOf(q('a', 0, { score: 0 }))).toBe(0)
     expect(scoreOf(q('a', 0, { score: 4.5 }))).toBe(4.5)
     expect(scoreOf(q('a', 0, { score: '5' }))).toBeNull()
+  })
+
+  it('负分按未设处理——负分没有业务含义，多半是输入事故', () => {
+    expect(scoreOf(q('a', 0, { score: -1 }))).toBeNull()
+    expect(totalScoreOf([q('a', 0, { score: -5 }), q('b', 1, { score: 3 })])).toBe(3)
   })
 
   it('question_id 拿得到才算数', () => {
@@ -309,5 +316,90 @@ describe('totalScoreOf / roundScore', () => {
     // 分值在真实场景里是 0.5 的整数倍，落不到这个边界上；
     // 这个函数要解决的是 0.1+0.2=0.30000000000000004 那类噪声。
     expect(roundScore(1.005)).toBe(1)
+  })
+})
+
+// ---- 文案 ----
+
+describe('blockLabel', () => {
+  it('每种块给出可读类型名', () => {
+    expect(blockLabel(node('a', 'rich_text', 0))).toBe('说明文字')
+    expect(blockLabel(node('a', 'heading', 0))).toBe('标题')
+    expect(blockLabel(node('a', 'page_break', 0))).toBe('分页符')
+    expect(blockLabel(node('a', 'answer_space', 0))).toBe('答题区')
+    expect(blockLabel(node('a', 'question_details', 0))).toBe('解析模块')
+  })
+
+  it('不认识时退回节点类型本身，不显示空白', () => {
+    expect(blockLabel(node('a', 'mystery' as NodeType, 0))).toBe('mystery')
+  })
+})
+
+describe('answerTextOf', () => {
+  const options = [
+    { id: 'o1', label: 'A' },
+    { id: 'o2', label: 'B' },
+    { id: 'o3', label: 'C' },
+  ]
+
+  it('单选题把正确选项 id 翻成标签', () => {
+    expect(answerTextOf({ options, answer: { kind: 'single', correct: ['o2'] } })).toBe('B')
+  })
+
+  it('多选题用顿号连接', () => {
+    expect(answerTextOf({ options, answer: { kind: 'multiple', correct: ['o1', 'o3'] } })).toBe('A、C')
+  })
+
+  it('找不到对应选项时退回 id，不吞掉答案', () => {
+    expect(answerTextOf({ options, answer: { kind: 'single', correct: ['幽灵'] } })).toBe('幽灵')
+  })
+
+  it('判断题翻成中文', () => {
+    expect(answerTextOf({ answer: { kind: 'boolean', bool_answer: true } })).toBe('正确')
+    expect(answerTextOf({ answer: { kind: 'boolean', bool_answer: false } })).toBe('错误')
+  })
+
+  it('填空题把富文本片段真的转成文字', () => {
+    // 回归：这里曾经是 `group.map(() => '')`，等于把每个片段换成空串，
+    // 于是填空题的答案永远显示成空白——老师看到"答案："后面什么都没有，
+    // 会以为是数据没存上。
+    const text = answerTextOf({
+      answer: {
+        kind: 'blanks',
+        blanks: [
+          { accepts: [[plainToRichDoc('甲'), plainToRichDoc('的平方')]] },
+          { accepts: [[plainToRichDoc('乙')], [plainToRichDoc('B')]] },
+        ],
+      },
+    })
+    expect(text).toBe('甲的平方；乙或B')
+  })
+
+  it('填空题含公式时公式以 $…$ 还原', () => {
+    const text = answerTextOf({
+      answer: { kind: 'blanks', blanks: [{ accepts: [[plainToRichDoc('$x^2$')]] }] },
+    })
+    expect(text).toBe('$x^2$')
+  })
+
+  it('填空题数组缺失时得到空串而不是崩溃', () => {
+    expect(answerTextOf({ answer: { kind: 'blanks' } })).toBe('')
+    expect(answerTextOf({ answer: { kind: 'blanks', blanks: [{}] } })).toBe('')
+  })
+
+  it('解答题给出指针文案', () => {
+    expect(answerTextOf({ answer: { kind: 'reference' } })).toBe('见参考答案')
+  })
+
+  it('缺失、空答案、未知类型都返回空串而不是抛错', () => {
+    expect(answerTextOf(undefined)).toBe('')
+    expect(answerTextOf(null)).toBe('')
+    expect(answerTextOf({})).toBe('')
+    expect(answerTextOf({ answer: null })).toBe('')
+    expect(answerTextOf({ answer: { kind: '外星类型' } })).toBe('')
+  })
+
+  it('选项为空时退回 id', () => {
+    expect(answerTextOf({ answer: { kind: 'single', correct: ['o1'] } })).toBe('o1')
   })
 })

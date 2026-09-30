@@ -8,13 +8,11 @@ import { chatApi } from '@/api/ai'
 import {
   paperApi,
   toNodeInput,
-  QUESTION_NUMBER_MAX_LENGTH,
   type NodeInput,
   type NumberingMode,
   type PaperDetail,
   type PaperNode,
   type PaperVersion,
-  type QuestionNodeProps,
   type QuestionRef,
   type ModuleContent,
 } from '@/api/paper'
@@ -25,6 +23,20 @@ import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
 import CompositionAiChangesBar from '@/components/CompositionAiChangesBar.vue'
 import RichTextEditor from '@/components/editor/RichTextEditor.vue'
 import { emptyDoc } from '@/lib/richdoc'
+import {
+  answerTextOf,
+  blockLabel,
+  computeNumbers,
+  displayNumbers,
+  headingLevelOf,
+  nodeProps,
+  numberOf,
+  propsWithNumber,
+  propsWithScore,
+  roundScore,
+  scoreOf,
+  totalScoreOf,
+} from '@/lib/paperView'
 import { abandonInflightClientTools, answerClientToolFrame } from '@/composables/useAiClientTools'
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
@@ -99,11 +111,6 @@ interface AnswerSpaceProps {
   style?: AnswerSpaceStyle
 }
 
-/** 标题节点的 props。 */
-interface HeadingProps {
-  level?: number
-}
-
 /** 答题区默认行数。
  *
  * 老数据把留白高度写在 content.height 上（默认 120px），120/30 = 4 行，
@@ -120,9 +127,16 @@ function clampAnswerLines(n: number): number {
   return Math.min(Math.max(Math.round(n), MIN_ANSWER_LINES), MAX_ANSWER_LINES)
 }
 
-function nodeProps<T>(node: PaperNode): T {
-  return (node.props ?? {}) as T
-}
+/**
+ * 题号、分值、文案的计算全部来自 `@/lib/paperView`。
+ *
+ * 这些曾经是本文件里的局部函数。搬到共享模块是因为画布（Tiptap 单一文档）
+ * 马上要用同一套算法：留在视图里的话，另一套渲染只能抄一遍，
+ * 而抄第二遍的那次多半就是两边开始不一致的时候。
+ *
+ * 写入类的操作仍然留在这里，因为它们要顺带标脏——`dirty` 是视图的状态，
+ * 不属于纯计算。
+ */
 
 // ---- 块编辑 ----
 const blockVisible = ref(false)
@@ -183,13 +197,7 @@ const questionNodes = computed(() => topNodes.value.filter((n) => n.node_type ==
  * （backend/internal/export/assemble.go 的 numberLabelFromProps），
  * 否则界面上写着 1.1、导出来却是 3.，比没有覆盖还难查。
  */
-const questionNumbers = computed(() => {
-  const map = new Map<string, string>()
-  questionNodes.value.forEach((node, index) => {
-    map.set(node.id, numberOf(node) || String(index + 1))
-  })
-  return map
-})
+const questionNumbers = computed(() => displayNumbers(topNodes.value))
 
 const questionCount = computed(() => questionNodes.value.length)
 
@@ -198,67 +206,9 @@ const questionCount = computed(() => questionNodes.value.length)
 /** 题号写回后的编号方式。面板是"选方式 + 点填充"，所以这里只留选择。 */
 const numberingMode = ref<NumberingMode>('global')
 
-/** 节点上记录的题号。没设过（也就是交给自动编号）时返回空串。 */
-function numberOf(node: PaperNode): string {
-  const raw = nodeProps<QuestionNodeProps>(node).number
-  return typeof raw === 'string' ? raw.trim() : ''
-}
-
 function setNumber(node: PaperNode, value: string) {
-  // 截断而不是拒绝：老师在框里敲到第 17 个字时，拦下整次输入反而更烦。
-  const next = value.trim().slice(0, QUESTION_NUMBER_MAX_LENGTH)
-  const props: Record<string, unknown> = { ...nodeProps<QuestionNodeProps>(node) }
-  if (next) props.number = next
-  // 清空等于"这题不指定题号"，删键而不是写空串——空串会被导出器当成有效值。
-  else delete props.number
-  node.props = props
+  node.props = propsWithNumber(node, value)
   dirty.value = true
-}
-
-function headingLevelOf(node: PaperNode): number {
-  const level = nodeProps<HeadingProps>(node).level
-  return typeof level === 'number' && level >= 1 ? level : 1
-}
-
-/**
- * 按所选方式算出每个题目块该有的题号。
- *
- * 'heading' 以**二级标题**为分界：一级标题不分组（卷面顶层通常只有卷名，
- * 用它分组等于整卷只有一组）。首个二级标题之前的题目归第 1 组；
- * 两个二级标题之间没有题目的空组会被跳过，编号不会白白多出一段。
- */
-function computeNumbers(list: PaperNode[], mode: NumberingMode): Map<string, string> {
-  const out = new Map<string, string>()
-  let global = 0
-  let group = 0
-  let inGroup = 0
-  let pendingNewGroup = false
-
-  for (const node of list) {
-    if (node.node_type === 'heading' && headingLevelOf(node) === 2) {
-      // 还没开过组就先记着，等真有题进来时再开第 1 组。
-      if (group > 0) pendingNewGroup = true
-      continue
-    }
-    if (node.node_type !== 'question') continue
-
-    if (mode === 'global') {
-      global += 1
-      out.set(node.id, String(global))
-      continue
-    }
-    if (group === 0) {
-      group = 1
-      inGroup = 0
-    } else if (pendingNewGroup) {
-      group += 1
-      inGroup = 0
-      pendingNewGroup = false
-    }
-    inGroup += 1
-    out.set(node.id, `${group}.${inGroup}`)
-  }
-  return out
 }
 
 /**
@@ -316,20 +266,8 @@ const numberingEnabled = computed(
  *
  *  0 本身是合法输入（这题不计分），照原样存回去：否则用户敲个 0 会发现
  *  输入框自己清空了，像是界面在跟他作对。 */
-function scoreOf(node: PaperNode): number | null {
-  const raw = nodeProps<QuestionNodeProps>(node).score
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null
-}
-
 function setScore(node: PaperNode, value: number | undefined | null) {
-  const props: Record<string, unknown> = { ...nodeProps<QuestionNodeProps>(node) }
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-    props.score = value
-  } else {
-    // 清空输入框等于"这题不计分"，删键而不是写 0，避免总分里混进无意义的零。
-    delete props.score
-  }
-  node.props = props
+  node.props = propsWithScore(node, value)
   dirty.value = true
 }
 
@@ -338,14 +276,7 @@ function setScore(node: PaperNode, value: number | undefined | null) {
  * paper.total_score 是服务端在**保存时**重算的，编辑过程中一直是旧值；
  * 直接展示它会让人以为分值根本没写进去，所以这里实时求和。
  */
-const localTotalScore = computed(() => {
-  let total = 0
-  for (const node of nodes.value) {
-    if (node.node_type === 'question') total += scoreOf(node) ?? 0
-  }
-  // 0.1 + 0.2 这类浮点尾巴会显示成 "3.0000000000000004"，统一收敛到两位。
-  return Math.round(total * 100) / 100
-})
+const localTotalScore = computed(() => roundScore(totalScoreOf(nodes.value)))
 
 /** 顶栏展示的总分：有未保存改动时用本地实时值，否则用服务端已持久化的值。 */
 const displayTotalScore = computed(() =>
@@ -1133,44 +1064,9 @@ function isUsed(row: QuestionBrief): boolean {
   return usedQuestionIds.value.has(row.id)
 }
 
-function blockLabel(node: PaperNode): string {
-  switch (node.node_type) {
-    case 'rich_text':
-      return '说明文字'
-    case 'heading':
-      return '标题'
-    case 'page_break':
-      return '分页符'
-    case 'answer_space':
-      return '答题区'
-    case 'question_details':
-      return '解析模块'
-    default:
-      return node.node_type
-  }
-}
-
+/** 卷内某道题的答案文本，供组卷时核对。 */
 function answerText(questionID: number): string {
-  const q = questions.value[questionID]
-  if (!q) return ''
-  const answer = q.answer
-  switch (answer.kind) {
-    case 'single':
-    case 'multiple':
-      return (answer.correct ?? [])
-        .map((id) => q.options.find((o) => o.id === id)?.label ?? id)
-        .join('、')
-    case 'boolean':
-      return answer.bool_answer ? '正确' : '错误'
-    case 'blanks':
-      return (answer.blanks ?? [])
-        .map((b) => (b.accepts ?? []).map((group) => group.map(() => '').join('')).join('或'))
-        .join('；')
-    case 'reference':
-      return '见参考答案'
-    default:
-      return ''
-  }
+  return answerTextOf(questions.value[questionID])
 }
 </script>
 
