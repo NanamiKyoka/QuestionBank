@@ -55,13 +55,28 @@ export interface NodeInput {
   anchor_before_node_id?: string | null
 }
 
-/** 题目块的内容结构。 */
+/**
+ * 题目块的内容结构。
+ *
+ * **只有两个字段，而且必须是两个。**
+ *
+ * 曾经这里还声明过 `score?` 与 `numbering?`，但全仓没有任何地方写入它们，
+ * 后端 `assemble.go` 与 `paper_nodes.go` 读的也始终是 `props`。留着它们
+ * 会诱使后来者把分值写进 content——而那样写的结果是整卷总分永远是 0、
+ * 卷面上也没有题号，两个都不会报错。
+ *
+ * 分值与题号一律走 `QuestionNodeProps`。
+ */
 export interface QuestionRef {
   question_id: number
+  /**
+   * 入卷时冻结的题目修订号。
+   *
+   * 服务端据此判断"题库里的这道题后来改过没有"，改过就在界面上提示
+   * 「内容已更新」，由用户决定是否同步。**不要在前端改写它**：
+   * 同步时由服务端重算（`paper_nodes.go` 的 syncQuestionNodes）。
+   */
   content_revision: number
-  score?: number
-  /** 题号是否参与自动编号。 */
-  numbering?: boolean
 }
 
 /**

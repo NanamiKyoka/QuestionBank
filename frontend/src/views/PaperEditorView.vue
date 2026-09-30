@@ -663,6 +663,10 @@ async function applyPendingChange() {
 function discardPendingChange() {
   // 候选树是一次性产物：直接丢掉，工作副本从未被碰过。
   pendingChange.value = null
+  // 放弃之后再排一次自动保存：用户在待确认期间可能还在编辑，
+  // 那段时间 scheduleAutoSave 是被挂起的（见它的注释），
+  // 不在这里补一次，那些改动就只剩手动保存这一条路了。
+  if (dirty.value) scheduleAutoSave()
 }
 
 const aiHost: PaperAiHost = {
