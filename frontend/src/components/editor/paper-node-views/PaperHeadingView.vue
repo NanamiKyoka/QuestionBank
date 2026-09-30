@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NodeViewContent, NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import { HEADING_MAX_LEVEL, HEADING_MIN_LEVEL } from '@/lib/paperDocument'
+import PaperBlockActions from './PaperBlockActions.vue'
 import { paperCanvasStateOf } from './canvasState'
 
 /**
@@ -41,6 +42,7 @@ function setLevel(next: number) {
     data-qm-node="heading"
     :data-level="level"
   >
+    <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-heading__controls" contenteditable="false">
       <el-select
         :model-value="level"

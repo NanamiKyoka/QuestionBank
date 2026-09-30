@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import { ANSWER_MAX_LINES, ANSWER_MIN_LINES } from '@/lib/paperDocument'
+import PaperBlockActions from './PaperBlockActions.vue'
 import { paperCanvasStateOf } from './canvasState'
 
 /**
@@ -44,6 +45,7 @@ function setStyle(next: string) {
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="answer_space"
   >
+    <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-answerspace__controls" contenteditable="false">
       <span class="text-xs text-gray-400">答题区</span>
       <el-input-number

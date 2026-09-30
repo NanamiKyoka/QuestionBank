@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import RichContent from '@/components/RichContent.vue'
+import PaperBlockActions from './PaperBlockActions.vue'
 import { QUESTION_NUMBER_MAX_LENGTH, type PaperQuestionProjection } from '@/api/paper'
 import { answerTextOf } from '@/lib/paperView'
 import { paperCanvasStateOf } from './canvasState'
@@ -80,6 +81,7 @@ function setScore(next: number | undefined) {
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="question"
   >
+    <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-question__head" contenteditable="false">
       <template v-if="state.numberingEnabled">
         <span class="qm-canvas-question__hint">第</span>

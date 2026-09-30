@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NodeViewContent, NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import { MODULE_SCOPES, type ModuleScopeValue } from '@/lib/paperDocument'
+import PaperBlockActions from './PaperBlockActions.vue'
 import { paperCanvasStateOf } from './canvasState'
 
 /**
@@ -45,6 +46,7 @@ function setTitle(next: string) {
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="question_details"
   >
+    <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-module__head" contenteditable="false">
       <span class="qm-canvas-module__label">解析模块</span>
       <el-input

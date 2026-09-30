@@ -13,7 +13,7 @@
  * 对象是 reactive 的：投影随「同步最新内容」变化、题号随拖动变化，
  * NodeView 要能跟着重渲染。
  */
-import { reactive } from 'vue'
+import { onBeforeUnmount, reactive, ref, type Ref } from 'vue'
 import type { Editor } from '@tiptap/core'
 import type { PaperQuestionProjection } from '@/api/paper'
 
@@ -74,4 +74,29 @@ const FALLBACK: PaperCanvasState = {
   numberingEnabled: true,
   scoringEnabled: false,
   numbers: new Map<string, string>(),
+}
+
+/**
+ * 一个每次编辑器事务都自增的计数。
+ *
+ * 为什么需要它：NodeView 的禁用态（"还能不能上移"）取决于它在文档里的
+ * **下标**，而下标是编辑器状态。Tiptap 只在节点自身或选中态变化时重渲染
+ * NodeView——别的块被删掉之后，这一块的 `canMoveUp` 可能仍然是旧的 `false`，
+ * 表现为"按钮灰着，但其实已经能点了"。
+ *
+ * 把这个 tick 读进 computed，就等于让派生值跟着每一次事务重算。
+ * 这个模式在 ProseMirror 的 Vue 集成里是常规做法：状态在编辑器手里，
+ * 组件只订阅"它变了"这个事实。
+ */
+export function useEditorTick(editor: Editor | null | undefined): Ref<number> {
+  const tick = ref(0)
+  if (!editor) return tick
+  const handler = () => {
+    tick.value += 1
+  }
+  editor.on('transaction', handler)
+  onBeforeUnmount(() => {
+    editor.off('transaction', handler)
+  })
+  return tick
 }
