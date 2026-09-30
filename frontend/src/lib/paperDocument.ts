@@ -362,26 +362,34 @@ export function canvasToNode(node: JSONContent, parentID: string | null, positio
  * 只输出顶层节点；解析模块的条目作为它的 content 嵌进去。
  * 理由：画布上「解析模块」是一个可整体拖动的盒子，条目是盒子里的内容，
  * 而不是和模块平级的兄弟块。服务端派生出来的层级在界面上也该长这样。
+ *
+ * **空树给一份含一个空段落的文档。** ProseMirror 的 `doc` 要求 `block+`，
+ * 一个不含任何块的 doc 是非法的（`check()` 直接报 Invalid content），
+ * 编辑器挂载时会炸；而「刚新建、还没排任何块」的试卷是完全正常的状态。
+ * 补出来的那个空段落**不带 nodeId**，回程时会被当成编辑残留忽略掉
+ * （见 docToNodes 的判定），所以它不会变成一颗幽灵节点回到保存请求里。
  */
 export function nodesToDoc(nodes: PaperNode[]): JSONContent {
   const childrenByParent = groupByParent(nodes)
+  const content = topLevelOf(nodes).flatMap((node) => {
+    const canvas = nodeToCanvas(node)
+    if (!canvas) return []
+    if (node.node_type === 'question_details') {
+      const children = childrenByParent.get(node.id) ?? []
+      canvas.content = children
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .flatMap((child) => {
+          const drawn = nodeToCanvas(child)
+          return drawn ? [drawn] : []
+        })
+    }
+    return [canvas]
+  })
+
   return {
     type: 'doc',
-    content: topLevelOf(nodes).flatMap((node) => {
-      const canvas = nodeToCanvas(node)
-      if (!canvas) return []
-      if (node.node_type === 'question_details') {
-        const children = childrenByParent.get(node.id) ?? []
-        canvas.content = children
-          .slice()
-          .sort((a, b) => a.position - b.position)
-          .flatMap((child) => {
-            const drawn = nodeToCanvas(child)
-            return drawn ? [drawn] : []
-          })
-      }
-      return [canvas]
-    }),
+    content: content.length ? content : [{ type: 'paragraph' }],
   }
 }
 
@@ -417,9 +425,22 @@ function walk(
   out: PaperNode[],
   dropped: { id: string; type: string }[],
 ): void {
+  const id = attrString(node?.attrs, 'nodeId')
+  const known = node?.type !== undefined && TYPE_BY_CANVAS[node.type] !== undefined
+
+  if (!known) {
+    // 不是画布节点。两种可能，处理方式不同：
+    //   - 编辑器补出来的编辑残留（空段落等）：没有任何试卷含义，静静忽略。
+    //     只有带 nodeId 的才说明它自认为是一颗试卷节点，那样必须喊出来，
+    //     否则排版会被悄悄吞掉。
+    if (id) dropped.push({ id, type: String(node?.type ?? '') })
+    return
+  }
+
   const converted = canvasToNode(node, parentID, position)
   if (!converted) {
-    dropped.push({ id: attrString(node?.attrs, 'nodeId'), type: String(node?.type ?? '') })
+    // 是画布节点类型却没有 nodeId：无处安放（后端主键是客户端给的 UUID）。
+    dropped.push({ id, type: String(node?.type ?? '') })
     return
   }
   out.push(converted)

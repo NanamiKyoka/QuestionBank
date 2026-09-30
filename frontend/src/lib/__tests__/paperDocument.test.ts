@@ -96,7 +96,9 @@ describe('往返', () => {
   it('空树往返仍是空树', () => {
     const doc = nodesToDoc([])
     expect(doc.type).toBe('doc')
-    expect(doc.content).toEqual([])
+    // ProseMirror 的 doc 要求 block+，空文档非法；补一个不带 nodeId 的空段落，
+    // 但不能让它变成一颗幽灵节点回到保存请求里。
+    expect(doc.content).toEqual([{ type: 'paragraph' }])
     expect(docToNodes(doc)).toEqual({ nodes: [], dropped: [] })
   })
 
@@ -374,7 +376,18 @@ describe('降级与防御', () => {
     expect(dropped).toEqual([{ id: 'b', type: 'paperFromTheFuture' }])
   })
 
-  it('缺 nodeId 的节点被丢掉（无处安放），不造假 id', () => {
+  it('编辑器补出来的空段落被静静忽略，不算"丢节点"', () => {
+    // 空试卷会被补一个空段落（见 nodesToDoc）。它没有任何试卷含义，
+    // 如果它出现在 dropped 里，调用方会以为排版丢了东西。
+    const { nodes, dropped } = docToNodes({
+      type: 'doc',
+      content: [{ type: 'paragraph' }, { type: 'paperQuestion', attrs: { nodeId: 'q', questionId: 1 } }],
+    })
+    expect(nodes.map((n) => n.id)).toEqual(['q'])
+    expect(dropped).toEqual([])
+  })
+
+  it('画布节点缺 nodeId 时被记录（无处安放），不造假 id', () => {
     const { nodes, dropped } = docToNodes({ type: 'doc', content: [{ type: 'paperPageBreak' }] })
     expect(nodes).toEqual([])
     expect(dropped).toEqual([{ id: '', type: 'paperPageBreak' }])
