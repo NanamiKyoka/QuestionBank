@@ -5,19 +5,41 @@ import type { AnswerSpec, QuestionStatus, RichDoc } from './types'
 
 export type ModelType = 'text' | 'vision' | 'embedding'
 
+/** 模型的全部能力，按后端下发的顺序。 */
+export const MODEL_TYPES: ModelType[] = ['text', 'vision', 'embedding']
+
+export const MODEL_TYPE_LABELS: Record<ModelType, string> = {
+  text: '文本',
+  vision: '视觉',
+  embedding: '向量',
+}
+
 export interface ModelInfo {
   id: number
   provider_id: number
   provider_name: string
   name: string
   display_name: string
-  model_type: ModelType
+  /**
+   * 该模型具备的能力。
+   *
+   * 是数组而不是单值：现在绝大多数模型都是多模态的，同一个模型既跑对话
+   * 也跑识图。逼用户把它录两遍既不真实，也会让"文本模型"和"视觉模型"
+   * 变成两条互不相干的配置。
+   *
+   * `model_type` 是同一份数据的归一化字符串形态（"text,vision"），
+   * 只读、仅供核对，不要拿它做判断。
+   */
+  capabilities: ModelType[]
+  model_type: string
   max_tokens: number
   context_window: number
   is_active: boolean
   sort_order: number
-  /** 是否被选为当前默认模型。 */
+  /** 是否被选为当前默认模型（任一用途）。 */
   in_use: boolean
+  /** 具体被哪些用途选为默认，用于标出是哪一栏在用它。 */
+  in_use_for: ModelType[]
   created_at: string
 }
 
@@ -106,7 +128,7 @@ export const aiApi = {
     provider_id: number
     name: string
     display_name?: string
-    model_type: ModelType
+    capabilities: ModelType[]
     max_tokens?: number
     context_window?: number
     is_active?: boolean
@@ -116,7 +138,7 @@ export const aiApi = {
     payload: {
       name?: string
       display_name?: string
-      model_type?: ModelType
+      capabilities?: ModelType[]
       max_tokens?: number
       context_window?: number
       is_active?: boolean

@@ -259,6 +259,80 @@ func TestSetActiveConfigValidatesModelType(t *testing.T) {
 	}
 }
 
+// 同一个多模态模型可以同时充当文本模型与视觉模型——
+// 这正是绝大多数现代模型的真实形态，逼用户录两遍是对现实的误描述。
+func TestMultimodalModelServesBothRoles(t *testing.T) {
+	repos := newTestRepos(t)
+	svc := newAIService(t, repos)
+	ctx := context.Background()
+
+	p := createProvider(t, svc, "Gateway", "https://example.test/v1", "sk-a")
+	m, err := svc.CreateModel(ctx, adminUser(), &schema.ModelCreateRequest{
+		ProviderID: p.ID, Name: "omni-1",
+		Capabilities: []string{"vision", "text"}, // 故意乱序，存下来应当归一化
+	})
+	if err != nil {
+		t.Fatalf("创建多模态模型失败: %v", err)
+	}
+	if m.ModelType != "text,vision" {
+		t.Fatalf("能力集合应归一化排序，实际 %q", m.ModelType)
+	}
+	if len(m.Capabilities) != 2 || m.Capabilities[0] != "text" || m.Capabilities[1] != "vision" {
+		t.Fatalf("响应里的 capabilities 不对: %v", m.Capabilities)
+	}
+	// 一创建就应同时占住两栏：它们当时都还是空的。
+	if len(m.InUseFor) != 2 {
+		t.Fatalf("多模态模型应同时成为文本与视觉默认模型，实际 %v", m.InUseFor)
+	}
+
+	cfg, err := svc.GetActiveConfig(ctx, adminUser())
+	if err != nil {
+		t.Fatalf("取配置失败: %v", err)
+	}
+	if cfg.TextModelID != m.ID || cfg.VisionModelID != m.ID {
+		t.Fatalf("同一模型应同时解析为文本与视觉模型: %+v", cfg)
+	}
+	// 文本与视觉都配好了，只差向量——就绪状态与提示都要如实反映这一点。
+	if !cfg.Ready || !strings.Contains(cfg.Message, "向量") {
+		t.Fatalf("就绪状态判断不对: %+v", cfg)
+	}
+}
+
+// 一个能力都不选是非法的：一个哪儿都用不了的模型只是噪音。
+func TestCreateModelRequiresAtLeastOneCapability(t *testing.T) {
+	repos := newTestRepos(t)
+	svc := newAIService(t, repos)
+	ctx := context.Background()
+
+	p := createProvider(t, svc, "OpenAI", "", "sk-a")
+	_, err := svc.CreateModel(ctx, adminUser(), &schema.ModelCreateRequest{
+		ProviderID: p.ID, Name: "gpt-4o",
+	})
+	if !apperr.Is(err, apperr.CodeInvalidParam) {
+		t.Fatalf("未选能力应被拒绝，实际 %v", err)
+	}
+}
+
+// 删掉多模态模型时，只清它实际占着的那几栏。
+func TestDeleteMultimodalModelClearsEveryRole(t *testing.T) {
+	repos := newTestRepos(t)
+	svc := newAIService(t, repos)
+	ctx := context.Background()
+
+	p := createProvider(t, svc, "Gateway", "https://example.test/v1", "sk-a")
+	m, _ := svc.CreateModel(ctx, adminUser(), &schema.ModelCreateRequest{
+		ProviderID: p.ID, Name: "omni-1", Capabilities: []string{"text", "vision"},
+	})
+	if err := svc.DeleteModel(ctx, adminUser(), m.ID); err != nil {
+		t.Fatalf("删除模型失败: %v", err)
+	}
+
+	cfg, _ := svc.GetActiveConfig(ctx, adminUser())
+	if cfg.TextModelID != 0 || cfg.VisionModelID != 0 {
+		t.Fatalf("删除后两栏都应清空: %+v", cfg)
+	}
+}
+
 // 删除模型后必须清掉指向它的默认配置，否则 AI 功能会指向已删除的模型。
 func TestDeleteModelClearsActiveConfig(t *testing.T) {
 	repos := newTestRepos(t)

@@ -30,6 +30,15 @@ func newDB(t *testing.T) *gorm.DB {
 	return gdb
 }
 
+// head 当前代码里的最高版本。
+//
+// 测试断言"最新版本"而不是写死 1：往迁移表里追加一条是常事，
+// 而把版本号抄进每个用例只会让它们在下次追加时集体红掉。
+func head() int {
+	list := All()
+	return list[len(list)-1].Version
+}
+
 // 空库跑一次迁移：表建起来，账本记下版本。
 func TestUpOnEmptyDatabase(t *testing.T) {
 	gdb := newDB(t)
@@ -41,8 +50,8 @@ func TestUpOnEmptyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("执行迁移失败: %v", err)
 	}
-	if len(applied) != 1 || applied[0].Version != 1 {
-		t.Fatalf("应执行 1 条基线，实际 %d", len(applied))
+	if len(applied) != len(All()) || applied[0].Version != 1 {
+		t.Fatalf("应执行全部 %d 条迁移，实际 %d", len(All()), len(applied))
 	}
 	if !gdb.Migrator().HasTable("questions") {
 		t.Fatal("基线之后 questions 表应当存在")
@@ -51,8 +60,8 @@ func TestUpOnEmptyDatabase(t *testing.T) {
 		t.Fatal("账本表应当存在")
 	}
 	cur, err := r.Current(context.Background())
-	if err != nil || cur != 1 {
-		t.Fatalf("当前版本应为 1，实际 %d err=%v", cur, err)
+	if err != nil || cur != head() {
+		t.Fatalf("当前版本应为 %d，实际 %d err=%v", head(), cur, err)
 	}
 }
 
@@ -97,8 +106,8 @@ func TestUpBaselinesAnAlreadyAutoMigratedDatabase(t *testing.T) {
 		t.Fatalf("基线化失败（这类库必须能被平滑接管）: %v", err)
 	}
 	cur, err := r.Current(ctx)
-	if err != nil || cur != 1 {
-		t.Fatalf("基线化后当前版本应为 1，实际 %d err=%v", cur, err)
+	if err != nil || cur != head() {
+		t.Fatalf("基线化后当前版本应为 %d，实际 %d err=%v", head(), cur, err)
 	}
 }
 
@@ -211,14 +220,17 @@ func TestCheckHeadRejectsUnmigratedDatabase(t *testing.T) {
 		t.Fatalf("空库必须被拒绝，实际: %v", err)
 	}
 
-	// 只有账本、没有基线结构：版本落后于代码。
+// 只有账本、没有基线结构：版本落后于代码。
 	if _, err := NewRunner(gdb); err != nil {
 		t.Fatalf("构造 runner 失败: %v", err)
 	}
 	if err := gdb.Create(&ledgerRow{
-		Version: 1, Name: "baseline", AppliedAt: time.Now(), Checksum: "x",
+		Version: 1, Name: All()[0].Name, AppliedAt: time.Now(), Checksum: "x",
 	}).Error; err != nil {
 		t.Fatalf("写入账本失败: %v", err)
+	}
+	if head() == 1 {
+		t.Fatal("前置条件失效：只有一条迁移时，这个用例测不出版本落后")
 	}
 	if err := CheckHead(gdb); err == nil {
 		t.Fatal("结构未建立时必须拒绝启动")

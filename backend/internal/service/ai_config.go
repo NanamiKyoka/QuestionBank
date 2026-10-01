@@ -41,16 +41,18 @@ func (s *AIConfigService) ListProviders(ctx context.Context, actor *model.User) 
 		return nil, apperr.ErrInternal.WithCause(err)
 	}
 
-	active, err := s.inUseModelIDs(ctx)
+	out := make([]schema.ProviderResponse, 0, len(list))
+	active, err := s.inUseByModel(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	out := make([]schema.ProviderResponse, 0, len(list))
 	for i := range list {
 		resp := schema.NewProviderResponse(&list[i])
 		for j := range resp.Models {
-			resp.Models[j].InUse = active[resp.Models[j].ID]
+			uses := active[resp.Models[j].ID]
+			resp.Models[j].InUse = uses != nil
+			resp.Models[j].InUseFor = inUseValues(uses)
 		}
 		out = append(out, resp)
 	}
@@ -217,11 +219,16 @@ func (s *AIConfigService) CreateModel(ctx context.Context, actor *model.User, re
 		return nil, apperr.New(apperr.CodeDuplicateName, "该供应商下已存在同名模型")
 	}
 
+	caps, err := req.Caps()
+	if err != nil {
+		return nil, apperr.New(apperr.CodeInvalidParam, err.Error())
+	}
+
 	m := &model.AIModel{
 		ProviderID:    req.ProviderID,
 		Name:          req.Name,
 		DisplayName:   req.DisplayName,
-		ModelType:     model.AIModelType(req.ModelType),
+		ModelType:     strings.Join(caps, ","),
 		MaxTokens:     4096,
 		ContextWindow: 32768,
 		IsActive:      true,
@@ -255,9 +262,13 @@ func (s *AIConfigService) CreateModel(ctx context.Context, actor *model.User, re
 	if err != nil {
 		return nil, err
 	}
-	active, _ := s.inUseModelIDs(ctx)
+	active, err := s.inUseByModel(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := schema.NewModelResponse(created)
-	resp.InUse = active[resp.ID]
+	resp.InUse = active[resp.ID] != nil
+	resp.InUseFor = inUseValues(active[resp.ID])
 	return &resp, nil
 }
 
@@ -284,8 +295,10 @@ func (s *AIConfigService) UpdateModel(ctx context.Context, actor *model.User, id
 	if req.DisplayName != nil {
 		fields["display_name"] = *req.DisplayName
 	}
-	if req.ModelType != nil {
-		fields["model_type"] = *req.ModelType
+	if caps, ok, err := req.CapsUpdate(); err != nil {
+		return nil, apperr.New(apperr.CodeInvalidParam, err.Error())
+	} else if ok {
+		fields["model_type"] = strings.Join(caps, ",")
 	}
 	if req.MaxTokens != nil {
 		fields["max_tokens"] = *req.MaxTokens
@@ -308,9 +321,13 @@ func (s *AIConfigService) UpdateModel(ctx context.Context, actor *model.User, id
 	if err != nil {
 		return nil, err
 	}
-	active, _ := s.inUseModelIDs(ctx)
+	active, err := s.inUseByModel(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := schema.NewModelResponse(updated)
-	resp.InUse = active[resp.ID]
+	resp.InUse = active[resp.ID] != nil
+	resp.InUseFor = inUseValues(active[resp.ID])
 	return &resp, nil
 }
 
@@ -440,9 +457,10 @@ func (s *AIConfigService) SetActiveConfig(ctx context.Context, actor *model.User
 			return err
 		}
 		// 校验用途匹配：把向量模型设成对话模型会导致调用时才发现问题。
-		if want != "" && m.ModelType != want {
+		// 多模态模型可以同时满足多项，所以这里判的是"具备其中之一"而非相等。
+		if want != "" && !m.Caps().Has(want) {
 			return apperr.New(apperr.CodeInvalidParam, "模型用途与配置项不匹配").
-				WithDetail("期望 %s，实际 %s", want, m.ModelType)
+				WithDetail("模型「%s」具备的能力是 %s，不含 %s", m.Name, m.Caps().String(), want)
 		}
 		if !m.IsActive {
 			return apperr.New(apperr.CodeUnprocessable, "该模型已被禁用，无法设为默认")
@@ -566,31 +584,50 @@ func settingFor(t model.AIModelType) (key, missingMsg string) {
 	return "", "未知的模型用途"
 }
 
-// inUseModelIDs 返回当前被选为默认的模型 id 集合。
-func (s *AIConfigService) inUseModelIDs(ctx context.Context) (map[uint]bool, error) {
-	out := map[uint]bool{}
-	for _, key := range model.SettingAIKeys {
+// inUseByModel 返回每个当前生效的模型被用在了哪些用途上。
+//
+// 返回 map 而非 set：一个多模态模型可以同时是默认文本模型和默认视觉模型，
+// 而这正是要显示给用户看的信息（"使用中：文本、视觉"），
+// 压成一个 true/false 就把这个区别抹掉了。
+func (s *AIConfigService) inUseByModel(ctx context.Context) (map[uint][]model.AIModelType, error) {
+	out := map[uint][]model.AIModelType{}
+	for _, t := range model.AIModelTypes {
+		key, _ := settingFor(t)
 		raw := s.repos.Settings.Get(ctx, key, "")
 		if raw == "" {
 			continue
 		}
-		if id, err := strconv.ParseUint(raw, 10, 64); err == nil && id > 0 {
-			out[uint(id)] = true
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || id == 0 {
+			continue
 		}
+		out[uint(id)] = append(out[uint(id)], t)
 	}
 	return out, nil
 }
 
-// clearIfActive 若该模型正被选为默认，则清空对应设置。
-func (s *AIConfigService) clearIfActive(ctx context.Context, modelID uint, actorID uint) error {
-	active, err := s.inUseModelIDs(ctx)
-	if err != nil {
-		return err
-	}
-	if !active[modelID] {
+// inUseValues 把用途集合转成响应里的字符串切片。
+func inUseValues(list []model.AIModelType) []string {
+	if len(list) == 0 {
 		return nil
 	}
-	for _, key := range model.SettingAIKeys {
+	out := make([]string, len(list))
+	for i, t := range list {
+		out[i] = string(t)
+	}
+	return out
+}
+
+// clearIfActive 若该模型正被选为默认，则清空对应设置。
+//
+// 按用途逐项清，而不是"是默认就全清"：多模态模型可能只被选为默认视觉模型，
+// 把文本那一栏一起清掉会让用户在毫不知情的情况下丢掉已生效的配置。
+func (s *AIConfigService) clearIfActive(ctx context.Context, modelID uint, actorID uint) error {
+	for _, t := range model.AIModelTypes {
+		key, _ := settingFor(t)
+		if key == "" {
+			continue
+		}
 		raw := s.repos.Settings.Get(ctx, key, "")
 		if raw == "" {
 			continue
@@ -604,17 +641,19 @@ func (s *AIConfigService) clearIfActive(ctx context.Context, modelID uint, actor
 	return nil
 }
 
-// autoSelectIfFirst 该用途还没有默认模型时，把新模型设为默认。
+// autoSelectIfFirst 该模型具备、却还没有默认模型的用途，把新模型设为默认。
 func (s *AIConfigService) autoSelectIfFirst(ctx context.Context, m *model.AIModel, actorID uint) error {
-	key, _ := settingFor(m.ModelType)
-	if key == "" {
-		return nil
-	}
-	if s.repos.Settings.Get(ctx, key, "") != "" {
-		return nil
-	}
-	if err := s.repos.Settings.Set(ctx, key, strconv.FormatUint(uint64(m.ID), 10), "", actorID); err != nil {
-		return apperr.ErrInternal.WithCause(err)
+	for _, t := range m.Caps() {
+		key, _ := settingFor(t)
+		if key == "" {
+			continue
+		}
+		if s.repos.Settings.Get(ctx, key, "") != "" {
+			continue
+		}
+		if err := s.repos.Settings.Set(ctx, key, strconv.FormatUint(uint64(m.ID), 10), "", actorID); err != nil {
+			return apperr.ErrInternal.WithCause(err)
+		}
 	}
 	return nil
 }
@@ -646,7 +685,7 @@ func (s *AIConfigService) TestProvider(ctx context.Context, actor *model.User, p
 			return nil, apperr.ErrInternal.WithCause(err)
 		}
 		for i := range list {
-			if list[i].ModelType == model.AIModelText && list[i].IsActive {
+			if list[i].Caps().Has(model.AIModelText) && list[i].IsActive {
 				target = &list[i]
 				break
 			}

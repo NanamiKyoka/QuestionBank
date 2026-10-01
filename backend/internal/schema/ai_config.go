@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/NanamiKyoka/questionmind/internal/model"
@@ -80,7 +81,13 @@ type ModelCreateRequest struct {
 	Name       string `json:"name" binding:"required,min=1,max=128"`
 
 	DisplayName string `json:"display_name" binding:"omitempty,max=128"`
-	ModelType   string `json:"model_type" binding:"required,oneof=text vision embedding"`
+
+	// Capabilities 模型具备的能力，多选。
+	//
+	// 与 ModelType 二选一：Capabilities 为空时回退读 ModelType，
+	// 这样只发单值的旧客户端不必立刻改造。
+	Capabilities []string `json:"capabilities" binding:"omitempty,max=3,dive,oneof=text vision embedding"`
+	ModelType    string   `json:"model_type" binding:"omitempty,oneof=text vision embedding"`
 
 	MaxTokens     *int `json:"max_tokens" binding:"omitempty,min=1,max=2000000"`
 	ContextWindow *int `json:"context_window" binding:"omitempty,min=1,max=20000000"`
@@ -89,16 +96,59 @@ type ModelCreateRequest struct {
 	SortOrder *int  `json:"sort_order"`
 }
 
+// Caps 归一化后的能力集合。调用方先确认过至少有一项，这里不再判空。
+func (r *ModelCreateRequest) Caps() ([]string, error) {
+	if len(r.Capabilities) > 0 {
+		caps, err := model.NormalizeAIModelCaps(r.Capabilities)
+		if err != nil {
+			return nil, err
+		}
+		return caps.Values(), nil
+	}
+	if r.ModelType != "" {
+		caps, err := model.NormalizeAIModelCaps([]string{r.ModelType})
+		if err != nil {
+			return nil, err
+		}
+		return caps.Values(), nil
+	}
+	return nil, fmt.Errorf("请至少选择一种模型能力")
+}
+
 type ModelUpdateRequest struct {
 	Name        *string `json:"name" binding:"omitempty,min=1,max=128"`
 	DisplayName *string `json:"display_name" binding:"omitempty,max=128"`
-	ModelType   *string `json:"model_type" binding:"omitempty,oneof=text vision embedding"`
+
+	// Capabilities / ModelType 语义同 ModelCreateRequest，二选一。
+	// 传了空数组表示"清空"——那是非法的（没有任何能力的模型用不了），
+	// 与"不传"必须区分开，因此这里只认 nil。
+	Capabilities []string `json:"capabilities" binding:"omitempty,max=3,dive,oneof=text vision embedding"`
+	ModelType    *string  `json:"model_type" binding:"omitempty,oneof=text vision embedding"`
 
 	MaxTokens     *int `json:"max_tokens" binding:"omitempty,min=1,max=2000000"`
 	ContextWindow *int `json:"context_window" binding:"omitempty,min=1,max=20000000"`
 
 	IsActive  *bool `json:"is_active"`
 	SortOrder *int  `json:"sort_order"`
+}
+
+// CapsUpdate 返回要写入的规范化集合；两个字段都没传时返回 (nil, false, nil)。
+func (r *ModelUpdateRequest) CapsUpdate() ([]string, bool, error) {
+	if r.Capabilities != nil {
+		caps, err := model.NormalizeAIModelCaps(r.Capabilities)
+		if err != nil {
+			return nil, false, err
+		}
+		return caps.Values(), true, nil
+	}
+	if r.ModelType != nil {
+		caps, err := model.NormalizeAIModelCaps([]string{*r.ModelType})
+		if err != nil {
+			return nil, false, err
+		}
+		return caps.Values(), true, nil
+	}
+	return nil, false, nil
 }
 
 type ModelResponse struct {
@@ -107,7 +157,14 @@ type ModelResponse struct {
 	ProviderName string `json:"provider_name"`
 	Name         string `json:"name"`
 	DisplayName  string `json:"display_name"`
-	ModelType    string `json:"model_type"`
+
+	// Capabilities 该模型具备的全部能力，供界面多选框与用途下拉使用。
+	Capabilities []string `json:"capabilities"`
+	// ModelType 归一化存储形式（如 "text,vision"）。
+	//
+	// 与 Capabilities 同源、不是第二份状态：只是把同一个集合按
+	// 数据库里的写法原样回显，便于用户手工核对。
+	ModelType string `json:"model_type"`
 
 	MaxTokens     int `json:"max_tokens"`
 	ContextWindow int `json:"context_window"`
@@ -115,20 +172,24 @@ type ModelResponse struct {
 	IsActive  bool `json:"is_active"`
 	SortOrder int  `json:"sort_order"`
 
-	// InUse 该模型当前是否被选为默认模型。
+	// InUse 该模型当前被选为默认模型的用途（可多个）。
 	InUse bool `json:"in_use"`
+	// InUseFor 当前被选为默认的具体用途，便于界面直接标出是哪一栏在用它。
+	InUseFor []string `json:"in_use_for"`
 
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // NewModelResponse 组装响应。
 func NewModelResponse(m *model.AIModel) ModelResponse {
+	caps := m.Caps()
 	r := ModelResponse{
 		ID:            m.ID,
 		ProviderID:    m.ProviderID,
 		Name:          m.Name,
 		DisplayName:   m.DisplayName,
-		ModelType:     string(m.ModelType),
+		Capabilities:  caps.Values(),
+		ModelType:     caps.String(),
 		MaxTokens:     m.MaxTokens,
 		ContextWindow: m.ContextWindow,
 		IsActive:      m.IsActive,

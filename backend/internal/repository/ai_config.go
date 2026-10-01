@@ -90,17 +90,6 @@ type AIModelRepo struct {
 
 func NewAIModelRepo(db *gorm.DB) *AIModelRepo { return &AIModelRepo{db: db} }
 
-// ListByType 按用途筛选启用的模型，用于解析"当前生效的模型"。
-func (r *AIModelRepo) ListByType(ctx context.Context, modelType model.AIModelType) ([]model.AIModel, error) {
-	var out []model.AIModel
-	err := conn(ctx, r.db).
-		Preload("Provider").
-		Where("model_type = ? AND is_active = ?", modelType, true).
-		Order("sort_order ASC, id ASC").
-		Find(&out).Error
-	return out, err
-}
-
 // ListByProvider 返回某供应商下的全部模型。
 func (r *AIModelRepo) ListByProvider(ctx context.Context, providerID uint) ([]model.AIModel, error) {
 	var out []model.AIModel
@@ -151,12 +140,4 @@ func (r *AIModelRepo) ExistsName(ctx context.Context, providerID uint, name stri
 		return false, err
 	}
 	return n > 0, nil
-}
-
-// CustomModelNames 题目自定义的模型名校验：同一供应商下不允许重名。
-func (r *AIModelRepo) CountByType(ctx context.Context, modelType model.AIModelType) (int64, error) {
-	var n int64
-	err := conn(ctx, r.db).Model(&model.AIModel{}).
-		Where("model_type = ?", modelType).Count(&n).Error
-	return n, err
 }

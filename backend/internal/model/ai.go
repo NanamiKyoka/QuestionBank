@@ -36,8 +36,15 @@ type AIModel struct {
 	Name string `gorm:"size:128;not null" json:"name"`
 	// DisplayName 界面上展示的名字。
 	DisplayName string `gorm:"size:128" json:"display_name"`
-	// ModelType 决定它能否被用于对应场景（对话/识图/向量化）。
-	ModelType AIModelType `gorm:"size:16;not null;index" json:"model_type"`
+	// ModelType 存储模型的能力集合，形如 "text,vision"。
+	//
+	// 存字符串而不是位掩码：位掩码的位序没有可读性，一次 UPDATE 就可能
+	// 把既有行的含义悄悄改掉；而 "text,vision" 在数据库里直接可读，
+	// 排查问题不用查文档。宽度按最长的 "text,vision,embedding" 预留。
+	//
+	// 读取一律走 Caps()，不要直接当单值用——同一个模型同时具备多种能力
+	// 是常态而不是例外（见 AIModelCaps）。
+	ModelType string `gorm:"size:32;not null;index" json:"model_type"`
 
 	// MaxTokens 单次输出上限；ContextWindow 上下文窗口。
 	MaxTokens     int `gorm:"not null;default:4096" json:"max_tokens"`
@@ -50,6 +57,9 @@ type AIModel struct {
 }
 
 func (AIModel) TableName() string { return "ai_models" }
+
+// Caps 该模型具备的能力集合。
+func (m *AIModel) Caps() AIModelCaps { return ParseAIModelCaps(m.ModelType) }
 
 // VectorDoc 知识点向量索引。
 //

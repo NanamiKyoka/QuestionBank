@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { aiApi, type ActiveConfig, type ModelInfo, type ModelType, type Provider } from '@/api/ai'
+import {
+  aiApi,
+  MODEL_TYPE_LABELS,
+  MODEL_TYPES,
+  type ActiveConfig,
+  type ModelInfo,
+  type ModelType,
+  type Provider,
+} from '@/api/ai'
 import { ApiError, get } from '@/api/http'
 
 /**
@@ -56,7 +64,14 @@ const modelForm = reactive({
   provider_id: 0,
   name: '',
   display_name: '',
-  model_type: 'text' as ModelType,
+  /**
+   * 能力多选而不是单选。
+   *
+   * 绝大多数模型是多模态的：同一个模型既跑对话也跑识图。把它记两次
+   * 既不真实，也会让"文本模型"与"视觉模型"变成两条各自独立的配置，
+   * 用户改了一处、另一处照旧用着旧模型。
+   */
+  capabilities: ['text'] as ModelType[],
   max_tokens: 4096,
   context_window: 0,
   is_active: true,
@@ -81,10 +96,18 @@ const presets = [
 
 const allModels = computed(() => providers.value.flatMap((p) => p.models))
 
+/**
+ * 按用途分组的模型。
+ *
+ * 判据是 `capabilities.includes(t)` 而不是 `model_type === t`：同一个模型
+ * 可以同时出现在文本与视觉两组里，这正是多模态的意义。
+ */
 const modelsByType = computed(() => {
   const group: Record<ModelType, ModelInfo[]> = { text: [], vision: [], embedding: [] }
   for (const model of allModels.value) {
-    group[model.model_type]?.push(model)
+    for (const type of MODEL_TYPES) {
+      if (model.capabilities.includes(type)) group[type].push(model)
+    }
   }
   return group
 })
@@ -218,7 +241,7 @@ async function aiProviderDelete(id: number) {
 }
 
 async function testProvider(provider: Provider) {
-  const model = provider.models.find((m) => m.model_type === 'text' && m.is_active)
+  const model = provider.models.find((m) => m.capabilities.includes('text') && m.is_active)
   if (!model) {
     ElMessage.warning('该供应商下还没有启用的文本模型，无法测试')
     return
@@ -245,7 +268,7 @@ function openCreateModel(provider?: Provider) {
   modelForm.provider_id = provider?.id ?? providers.value[0]?.id ?? 0
   modelForm.name = ''
   modelForm.display_name = ''
-  modelForm.model_type = 'text'
+  modelForm.capabilities = ['text']
   modelForm.max_tokens = 4096
   modelForm.context_window = 0
   modelForm.is_active = true
@@ -257,7 +280,9 @@ function openEditModel(model: ModelInfo) {
   modelForm.provider_id = model.provider_id
   modelForm.name = model.name
   modelForm.display_name = model.display_name
-  modelForm.model_type = model.model_type
+  // 拷贝一份再编辑：直接赋值会让 v-model 与列表共享同一个数组，
+  // 点错了"取消"也会把列表里的模型改掉。
+  modelForm.capabilities = [...model.capabilities]
   modelForm.max_tokens = model.max_tokens
   modelForm.context_window = model.context_window
   modelForm.is_active = model.is_active
@@ -273,11 +298,15 @@ async function submitModel() {
     ElMessage.warning('请填写模型名')
     return
   }
+  if (modelForm.capabilities.length === 0) {
+    ElMessage.warning('请至少选择一种模型能力')
+    return
+  }
   if (editingModelId.value) {
     await aiApi.updateModel(editingModelId.value, {
       name: modelForm.name.trim(),
       display_name: modelForm.display_name.trim(),
-      model_type: modelForm.model_type,
+      capabilities: [...modelForm.capabilities],
       max_tokens: modelForm.max_tokens,
       context_window: modelForm.context_window,
       is_active: modelForm.is_active,
@@ -288,7 +317,7 @@ async function submitModel() {
       provider_id: modelForm.provider_id,
       name: modelForm.name.trim(),
       display_name: modelForm.display_name.trim(),
-      model_type: modelForm.model_type,
+      capabilities: [...modelForm.capabilities],
       max_tokens: modelForm.max_tokens,
       context_window: modelForm.context_window,
       is_active: modelForm.is_active,
@@ -342,7 +371,7 @@ async function saveActive() {
 
 
 function typeLabel(type: ModelType): string {
-  return { text: '文本', vision: '视觉', embedding: '向量' }[type]
+  return MODEL_TYPE_LABELS[type] ?? type
 }
 
 function typeTag(type: ModelType): 'primary' | 'success' | 'warning' {
@@ -350,6 +379,18 @@ function typeTag(type: ModelType): 'primary' | 'success' | 'warning' {
     | 'primary'
     | 'success'
     | 'warning'
+}
+
+/**
+ * 一个模型被哪些用途选为默认。
+ *
+ * 直接用后端下发的 `in_use_for` 而不是在前端推断：同一个模型可以同时
+ * 占住文本与视觉两栏，只显示一个"使用中"的标签会让用户以为它只管一栏，
+ * 也就不知道改它会连带影响哪里。
+ */
+function inUseLabel(model: ModelInfo): string {
+  if (!model.in_use_for?.length) return ''
+  return model.in_use_for.map((t) => `${typeLabel(t)}用中`).join(' / ')
 }
 
 // 首次拿到配置后同步下拉选择。
@@ -375,6 +416,10 @@ watch(active, syncSelection, { immediate: true })
           <el-button type="primary" size="small" @click="saveActive">保存</el-button>
         </div>
       </template>
+
+      <div class="mt-1 text-xs text-gray-400">
+        三个下拉可以选同一个模型——多数模型既能对话也能识图，勾两项能力即可。
+      </div>
 
       <el-row :gutter="12">
         <el-col v-for="item in [
@@ -452,10 +497,19 @@ watch(active, syncSelection, { immediate: true })
             :key="model.id"
             class="flex items-center gap-2 rounded bg-gray-50 px-2 py-1 text-sm"
           >
-            <el-tag size="small" :type="typeTag(model.model_type)">{{ typeLabel(model.model_type) }}</el-tag>
+            <el-tag
+              v-for="cap in model.capabilities"
+              :key="cap"
+              size="small"
+              :type="typeTag(cap)"
+            >
+              {{ typeLabel(cap) }}
+            </el-tag>
             <span>{{ model.name }}</span>
             <span v-if="model.display_name" class="text-xs text-gray-400">{{ model.display_name }}</span>
-            <el-tag v-if="model.in_use" size="small" type="success" effect="plain">使用中</el-tag>
+            <el-tag v-if="model.in_use" size="small" type="success" effect="plain">
+              {{ inUseLabel(model) }}
+            </el-tag>
             <el-tag v-if="!model.is_active" size="small" type="info">已停用</el-tag>
             <div class="ml-auto flex gap-1">
               <el-button text size="small" @click="openEditModel(model)">编辑</el-button>
@@ -560,12 +614,15 @@ watch(active, syncSelection, { immediate: true })
         <el-form-item label="显示名">
           <el-input v-model="modelForm.display_name" placeholder="选填，如：DeepSeek 对话" />
         </el-form-item>
-        <el-form-item label="类型" required>
-          <el-radio-group v-model="modelForm.model_type">
-            <el-radio value="text">文本</el-radio>
-            <el-radio value="vision">视觉</el-radio>
-            <el-radio value="embedding">向量</el-radio>
-          </el-radio-group>
+        <el-form-item label="能力" required>
+          <el-checkbox-group v-model="modelForm.capabilities">
+            <el-checkbox v-for="cap in MODEL_TYPES" :key="cap" :value="cap">
+              {{ MODEL_TYPE_LABELS[cap] }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <div class="mt-1 text-xs text-gray-400">
+            多选。现在多数模型既能对话又能识图，勾两项就够，不必录两遍。
+          </div>
         </el-form-item>
         <el-form-item label="最大输出">
           <el-input-number v-model="modelForm.max_tokens" :min="1" :max="2000000" :step="1024" />

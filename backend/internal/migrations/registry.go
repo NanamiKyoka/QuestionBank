@@ -16,6 +16,7 @@ import (
 // 改了会被校验和检测出来并拒绝启动。
 var all = []Migration{
 	baseline,
+	modelCapabilities,
 }
 
 // All 返回迁移表的一份副本。
@@ -68,6 +69,34 @@ var baseline = Migration{
 		}
 		return verifyBaselineTables(db)
 	},
+}
+
+// modelCapabilities 让一个模型可以同时具备多种能力。
+//
+// 列名保持 model_type 不变、只放宽长度，是刻意的：
+// 既有行存的是 "text" / "vision" / "embedding" 这样的单值，
+// 在新的解析逻辑下**语义完全不变**——单值集合就是只具备那一项。
+// 于是这条迁移不需要搬数据，SQLite 上甚至是空操作（它忽略 VARCHAR 长度），
+// 真正需要 ALTER 的只有会严格执行长度的 MySQL。
+//
+// 改成位掩码或 JSON 数组看起来更"正规"，但两者都要搬数据，
+// 而且位掩码的位序没有可读性，一次 UPDATE 就能把既有行的含义悄悄改掉。
+var modelCapabilities = Migration{
+	Version: 2,
+	Name:    "model_capabilities",
+
+	Body: `放宽 ai_models.model_type 的列宽（16 → 32），使其能存下能力集合
+（如 "text,vision"）。既有行仍是 "text"/"vision"/"embedding" 单值，
+在新解析逻辑下语义不变，因此无需搬数据。SQLite 忽略 VARCHAR 长度，脚本为空操作。`,
+
+	SQL: map[string]string{
+		DialectMySQL: `ALTER TABLE ai_models MODIFY COLUMN model_type VARCHAR(32) NOT NULL;`,
+	},
+	DownSQL: map[string]string{
+		DialectMySQL: `ALTER TABLE ai_models MODIFY COLUMN model_type VARCHAR(16) NOT NULL;`,
+	},
+
+	NoDownReason: "",
 }
 
 // verifyBaselineTables 核对基线承诺的表确实都在。

@@ -1,5 +1,10 @@
 package model
 
+import (
+	"fmt"
+	"strings"
+)
+
 // 本文件集中定义所有枚举值。用字符串而非整数存储：
 //   - 数据库里可读，排查问题不用查文档；
 //   - 新增取值无需担心顺序错乱；
@@ -291,7 +296,7 @@ const (
 	AIInterfaceGemini AIInterfaceType = "gemini"
 )
 
-// AIModelType 模型用途。
+// AIModelType 模型的单项用途。
 type AIModelType string
 
 const (
@@ -299,6 +304,141 @@ const (
 	AIModelVision    AIModelType = "vision"
 	AIModelEmbedding AIModelType = "embedding"
 )
+
+// AIModelTypes 全部合法用途，**顺序即展示顺序**。
+//
+// 规范化（ParseAIModelCaps）也按这个顺序输出，于是同一个能力集合
+// 不管从哪个入口进来，存下来的字符串都长得一样——数据库里可比，
+// 校验和才稳定。
+var AIModelTypes = []AIModelType{AIModelText, AIModelVision, AIModelEmbedding}
+
+func (t AIModelType) Valid() bool {
+	for _, v := range AIModelTypes {
+		if v == t {
+			return true
+		}
+	}
+	return false
+}
+
+func (t AIModelType) Label() string {
+	switch t {
+	case AIModelText:
+		return "文本"
+	case AIModelVision:
+		return "视觉"
+	case AIModelEmbedding:
+		return "向量"
+	}
+	return string(t)
+}
+
+// AIModelCaps 模型的能力集合。
+//
+// 为什么不是单个用途：现在绝大多数模型都是多模态的——同一个模型既跑对话
+// 也跑识图。逼用户把它录两遍（一次选"文本"、一次选"视觉"）既不真实，
+// 也会让"文本模型"和"视觉模型"指向两条互不相干的配置，用户改了一处
+// 另一处照旧用着旧模型。多选是对模型能力的如实描述。
+//
+// 但"文本 + 视觉"和"向量"不是一回事：向量模型只有 embedding 端点，
+// 塞进对话模型里调用必然失败。因此集合仍然存在，只是用途之间是**或**。
+type AIModelCaps []AIModelType
+
+// ParseAIModelCaps 解析库里存的逗号分隔字符串。
+//
+// 顺序按 AIModelTypes 归一化并去重，所以 "vision,text" 与 "text,vision"
+// 解析出来是同一个集合——同一份配置不会因为界面上的点选顺序不同
+// 就存成两种字符串。无法识别的取值被丢弃而不是报错：这是**读**既有数据的
+// 路径，为了让一条脏数据把整个设置页卡死不划算。写入路径另有严格校验。
+func ParseAIModelCaps(s string) AIModelCaps {
+	seen := map[AIModelType]bool{}
+	var raw []AIModelType
+	for _, part := range strings.Split(s, ",") {
+		t := AIModelType(strings.TrimSpace(part))
+		if !t.Valid() || seen[t] {
+			continue
+		}
+		seen[t] = true
+		raw = append(raw, t)
+	}
+	out := make(AIModelCaps, 0, len(raw))
+	for _, t := range AIModelTypes {
+		if seen[t] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// NormalizeAIModelCaps 校验并归一化一组用途，用于写入路径。
+//
+// 与 ParseAIModelCaps 的"宽松"是刻意的分工：读既有数据时丢弃不认识的值，
+// 是为了让一条脏数据不至于让整个设置页打不开；写则必须严格——
+// 界面把"audio"存成字符串，就意味着用户以为自己配了一个能力，
+// 而实际上它在任何地方都用不了。静默丢弃只会把问题推迟到调用时才暴露。
+func NormalizeAIModelCaps(list []string) (AIModelCaps, error) {
+	parts := make([]string, 0, len(list))
+	for _, s := range list {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if !AIModelType(s).Valid() {
+			return nil, fmt.Errorf("未知的模型能力 %q，可选：%s",
+				s, joinModelTypes(AIModelTypes))
+		}
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("请至少选择一种模型能力")
+	}
+	return ParseAIModelCaps(strings.Join(parts, ",")), nil
+}
+
+// joinModelTypes 把用途清单拼成 "文本、视觉、向量" 这样的中文提示。
+func joinModelTypes(list []AIModelType) string {
+	out := make([]string, len(list))
+	for i, t := range list {
+		out[i] = t.Label()
+	}
+	return strings.Join(out, "、")
+}
+
+func (c AIModelCaps) Has(t AIModelType) bool {
+	for _, v := range c {
+		if v == t {
+			return true
+		}
+	}
+	return false
+}
+
+// String 归一化后的存储形式，如 "text,vision"。
+func (c AIModelCaps) String() string {
+	parts := make([]string, len(c))
+	for i, t := range c {
+		parts[i] = string(t)
+	}
+	return strings.Join(parts, ",")
+}
+
+// Labels 每个能力的中文名。
+func (c AIModelCaps) Labels() []string {
+	out := make([]string, len(c))
+	for i, t := range c {
+		out[i] = t.Label()
+	}
+	return out
+}
+
+// Values 归一化后的字符串切片，供 JSON 响应直接使用。
+func (c AIModelCaps) Values() []string {
+	out := make([]string, len(c))
+	for i, t := range c {
+		out[i] = string(t)
+	}
+	return out
+}
 
 // AgentRunStatus 助手单次运行状态。
 type AgentRunStatus string
