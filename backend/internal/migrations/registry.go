@@ -55,22 +55,15 @@ var baseline = Migration{
 	//
 	// 这张清单的作用是**挡住**"基线跟着模型一起变"这种偷懒：
 	// 模型以后新增的表不由基线负责，必须写新迁移。
-	// 执行时会核对，确保模型没在基线之后悄悄长出新表。
+	// 执行时基线只建清单内的表，模型多出来的表会在启动时被
+	// CheckModelDrift 拦下来，而不是被顺手建掉。
 	Tables: baselineTables(),
 
 	Up: func(ctx context.Context, db *gorm.DB) error {
-		// 建**除基线清单之外**的表。
-		//
-		// 正常情况下这个集合是空的：模型若在基线之后新增了表，
-		// 说明作者忘了写新迁移。此时必须报错而不是顺手建掉——
-		// 顺手建掉会让"缺了一条迁移"这件事永远消失在账本里。
-		extra := tablesNotInBaseline(model.AllModels())
-		if len(extra) > 0 {
-			return fmt.Errorf(
-				"模型里有 %d 张表不属于基线清单（%v）：请为它们各写一条新迁移，不要靠基线创建",
-				len(extra), extra)
-		}
-		if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		// 只建**基线清单之内**的表。清单之外的模型说明作者还没写新迁移，
+		// 在这里顺手建掉会让"缺了一条迁移"永远消失在账本里，
+		// 而代码已经按"该表由新迁移创建"假设过了。
+		if err := db.AutoMigrate(baselineModels()...); err != nil {
 			return fmt.Errorf("建立基线表结构失败: %w", err)
 		}
 		return verifyBaselineTables(db)
@@ -91,40 +84,122 @@ func verifyBaselineTables(db *gorm.DB) error {
 	return nil
 }
 
+// tableName 取一个模型的表名。
+func tableName(m any) string {
+	if namer, ok := m.(interface{ TableName() string }); ok {
+		return namer.TableName()
+	}
+	// 理论上每个模型都实现了 TableName；真走到这里说明有人漏了，
+	// 静默跳过只会让基线悄悄少一张表，所以这里明确失败。
+	panic(fmt.Sprintf("模型 %T 没有实现 TableName()，无法登记到迁移账本", m))
+}
+
 // tableNamesOf 从模型列表里取出表名。
 func tableNamesOf(models []any) []string {
 	out := make([]string, 0, len(models))
 	for _, m := range models {
-		if namer, ok := m.(interface{ TableName() string }); ok {
-			out = append(out, namer.TableName())
-			continue
-		}
-		// 理论上每个模型都实现了 TableName；真走到这里说明有人漏了，
-		// 静默跳过只会让基线悄悄少一张表，所以这里明确失败。
-		panic(fmt.Sprintf("模型 %T 没有实现 TableName()，无法登记到基线", m))
+		out = append(out, tableName(m))
 	}
 	return out
 }
 
-// baselineTables 返回基线覆盖的表名清单。
-func baselineTables() []string {
-	names := tableNamesOf(model.AllModels())
-	sort.Strings(names)
-	return names
+// baselineTableNames 基线覆盖的表名。
+//
+// 这是一份**手写冻结**的字面量，而不是 tableNamesOf(model.AllModels())。
+// 从模型求值会让漂移守卫退化成恒真式：模型加一张表、清单跟着多一张，
+// 于是"这张表还没有迁移"这件事永远不可能被发现——守卫形同虚设。
+//
+// 因此往这份清单里加表名，等于承认基线要为它负责，那正是它要防的事。
+// 新表走自己的迁移，并在那条迁移的 Tables 里登记。
+var baselineTableNames = []string{
+	"activity_logs",
+	"agent_runs",
+	"agent_steps",
+	"ai_models",
+	"ai_providers",
+	"chat_messages",
+	"chat_sessions",
+	"import_tasks",
+	"knowledge_points",
+	"paper_events",
+	"paper_folders",
+	"paper_nodes",
+	"paper_versions",
+	"papers",
+	"prompt_templates",
+	"question_knowledge_points",
+	"question_tags",
+	"questions",
+	"review_logs",
+	"subject_members",
+	"subjects",
+	"system_settings",
+	"tag_categories",
+	"tags",
+	"users",
+	"vector_docs",
 }
 
-// tablesNotInBaseline 返回模型里有、基线清单里没有的表。
-func tablesNotInBaseline(models []any) []string {
-	inBaseline := make(map[string]bool, 32)
-	for _, n := range baselineTables() {
-		inBaseline[n] = true
+// baselineTables 返回基线覆盖的表名清单。
+func baselineTables() []string {
+	out := make([]string, len(baselineTableNames))
+	copy(out, baselineTableNames)
+	sort.Strings(out)
+	return out
+}
+
+// baselineModels 挑出基线清单覆盖的模型，保留模型注册顺序
+// （被引用的表必须排在引用方之前，外键才不会建失败）。
+func baselineModels() []any {
+	in := make(map[string]bool, len(baselineTableNames))
+	for _, n := range baselineTableNames {
+		in[n] = true
 	}
+	out := make([]any, 0, len(in))
+	for _, m := range model.AllModels() {
+		if in[tableName(m)] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// coveredTables 返回所有迁移（含基线）声明负责的表。
+func coveredTables() map[string]bool {
+	out := map[string]bool{}
+	for _, m := range All() {
+		for _, name := range m.Tables {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// tablesWithoutMigration 返回模型里有、却没有任何迁移声明负责的表。
+func tablesWithoutMigration(models []any) []string {
+	in := coveredTables()
 	var extra []string
 	for _, n := range tableNamesOf(models) {
-		if !inBaseline[n] {
+		if !in[n] {
 			extra = append(extra, n)
 		}
 	}
 	sort.Strings(extra)
 	return extra
+}
+
+// CheckModelDrift 校验每张业务表都有迁移负责。
+//
+// 与 AutoMigrate 的区别正是这条存在的理由：AutoMigrate 永远追得上模型，
+// 于是"这个库是什么结构"无人负责，升级脚本也无处可写。
+// 模型新增的表而没人写迁移时，这里在启动阶段就失败，
+// 错误信息直接告诉作者该补哪条迁移。
+func CheckModelDrift() error {
+	extra := tablesWithoutMigration(model.AllModels())
+	if len(extra) > 0 {
+		return fmt.Errorf(
+			"模型里有 %d 张表没有任何迁移负责（%v）：请为它们各写一条新迁移，并在该迁移的 Tables 里登记",
+			len(extra), extra)
+	}
+	return nil
 }

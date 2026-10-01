@@ -23,6 +23,7 @@ import (
 	"github.com/NanamiKyoka/questionmind/internal/config"
 	"github.com/NanamiKyoka/questionmind/internal/db"
 	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
+	"github.com/NanamiKyoka/questionmind/internal/migrations"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/cryptox"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/jwtx"
 	"github.com/NanamiKyoka/questionmind/internal/router"
@@ -84,11 +85,21 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 	app.cleanups = append(app.cleanups, func() { _ = db.Close(gdb) })
 	app.cleanups = append(app.cleanups, logger)
 
+	if err := migrations.CheckModelDrift(); err != nil {
+		app.Close()
+		return nil, err
+	}
+
 	if cfg.Database.AutoMigrate {
 		if err := db.Migrate(gdb); err != nil {
 			app.Close()
 			return nil, err
 		}
+	} else if err := db.VerifySchema(gdb); err != nil {
+		// 关掉自动迁移只是把结构变更交给发布流程，不是放弃校验。
+		// 少了这一步，进程会对着任意 schema 正常启动。
+		app.Close()
+		return nil, err
 	}
 
 	repos := service.NewRepos(gdb)

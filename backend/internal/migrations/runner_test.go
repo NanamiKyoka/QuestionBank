@@ -2,7 +2,9 @@ package migrations
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,13 +163,114 @@ func TestStatusFlagsUnknownVersion(t *testing.T) {
 	}
 }
 
-// 基线必须冻结：模型长出新表而没人写迁移时，要报错而不是顺手建掉。
-func TestBaselineRefusesToAbsorbNewTables(t *testing.T) {
-	if got := tablesNotInBaseline(append(model.AllModels(), &ledgerRow{})); len(got) == 0 {
-		t.Fatal("账本表不属于基线清单，应当被识别为多出来的表")
+// 基线清单必须是冻结的字面量，并且与模型一一对应。
+//
+// 两条方向都要查：清单里有而模型没有的表建不出来；
+// 模型有而清单没有的表则说明有人改了模型却没写迁移。
+func TestBaselineListMatchesModels(t *testing.T) {
+	inModels := map[string]bool{}
+	for _, name := range tableNamesOf(model.AllModels()) {
+		inModels[name] = true
 	}
-	if extra := tablesNotInBaseline(model.AllModels()); len(extra) != 0 {
-		t.Fatalf("当前模型应全部落在基线清单内，多出：%v", extra)
+	for _, name := range baselineTables() {
+		if !inModels[name] {
+			t.Fatalf("基线清单里的 %s 没有任何模型，实现它的那条迁移一定会建不出这张表", name)
+		}
+	}
+	if len(baselineTableNames) != len(baselineTables()) {
+		t.Fatal("baselineTables 必须返回清单的完整副本")
+	}
+}
+
+// 迁移漏写必须被发现，而不是被基线顺手建掉。
+func TestModelDriftIsDetected(t *testing.T) {
+	if err := CheckModelDrift(); err != nil {
+		t.Fatalf("当前模型都应有迁移负责: %v", err)
+	}
+	// 账本表由 runner 自己建，不属于任何迁移 —— 拿它验证这条检查真的会响。
+	if got := tablesWithoutMigration(append(model.AllModels(), &ledgerRow{})); len(got) == 0 {
+		t.Fatal("没有迁移负责的表应当被报出来")
+	}
+}
+
+// 基线只建清单内的表：模型多出来的表不会被顺手建掉。
+func TestBaselineOnlyCreatesItsOwnTables(t *testing.T) {
+	names := map[string]bool{}
+	for _, m := range baselineModels() {
+		names[tableName(m)] = true
+	}
+	if len(names) != len(baselineTableNames) {
+		t.Fatalf("基线应覆盖全部 %d 张表，实际 %d 张", len(baselineTableNames), len(names))
+	}
+}
+
+// 关闭自动迁移的部署靠它拿到版本校验。
+func TestCheckHeadRejectsUnmigratedDatabase(t *testing.T) {
+	gdb := newDB(t)
+	if err := CheckHead(gdb); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("空库必须被拒绝，实际: %v", err)
+	}
+
+	// 只有账本、没有基线结构：版本落后于代码。
+	if _, err := NewRunner(gdb); err != nil {
+		t.Fatalf("构造 runner 失败: %v", err)
+	}
+	if err := gdb.Create(&ledgerRow{
+		Version: 1, Name: "baseline", AppliedAt: time.Now(), Checksum: "x",
+	}).Error; err != nil {
+		t.Fatalf("写入账本失败: %v", err)
+	}
+	if err := CheckHead(gdb); err == nil {
+		t.Fatal("结构未建立时必须拒绝启动")
+	}
+}
+
+func TestCheckHeadAcceptsFullyMigratedDatabase(t *testing.T) {
+	gdb := newDB(t)
+	r, err := NewRunner(gdb)
+	if err != nil {
+		t.Fatalf("构造 runner 失败: %v", err)
+	}
+	if _, err := r.Up(context.Background(), 0); err != nil {
+		t.Fatalf("执行迁移失败: %v", err)
+	}
+	if err := CheckHead(gdb); err != nil {
+		t.Fatalf("迁移到 head 的库应当通过校验: %v", err)
+	}
+}
+
+// 账本说已迁移、表却不在，说明结构与账本对不上，必须拒绝服务。
+func TestCheckHeadRejectsLedgerWithoutTables(t *testing.T) {
+	gdb := newDB(t)
+	r, err := NewRunner(gdb)
+	if err != nil {
+		t.Fatalf("构造 runner 失败: %v", err)
+	}
+	if _, err := r.Up(context.Background(), 0); err != nil {
+		t.Fatalf("执行迁移失败: %v", err)
+	}
+	if err := gdb.Migrator().DropTable("questions"); err != nil {
+		t.Fatalf("删除 questions 失败: %v", err)
+	}
+	if err := CheckHead(gdb); err == nil {
+		t.Fatal("表缺失时必须拒绝启动")
+	}
+}
+
+// 校验和不一致时 Verify 与 CheckHead 都要报出来，且顺序稳定。
+func TestVerifyLedgerProblemsAreDeterministic(t *testing.T) {
+	list := All()
+	rows := map[int]ledgerRow{
+		2: {Version: 2, Name: "future", Checksum: "x"},
+		1: {Version: 1, Name: list[0].Name, Checksum: "deadbeef"},
+	}
+	first := verifyLedger(list, rows)
+	second := verifyLedger(list, rows)
+	if len(first) != 2 {
+		t.Fatalf("两条问题都应报出，实际 %d: %v", len(first), first)
+	}
+	if strings.Join(first, "|") != strings.Join(second, "|") {
+		t.Fatal("同一份坏账本必须给出同一份清单")
 	}
 }
 

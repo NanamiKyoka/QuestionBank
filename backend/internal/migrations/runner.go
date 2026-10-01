@@ -89,9 +89,25 @@ func (r *Runner) Verify(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if problems := verifyLedger(r.all, rows); len(problems) > 0 {
+		return &ChecksumError{Problems: problems}
+	}
+	return nil
+}
+
+// verifyLedger 比对账本与代码里的迁移表，返回全部不一致之处。
+//
+// 版本升序遍历，错误信息的顺序因此是稳定的——同一份坏账本
+// 每次都给出同一份清单，运维不用怀疑"是不是又坏了一处"。
+func verifyLedger(all []Migration, rows map[int]ledgerRow) []string {
+	known := make(map[int]*Migration, len(all))
+	for i := range all {
+		known[all[i].Version] = &all[i]
+	}
 	var problems []string
-	for version, row := range rows {
-		m := r.byVersion(version)
+	for _, version := range sortedVersions(rows) {
+		row := rows[version]
+		m := known[version]
 		if m == nil {
 			// 账本里有当前代码里不存在的版本：多半是回退了代码。
 			problems = append(problems, fmt.Sprintf(
@@ -104,8 +120,62 @@ func (r *Runner) Verify(ctx context.Context) error {
 				version, m.Name, short(row.Checksum), short(got)))
 		}
 	}
-	if len(problems) > 0 {
+	return problems
+}
+
+// CheckHead 只读核对数据库结构是否已经追上当前代码。
+//
+// 存在的理由是 database.auto_migrate=false 的部署：关掉自动迁移的
+// 理由是"结构变更要走发布流程"，而不是"允许进程对着任意 schema 服务"。
+// 跳过检查换来的是启动时一切正常、第一条查询在生产上炸掉。
+//
+// 全程只读：它不建账本表、不写任何一行——调用方恰恰是那些不希望
+// 启动路径对结构做任何改动的部署。
+func CheckHead(db *gorm.DB) error {
+	if !db.Migrator().HasTable(ledgerTable) {
+		return fmt.Errorf("%w：账本表 %s 不存在，说明这个库从未执行过迁移", ErrNotInitialized, ledgerTable)
+	}
+	var rows []ledgerRow
+	if err := db.Find(&rows).Error; err != nil {
+		return fmt.Errorf("读取迁移账本失败: %w", err)
+	}
+	applied := make(map[int]ledgerRow, len(rows))
+	for _, row := range rows {
+		applied[row.Version] = row
+	}
+	if len(applied) == 0 {
+		return fmt.Errorf("%w：账本表 %s 是空的", ErrNotInitialized, ledgerTable)
+	}
+
+	list := All()
+	if problems := verifyLedger(list, applied); len(problems) > 0 {
 		return &ChecksumError{Problems: problems}
+	}
+
+	var cur, head int
+	for v := range applied {
+		if v > cur {
+			cur = v
+		}
+	}
+	if len(list) > 0 {
+		head = list[len(list)-1].Version
+	}
+	if cur < head {
+		return fmt.Errorf("数据库结构停在 v%04d，当前代码需要 v%04d：请先执行 migrate up", cur, head)
+	}
+	if cur > head {
+		return fmt.Errorf("数据库结构是 v%04d，比当前代码的 v%04d 还新：请部署与它匹配的代码", cur, head)
+	}
+
+	var missing []string
+	for _, name := range sortedTableNames(coveredTables()) {
+		if !db.Migrator().HasTable(name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("账本记的是 v%04d，但这些表并不存在：%v；结构与账本不一致", head, missing)
 	}
 	return nil
 }
@@ -314,6 +384,26 @@ func short(s string) string {
 		return s
 	}
 	return s[:12]
+}
+
+// sortedVersions 返回账本里的版本号，升序。
+func sortedVersions(rows map[int]ledgerRow) []int {
+	out := make([]int, 0, len(rows))
+	for v := range rows {
+		out = append(out, v)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// sortedTableNames 返回表名集合的升序切片。
+func sortedTableNames(tables map[string]bool) []string {
+	out := make([]string, 0, len(tables))
+	for n := range tables {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func joinLines(items []string) string {

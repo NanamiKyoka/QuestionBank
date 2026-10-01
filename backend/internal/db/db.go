@@ -143,6 +143,14 @@ func Migrate(gdb *gorm.DB) error {
 	return nil
 }
 
+// VerifySchema 在关闭自动迁移的部署上核对数据库结构。
+//
+// 只读，不建表也不写账本——这些部署明确要求启动路径不碰结构，
+// 但并不接受"因此不校验版本"：那等于让进程对着任意 schema 服务。
+func VerifySchema(gdb *gorm.DB) error {
+	return migrations.CheckHead(gdb)
+}
+
 // Close 关闭连接。
 func Close(gdb *gorm.DB) error {
 	sqlDB, err := gdb.DB()
