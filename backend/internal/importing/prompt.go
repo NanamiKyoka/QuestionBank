@@ -546,6 +546,13 @@ type PromptOptions struct {
 	ExistingKnowledgePoints []string
 	// ExistingTags 已有标签。
 	ExistingTags []string
+	// AnswerImages 本次随材料一起提交的图片数量。
+	//
+	// 用来改写提示词：图片在这里是**答案页**，模型该做的是转写而不是解题。
+	// 这个差别是巨大的——没有答案页时，模型要为每道解答题写出完整推导
+	// （实测约 1370 输出 token/题，整卷近三万 token，几分钟起步）；
+	// 有答案页时它只需要抄，比自己算快一个数量级。
+	AnswerImages int
 }
 
 // lookupTimeout 读模板的超时。
@@ -613,13 +620,38 @@ func limitStrings(in []string, max int) []string {
 // BuildUserContent 组装用户消息：在原文前加上必要的定位信息。
 func BuildUserContent(content string, opt PromptOptions) string {
 	content = strings.TrimSpace(content)
-	if content == "" {
-		return ""
-	}
+	var b strings.Builder
+
 	if opt.Mode == ModeSolve {
-		return "请为下列题目补写答案与解析：\n\n" + content
+		b.WriteString("请为下列题目补写答案与解析：\n\n")
+	} else {
+		b.WriteString("请从下列材料中提取题目：\n\n")
 	}
-	return "请从下列材料中提取题目：\n\n" + content
+	if content != "" {
+		b.WriteString(content)
+		b.WriteString("\n\n")
+	}
+
+	// 有答案页时把用法说清楚。不说，模型很可能仍然把图片当成
+	// "补充插图"而去自己解题——于是图片白传，耗时一分没省。
+	if opt.AnswerImages > 0 && opt.Mode != ModeSolve {
+		b.WriteString(answerImagesHint(opt.AnswerImages))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// answerImagesHint 告诉模型随附图片该怎么用。
+func answerImagesHint(n int) string {
+	var b strings.Builder
+	b.WriteString("另外随本次材料附了 ")
+	b.WriteString(itoa(n))
+	b.WriteString(" 张图片，是同一份试卷的**答案与解析页**（不是题目插图）。\n")
+	b.WriteString("请按下列规则处理：\n")
+	b.WriteString("1. 先读图片，从里面取出与每道题对应的答案与解析；\n")
+	b.WriteString("2. 对得上号的题目，答案与解析直接**照抄**图片上的内容，不要自己重算；\n")
+	b.WriteString("3. 图片里对不上的题目（答案页缺页、或图片与本题无关），answer 与 analysis 留空，")
+	b.WriteString("并在 warnings 里写明「答案页未见此题」——宁可空着，也不要编一个答案。\n")
+	return b.String()
 }
 
 // DescribeSubject 学科说明的占位符格式。

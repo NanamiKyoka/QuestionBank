@@ -115,7 +115,7 @@ func TestUploadDocxEndToEndWithoutAI(t *testing.T) {
 `)
 
 	res, err := svc.Upload(ctx, admin, subject.ID, "随堂练习.docx", data,
-		string(importing.MethodTemplate), string(importing.ModeExtract))
+		string(importing.MethodTemplate), string(importing.ModeExtract), nil)
 	if err != nil {
 		t.Fatalf("上传 Word 并规则解析失败: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestUploadZipMergesAndLabelsSources(t *testing.T) {
 	zw.Close()
 
 	res, err := svc.Upload(ctx, admin, subject.ID, "整套卷.zip", buf.Bytes(),
-		string(importing.MethodTemplate), string(importing.ModeExtract))
+		string(importing.MethodTemplate), string(importing.ModeExtract), nil)
 	if err != nil {
 		t.Fatalf("上传压缩包失败: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestUploadZipKeepsAnswerSectionsSeparate(t *testing.T) {
 	zw.Close()
 
 	res, err := svc.Upload(ctx, admin, subject.ID, "两份卷.zip", buf.Bytes(),
-		string(importing.MethodTemplate), string(importing.ModeExtract))
+		string(importing.MethodTemplate), string(importing.ModeExtract), nil)
 	if err != nil {
 		t.Fatalf("上传失败: %v", err)
 	}
@@ -214,13 +214,14 @@ func TestUploadRejectsUnsupportedAndOversized(t *testing.T) {
 	_, svc, subject, admin := newTemplateFixture(t)
 	ctx := context.Background()
 
-	if _, err := svc.Upload(ctx, admin, subject.ID, "试卷.pdf", []byte("%PDF-1.4"),
-		string(importing.MethodTemplate), ""); err == nil {
-		t.Fatal("PDF 不支持，必须报错")
+	// .doc（Word 97-2003）仍然不支持：它不是 zip，和 .docx 是两回事。
+	if _, err := svc.Upload(ctx, admin, subject.ID, "试卷.doc", []byte("\xd0\xcf\x11\xe0"),
+		string(importing.MethodTemplate), "", nil); err == nil {
+		t.Fatal(".doc 不受支持，必须报错")
 	}
 	// 文件名带穿越路径时，只取末段，不应影响类型判定。
-	if _, err := svc.Upload(ctx, admin, subject.ID, "../../evil.pdf", []byte("x"),
-		string(importing.MethodTemplate), ""); err == nil {
+	if _, err := svc.Upload(ctx, admin, subject.ID, "../../evil.exe", []byte("x"),
+		string(importing.MethodTemplate), "", nil); err == nil {
 		t.Fatal("非法扩展名必须报错")
 	}
 }

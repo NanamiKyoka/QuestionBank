@@ -158,9 +158,12 @@ func (w *ImportWorker) process(ctx context.Context, task *model.ImportTask) {
 		return
 	}
 
+	// 队列任务不携带答案页：它们是逐个文件独立排队的，
+	// 答案页与某份文档的配对关系在队列里无从表达，
+	// 与其猜一份，不如让需要的人在录题页一起提交。
 	res, err := w.svc.Upload(ctx, owner,
 		derefUint(task.SubjectID), task.OriginalFilename, data,
-		methodOfTask(task), task.Mode)
+		methodOfTask(task), task.Mode, nil)
 	if err != nil {
 		_ = w.svc.failTask(ctx, task.ID, err.Error())
 		return

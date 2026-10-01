@@ -2,6 +2,7 @@ package handler
 
 import (
 	"io"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,6 +20,11 @@ import (
 // 不能因为读满了就以为刚好没超。
 const maxUploadBytes = 32 << 20 // 32MB
 
+// maxAnswerImages 随文档一起上传的答案页图片上限。
+// 与 UploadService 的单次上传上限一致：答案页通常就是十几张，多于这个数
+// 说明用户传错了文件（比如把整本习题册拍了下来）。
+const maxAnswerImages = 10
+
 // ImportHandler 智能录题接口。
 type ImportHandler struct {
 	imports *service.ImportService
@@ -31,7 +37,12 @@ func NewImportHandler(imports *service.ImportService) *ImportHandler {
 // Upload POST /subjects/:subject_id/imports/upload
 //
 // 表单字段：file（必填，单个）、method（ai|template）、mode（extract|solve）。
+// 可选字段 images（可重复）：答案页 / 解析页的图片地址。
 // 响应体与 /extract 完全一致，因此前端两条路径共用同一套审核界面。
+//
+// 答案页单列一个字段而不是塞进 file：它是**补充材料**而不是另一份文档，
+// 而且它的作用（让模型转写而不是解题）与文档本身完全不同，
+// 混在同一个字段里会让"这次到底识别了什么"说不清楚。
 func (h *ImportHandler) Upload(c *gin.Context) {
 	user, ok := middleware.MustUser(c)
 	if !ok {
@@ -66,13 +77,43 @@ func (h *ImportHandler) Upload(c *gin.Context) {
 		return
 	}
 
+	answerImages, err := readAnswerImages(c)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+
 	res, err := h.imports.Upload(c.Request.Context(), user, subjectID,
-		fh.Filename, data, c.PostForm("method"), c.PostForm("mode"))
+		fh.Filename, data, c.PostForm("method"), c.PostForm("mode"), answerImages)
 	if err != nil {
 		response.Fail(c, err)
 		return
 	}
 	response.OK(c, res)
+}
+
+// readAnswerImages 读出随文档一起提交的答案页图片地址。
+//
+// 字段名固定为 images，值是图片本身已经在 /upload/image 传过一次后拿到的地址：
+// 让用户在两个地方各传一次同一张图，只会让"到底传了没有"变得无法核对。
+func readAnswerImages(c *gin.Context) ([]string, error) {
+	form, err := c.MultipartForm()
+	if err != nil {
+		return nil, nil // 没有附加文件，不是错误
+	}
+	files := form.File["images"]
+	if len(files) > maxAnswerImages {
+		return nil, apperr.New(apperr.CodeInvalidParam, "答案图片过多").
+			WithDetail("一次最多 %d 张，收到 %d 张", maxAnswerImages, len(files))
+	}
+
+	out := make([]string, 0, len(files))
+	for _, fh := range files {
+		if ref := strings.TrimSpace(fh.Filename); ref != "" {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
 }
 
 // Extract POST /subjects/:subject_id/imports/extract

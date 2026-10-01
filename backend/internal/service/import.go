@@ -16,6 +16,7 @@ import (
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 	"github.com/NanamiKyoka/questionmind/internal/repository"
 	"github.com/NanamiKyoka/questionmind/internal/schema"
+	"github.com/NanamiKyoka/questionmind/internal/visionprep"
 )
 
 // extractTimeout 单次抽取的超时。
@@ -183,6 +184,8 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		SubjectName:             subject.Name,
 		ExistingKnowledgePoints: kpNames,
 		ExistingTags:            tagNames,
+		// 有图片就说明它们是答案页，让模型转写而不是解题。
+		AnswerImages: len(req.Images),
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, extractTimeout)
@@ -329,12 +332,17 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 // Upload 从上传的文档文件中抽取题目。
 //
 // 与 Extract 的区别只在于"文本从哪来"：这里由摄取层把
-// .md / .txt / .docx / .zip 变成文本，之后完全走 Extract 的同一条管线。
+// .md / .txt / .docx / .pdf / .zip 变成文本，之后完全走 Extract 的同一条管线。
+//
+// answerImages 是可选的答案页/解析页图片。这不是可有可无的附赠：
+// 卷子本身通常**不带答案**，而让模型把二十道解答题一道道算出来，
+// 光输出就���三万 token，几分钟起步且极易撞上供应商的超时上限。
+// 老师手上有答案页时，把它一并发过去，模型只需**转写**，快一个数量级。
 //
 // 刻意**一次只收一个文件**：抽取是同步的，一个包塞十个 Word 会让
 // 一个 HTTP 请求跑十几分钟，超时之后用户既不知道跑到哪了，
 // 也无法中途叫停。多文件排队是后台任务的事，不该混在这里假装支持。
-func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID uint, filename string, data []byte, method, mode string) (*schema.ExtractResponse, error) {
+func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID uint, filename string, data []byte, method, mode string, answerImages []string) (*schema.ExtractResponse, error) {
 	name := sanitizeUploadName(filename)
 	if name == "" {
 		return nil, apperr.New(apperr.CodeInvalidParam, "缺少文件名")
@@ -377,6 +385,7 @@ func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID 
 
 	resp, err := s.Extract(ctx, user, subjectID, &schema.ExtractRequest{
 		Content:  content,
+		Images:   answerImages,
 		Method:   method,
 		Mode:     mode,
 		Filename: sourceLabel(name, len(source)),
@@ -1228,23 +1237,32 @@ func (s *ImportService) extractWithModel(
 	images []string,
 	opts importing.PromptOptions,
 ) ([]ai.ExtractedQuestion, []string, error) {
+	// 图片必须先变成模型**真正拿得到**的形态再发出去。
+	// 上传接口给的是 /media/xxx.jpg 这种本服务自己的相对路径，
+	// 远程模型没有任何办法去访问它——原样发过去等于没发。
+	dataURLs, imgWarnings, err := s.materializeImages(images)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	call := func(text string) ([]ai.ExtractedQuestion, error) {
 		return resolved.Provider.ExtractQuestions(ctx, ai.ExtractRequest{
 			Model:  resolved.ModelName,
 			Prompt: importing.BuildSystemPrompt(opts),
 			// 提示词已经写进系统消息，schema 字段留着是空的。
 			Content:   importing.BuildUserContent(text, opts),
-			Images:    images,
+			Images:    dataURLs,
 			MaxTokens: resolved.MaxTokens,
 		})
 	}
 
-	// 带图或短文档都走单次调用：切块对图片没有意义（图片进不了分块），
-	// 而短文档一次就够快，切开只是白白多付几次往返。
+	// 带图时**不切块**：答案图片是对整份卷子的一次性说明，
+	// 切成几块分别配图只会让模型在每一块里都对着无关的页面猜。
+	// 于是图越多输入越大，代价落在 prefill 上——而 prefill 比输出快得多。
 	chunks := importing.SplitForExtraction(content, 0)
-	if len(images) > 0 || len(chunks) <= 1 {
+	if len(dataURLs) > 0 || len(chunks) <= 1 {
 		out, err := call(content)
-		return out, nil, err
+		return out, imgWarnings, err
 	}
 
 	results := make([][]ai.ExtractedQuestion, len(chunks))
@@ -1281,7 +1299,7 @@ func (s *ImportService) extractWithModel(
 
 	var (
 		merged   []ai.ExtractedQuestion
-		warnings []string
+		warnings = imgWarnings
 	)
 	for i := range chunks {
 		if errs[i] != nil {
@@ -1294,6 +1312,61 @@ func (s *ImportService) extractWithModel(
 		merged = append(merged, reidentify(len(merged), results[i])...)
 	}
 	return merged, warnings, nil
+}
+
+// materializeImages 把图片引用换成模型能真正拿到的东西。
+//
+// 上传接口返回的是 /media/xxx.jpg 这种**本服务自己的**相对路径。
+// 模型跑在供应商那边，它没有任何办法访问我们的 /media——
+// 原样发过去，模型只会拿到一个无法解析的地址，然后"看不见"地编一通题，
+// 那是比明确失败危险得多的结果。所以这里必须把图读回来内联成 data URL。
+//
+// 已经是 data URL 或 http(s) 的原样放行：前端也可能直接传公网地址。
+// 单张读不出来只丢这一张并如实报告，不让整批录题失败。
+func (s *ImportService) materializeImages(refs []string) ([]string, []string, error) {
+	if len(refs) == 0 {
+		return nil, nil, nil
+	}
+
+	out := make([]string, 0, len(refs))
+	var warnings []string
+
+	for i, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		switch {
+		case strings.HasPrefix(ref, "data:image/"),
+			strings.HasPrefix(ref, "http://"),
+			strings.HasPrefix(ref, "https://"):
+			out = append(out, ref)
+			continue
+		}
+
+		if s.storage == nil {
+			return nil, nil, apperr.New(apperr.CodeInternal,
+				"服务未配置媒体存储，图片识题不可用")
+		}
+		data, err := s.storage.Read(ref)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"第 %d 张图片读取失败，已跳过：%v", i+1, err))
+			slog.Warn("读取导入图片失败", "ref", ref, "error", err)
+			continue
+		}
+		url, err := visionprep.ToDataURL(data)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"第 %d 张图片无法处理，已跳过：%v", i+1, err))
+			slog.Warn("处理导入图片失败", "ref", ref, "error", err)
+			continue
+		}
+		out = append(out, url)
+	}
+
+	if len(out) == 0 {
+		return nil, warnings, apperr.New(apperr.CodeInvalidParam,
+			"图片都不可用，无法识别").WithDetail("%s", strings.Join(warnings, "；"))
+	}
+	return out, warnings, nil
 }
 
 // firstError 挑一个最有代表性的错误返回。

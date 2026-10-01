@@ -203,6 +203,31 @@ func (l *Local) Remove(src string) error {
 	return nil
 }
 
+// Read 读回一个媒体文件的原始字节。
+//
+// 只接受媒体目录内的地址，且与 Remove 一样做绝对路径兜底：
+// 地址来自客户端时，它只是"想去哪个文件"的表达，不是可信输入。
+func (l *Local) Read(src string) ([]byte, error) {
+	rel, err := l.resolve(src)
+	if err != nil {
+		return nil, err
+	}
+	full := filepath.Join(l.mediaDir, filepath.FromSlash(rel))
+
+	absRoot, err := filepath.Abs(l.mediaDir)
+	if err != nil {
+		return nil, err
+	}
+	absFull, err := filepath.Abs(full)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(absFull, absRoot+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("storage: 非法的媒体路径 %q", src)
+	}
+	return os.ReadFile(absFull)
+}
+
 // Saved 保存结果。
 type Saved struct {
 	URL          string
