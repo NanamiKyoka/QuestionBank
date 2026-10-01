@@ -31,6 +31,14 @@ func NewAIConfigService(repos *Repos, cipher *cryptox.Cipher, timeout time.Durat
 
 // ---- 供应商 ----
 
+// defaultModelMaxTokens 新建模型时的默认输出上限。
+//
+// 4096 是聊天场景的常见默认值，但**录题不是聊天**：一道题连题干、
+// 选项、答案、解析，模型要吐一千多 token（实测 1370/题），
+// 八道题就上万。默认值低于这个数，等于每个新装的人都先撞一次
+// "输出被截断"，而这件事在保存配置时完全看不出来。
+const defaultModelMaxTokens = 16384
+
 func (s *AIConfigService) ListProviders(ctx context.Context, actor *model.User) ([]schema.ProviderResponse, error) {
 	if err := authorizeSuperuser(actor); err != nil {
 		return nil, err
@@ -225,12 +233,14 @@ func (s *AIConfigService) CreateModel(ctx context.Context, actor *model.User, re
 	}
 
 	m := &model.AIModel{
-		ProviderID:    req.ProviderID,
-		Name:          req.Name,
-		DisplayName:   req.DisplayName,
-		ModelType:     strings.Join(caps, ","),
-		MaxTokens:     4096,
-		ContextWindow: 32768,
+		ProviderID:  req.ProviderID,
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		ModelType:   strings.Join(caps, ","),
+		MaxTokens:   defaultModelMaxTokens,
+		// 0 表示"未知"：不知道就��� 32768 更好——猜一个偏小的值只会在
+		// 真正需要长上下文时才出错，而那时已经产生了一份坏结果。
+		ContextWindow: 0,
 		IsActive:      true,
 	}
 	if m.DisplayName == "" {
@@ -777,10 +787,23 @@ func humanizeAIError(err error) string {
 		return "请求被限流或额度不足"
 	case errors.Is(err, ai.ErrTimeout):
 		return "请求超时，请检查网络或网关地址"
+	case errors.Is(err, ai.ErrTruncated):
+		// 截断不是"再试一次"能解决的：同样的输入会得到同样的截断。
+		// 直接把该去哪儿调说清楚，比"服务不可用"有用得多。
+		return truncateHint(err)
 	case errors.Is(err, ai.ErrUnavailable):
 		return "供应商服务暂时不可用"
 	}
 	return err.Error()
+}
+
+// truncateHint 剥掉错误前缀，只留可执行的那句话。
+func truncateHint(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "："); i >= 0 {
+		return msg[i+len("："):]
+	}
+	return msg
 }
 
 func float64Ptr(v float64) *float64 { return &v }

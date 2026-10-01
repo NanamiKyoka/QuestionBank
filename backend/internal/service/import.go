@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
@@ -225,13 +226,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		drafts, outline, docWarnings = importing.ParseTemplateFull(content, task.OriginalFilename)
 		modelLabel = "规则解析（未调用模型）"
 	} else {
-		extracted, err := resolved.Provider.ExtractQuestions(callCtx, ai.ExtractRequest{
-			Model:   resolved.ModelName,
-			Prompt:  importing.BuildSystemPrompt(promptOpts),
-			Content: importing.BuildUserContent(content, promptOpts),
-			Images:  req.Images,
-			Schema:  "", // schema 已经写进系统提示词
-		})
+		extracted, chunkWarnings, err := s.extractWithModel(callCtx, resolved, content, req.Images, promptOpts)
 		elapsed := time.Since(started)
 
 		// 抽取失败也要留痕：用户会问"为什么没结果"。
@@ -270,6 +265,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 			Method:       string(method),
 			SourceFiles:  sourceFiles,
 			Outline:      outline,
+			Warnings:     chunkWarnings,
 			ElapsedMs:    elapsed.Milliseconds(),
 		}, nil
 	}
@@ -1212,7 +1208,151 @@ func importStatusLabel(s model.ImportTaskStatus) string {
 	return schema.ImportStatusLabel(s)
 }
 
-// ---- 辅助 ----
+// ---- 模型抽取 ----
+
+// extractWithModel 调模型抽题；长文档会切成多块并发处理。
+//
+// 为什么切块：一次调用处理整份卷子，耗时几乎全在**输出**上——
+// 模型要为每道题写出结构化的答案与解析（实测约 1370 输出 token/题）。
+// 模型的输出速率是固定的，于是"整份一次调用"的墙钟时间等于
+// 那份输出需要的时间，既压不下去，还容易撞上供应商的超时上限：
+// 实测整份 6600 字节的卷子一次调用跑到 300 秒就被上游以 500 掐掉。
+//
+// 切成若干块并发之后，总输出量不变，但每次调用都能在上限内跑完。
+// 返回值里的 warnings 用于如实告诉用户"哪几段没抽出来"——
+// 静默少几道题比明确报出来糟糕得多：用户会以为整卷都进来了。
+func (s *ImportService) extractWithModel(
+	ctx context.Context,
+	resolved *ResolvedModel,
+	content string,
+	images []string,
+	opts importing.PromptOptions,
+) ([]ai.ExtractedQuestion, []string, error) {
+	call := func(text string) ([]ai.ExtractedQuestion, error) {
+		return resolved.Provider.ExtractQuestions(ctx, ai.ExtractRequest{
+			Model:  resolved.ModelName,
+			Prompt: importing.BuildSystemPrompt(opts),
+			// 提示词已经写进系统消息，schema 字段留着是空的。
+			Content:   importing.BuildUserContent(text, opts),
+			Images:    images,
+			MaxTokens: resolved.MaxTokens,
+		})
+	}
+
+	// 带图或短文档都走单次调用：切块对图片没有意义（图片进不了分块），
+	// 而短文档一次就够快，切开只是白白多付几次往返。
+	chunks := importing.SplitForExtraction(content, 0)
+	if len(images) > 0 || len(chunks) <= 1 {
+		out, err := call(content)
+		return out, nil, err
+	}
+
+	results := make([][]ai.ExtractedQuestion, len(chunks))
+	errs := make([]error, len(chunks))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, importing.ExtractionConcurrency)
+
+	for i := range chunks {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+			defer func() { <-sem }()
+			results[i], errs[i] = call(chunks[i].Text)
+		}(i)
+	}
+	wg.Wait()
+
+	// 全军覆没：照旧报错，用户至少知道该重试还是该换模型。
+	var failed []int
+	for i, e := range errs {
+		if e != nil {
+			failed = append(failed, i)
+		}
+	}
+	if len(failed) == len(chunks) {
+		return nil, nil, firstError(errs, failed)
+	}
+
+	var (
+		merged   []ai.ExtractedQuestion
+		warnings []string
+	)
+	for i := range chunks {
+		if errs[i] != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"第 %d 段（共 %d 段）识别失败，该段内容缺失：%s（%s）",
+				i+1, len(chunks), chunks[i].Label, humanizeAIError(errs[i])))
+			slog.Warn("导入分块失败", "chunk", i, "label", chunks[i].Label, "error", errs[i])
+			continue
+		}
+		merged = append(merged, reidentify(len(merged), results[i])...)
+	}
+	return merged, warnings, nil
+}
+
+// firstError 挑一个最有代表性的错误返回。
+//
+// 同一个作业里所有分块几乎总是同一个原因（限流、鉴权、上游故障），
+// 所以直接报第一个错就够；把四个一模一样的错误堆在一起只会更难读。
+func firstError(errs []error, failed []int) error {
+	if len(failed) == 0 {
+		return nil
+	}
+	return errs[failed[0]]
+}
+
+// reidentify 把一个分块的临时编号换成全局唯一的，并按偏移改写 parent。
+//
+// 模型在每一块里都从 1 开始编号，不改的话入库时 Commit 里的 draftDepths
+// 会把后一块的"母题 1"认成前一块的，母子关系直接错位。
+//
+// offset 是本块之前已经合并进去的题目数。
+func reidentify(offset int, block []ai.ExtractedQuestion) []ai.ExtractedQuestion {
+	out := make([]ai.ExtractedQuestion, len(block))
+	copy(out, block)
+
+	// 先建旧→新映射，再统一改写子题指向。
+	// 两趟而不是一趟：模型完全可能把母题排在子题后面。
+	//
+	// 新编号按**位置**存，不靠旧编号反查：同一块里出现重复 temp_id 时，
+	// 反查会让两道题拿到同一个新编号，合并之后照样冲突。
+	newIDs := make([]string, len(out))
+	idMap := make(map[string]string, len(out))
+	for i := range out {
+		old := strings.TrimSpace(out[i].TempID)
+		if old == "" {
+			continue
+		}
+		newIDs[i] = fmt.Sprintf("c%dq%d", offset, i)
+		if _, dup := idMap[old]; !dup {
+			// 重复编号只认第一次：猜错会把一道题挂到另一道题下面，
+			// 那比挂不上更难查。
+			idMap[old] = newIDs[i]
+		}
+	}
+	for i := range out {
+		if newIDs[i] == "" {
+			continue
+		}
+		out[i].TempID = newIDs[i]
+		parent := strings.TrimSpace(out[i].ParentTempID)
+		if parent == "" {
+			continue
+		}
+		// 母题不在本块里（切分点本该避免，但模型也可能写错）：
+		// 保留原样的 parent 比悄悄改成空更容易被发现。
+		if mapped, ok := idMap[parent]; ok {
+			out[i].ParentTempID = mapped
+		}
+	}
+	return out
+}
 
 // validateImages 校验图片是数据 URL 或 http(s) 地址。
 func validateImages(images []string) error {

@@ -284,6 +284,7 @@ func (p *OpenAIProvider) ExtractQuestions(ctx context.Context, req ExtractReques
 			Images:  req.Images,
 		}},
 		Temperature: floatPtr(0.2),
+		MaxTokens:   req.MaxTokens,
 	}
 	if chatReq.Messages[0].Content == "" && len(req.Images) == 0 {
 		return nil, errors.New("ai: 抽取内容为空")
@@ -314,6 +315,22 @@ func (p *OpenAIProvider) ExtractQuestions(ctx context.Context, req ExtractReques
 	}
 	if len(parsed.Choices) == 0 {
 		return nil, errors.New("ai: 模型没有返回任何内容")
+	}
+
+	// 撞到输出上限时**必须**报出来，而不是把截断的结果当成功返回。
+	//
+	// 抽取动辄要上万 token，而不少兼容端点默认只给 4096。超出的部分
+	// 被静默丢掉时，解析多半直接失败（JSON 残缺），于是用户看到的是
+	// 一句"响应不是合法 JSON"——指向一个根本不是原因的原因。
+	// 偶尔也会碰巧解析成功，那更糟：后半份卷子凭空消失，用户毫无察觉。
+	if reason := parsed.Choices[0].FinishReason; reason == "length" {
+		limit := "服务端默认"
+		if req.MaxTokens > 0 {
+			limit = strconv.Itoa(req.MaxTokens)
+		}
+		return nil, fmt.Errorf(
+			"%w：输出被上限 %s token 截断，结果不完整；请在 AI 设置里调大该模型的「最大输出」，或减少一次导入的内容",
+			ErrTruncated, limit)
 	}
 
 	return parseExtractedQuestions(parsed.Choices[0].Message.Content)

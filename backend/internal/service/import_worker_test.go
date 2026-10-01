@@ -322,12 +322,22 @@ func TestEnqueueRejectsUnsupportedAndOversized(t *testing.T) {
 	fx := newQueueFixture(t)
 	ctx := context.Background()
 
-	if _, err := fx.svc.EnqueueFile(ctx, fx.owner, fx.subject.ID, "a.pdf", []byte("%PDF"), "ai", ""); err == nil {
-		t.Fatal("PDF 不支持，必须在入队时拒绝")
+	if _, err := fx.svc.EnqueueFile(ctx, fx.owner, fx.subject.ID, "a.doc", []byte("\xd0\xcf"), "ai", ""); err == nil {
+		t.Fatal(".doc 不受支持，必须在入队时拒绝")
 	}
 	tooBig := bytes.Repeat([]byte("x"), importing.MaxDocFileBytes+1)
 	if _, err := fx.svc.EnqueueFile(ctx, fx.owner, fx.subject.ID, "a.md", tooBig, "ai", ""); err == nil {
 		t.Fatal("超大文件必须在入队时拒绝")
+	}
+}
+
+// PDF 现在受支持了，队列也必须照样收下——
+// 队列入队时不解析内容，真正解析在 worker 手里，所以这里只校验扩展名。
+func TestEnqueueAcceptsPDF(t *testing.T) {
+	fx := newQueueFixture(t)
+	if _, err := fx.svc.EnqueueFile(context.Background(), fx.owner, fx.subject.ID,
+		"paper.pdf", []byte("%PDF-1.7"), "ai", ""); err != nil {
+		t.Fatalf("PDF 应当可以入队: %v", err)
 	}
 }
 

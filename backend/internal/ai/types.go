@@ -99,6 +99,12 @@ type ExtractRequest struct {
 	Images []string
 	// Schema 期望的输出结构说明（JSON Schema 文本），拼进提示词里约束模型。
 	Schema string
+	// MaxTokens 单次输出上限。0 表示交给服务端默认值。
+	//
+	// 这一项对抽取至关重要：一份卷子的答案与解析动辄上万 token，
+	// 而不少兼容端点在不指定时默认只有 4096——超出的部分会被**静默截断**，
+	// 表现为后半份卷子凭空消失。
+	MaxTokens int
 }
 
 // ExtractedQuestion 模型抽取出的题目草稿。
@@ -163,6 +169,11 @@ var (
 	ErrUnavailable = errors.New("ai: 服务不可用")
 	// ErrCanceled 调用方主动取消。
 	ErrCanceled = errors.New("ai: 调用已取消")
+	// ErrTruncated 输出撞到了 max_tokens 上限，结果不完整。
+	//
+	// 单独成一个领域错误而不是复用解析失败：用户要做的不是"再试一次"，
+	// 而是去调大上限——重试只会得到一模一样的截断结果。
+	ErrTruncated = errors.New("ai: 输出被上限截断")
 )
 
 // Config 供应商运行配置。由 ai_config 服务从数据库装载。
