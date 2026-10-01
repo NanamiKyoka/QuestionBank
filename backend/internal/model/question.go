@@ -161,6 +161,10 @@ func DefaultQuestionDisplay() QuestionDisplay {
 
 // QuestionFilter 题目列表的筛选条件。
 // 放在 model 包是因为它同时被 repository 与 service 使用。
+//
+// 学科范围只有 SubjectID 一个入口：可见性由 service 层的 authorizeRead 闸门
+// 决定，repository 只管按 SubjectID 过滤。刻意不再提供"多学科集合"，
+// 两个入口迟早会只改一处。
 type QuestionFilter struct {
 	SubjectID uint
 	// Keyword 会在题干纯文本中做模糊匹配。
@@ -207,8 +211,6 @@ type QuestionFilter struct {
 	ViewerID uint
 	// CanViewPrivateAll 拥有 view_private_any 权限（管理员）可看他人私有题。
 	CanViewPrivateAll bool
-	// SubjectIDs 非 nil 时把结果限制在这些学科内；nil 表示不限制。
-	SubjectIDs map[uint]bool
 }
 
 // QuestionSort 排序方式。
@@ -222,8 +224,8 @@ const (
 	SortByDifficultyDesc QuestionSort = "difficulty_desc"
 
 	// SortByUpdatedAtDesc 是"按更新时间倒序"的历史命名，与 SortByUpdatedDesc
-	// 语义完全相同。保留它是因为前端题库页一直发送这个值
-	// （前端视图 QuestionsView.vue 的默认排序），删掉只会让它静默退化成
+	// 语义完全相同。前端题库页早已改发合法的 updated_desc，这个值现在
+	// 只为兼容仍在发它的客户端保留；直接删掉会让它们静默退化成
 	// created_desc —— 一个没人会发现的错误排序。
 	SortByUpdatedAtDesc QuestionSort = "updated_at_desc"
 )

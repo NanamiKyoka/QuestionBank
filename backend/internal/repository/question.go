@@ -204,18 +204,6 @@ func (r *QuestionRepo) buildQuery(ctx context.Context, f model.QuestionFilter) *
 	if f.SubjectID > 0 {
 		q = q.Where("questions.subject_id = ?", f.SubjectID)
 	}
-	if f.SubjectIDs != nil {
-		if len(f.SubjectIDs) == 0 {
-			// 用户不属于任何学科：返回空集，而不是不过滤（那会泄露全部数据）。
-			q = q.Where("1 = 0")
-		} else {
-			ids := make([]uint, 0, len(f.SubjectIDs))
-			for id := range f.SubjectIDs {
-				ids = append(ids, id)
-			}
-			q = q.Where("questions.subject_id IN ?", ids)
-		}
-	}
 
 	if f.Keyword != "" {
 		q = q.Where("questions.stem_text LIKE ?", "%"+escapeLike(f.Keyword)+"%")
