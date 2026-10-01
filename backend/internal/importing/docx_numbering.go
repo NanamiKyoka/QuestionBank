@@ -110,7 +110,6 @@ type numberingPart struct {
 type numPrRef struct {
 	numID string
 	ilvl  int
-	hasIL int
 }
 
 // parseNumbering 读 numbering.xml 与 styles.xml。
@@ -158,14 +157,11 @@ func parseNumbering(numberingData, stylesData []byte) *numberingPart {
 				if st.PPr == nil || st.PPr.NumPr == nil {
 					continue
 				}
-				ref := numPrRef{ilvl: 0}
+				ref := numPrRef{}
 				if s := st.PPr.NumPr.NumID.str(); s != "" {
 					ref.numID = s
 				}
-				if s := st.PPr.NumPr.Ilvl.str(); s != "" {
-					ref.ilvl, _ = strconv.Atoi(s)
-					ref.hasIL = 1
-				}
+				ref.ilvl, _ = strconv.Atoi(st.PPr.NumPr.Ilvl.str())
 				if ref.numID != "" {
 					p.styles[st.ID] = ref
 				}
