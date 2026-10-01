@@ -21,12 +21,12 @@ import (
 
 type numberingXML struct {
 	Abstracts []abstractNumXML `xml:"abstractNum"`
-	Nums      []numXML          `xml:"num"`
+	Nums      []numXML         `xml:"num"`
 }
 
 type abstractNumXML struct {
-	ID     string        `xml:"abstractNumId,attr"`
-	Levels []levelXML    `xml:"lvl"`
+	ID     string     `xml:"abstractNumId,attr"`
+	Levels []levelXML `xml:"lvl"`
 }
 
 type levelXML struct {
@@ -39,15 +39,15 @@ type levelXML struct {
 }
 
 type numXML struct {
-	NumID     string           `xml:"numId,attr"`
-	Abstract  *valXML          `xml:"abstractNumId"`
-	Overrides []overrideXML    `xml:"lvlOverride"`
+	NumID     string        `xml:"numId,attr"`
+	Abstract  *valXML       `xml:"abstractNumId"`
+	Overrides []overrideXML `xml:"lvlOverride"`
 }
 
 type overrideXML struct {
-	Ilvl   string     `xml:"ilvl,attr"`
-	Start  *valXML    `xml:"startOverride"`
-	Level  *levelXML  `xml:"lvl"`
+	Ilvl  string    `xml:"ilvl,attr"`
+	Start *valXML   `xml:"startOverride"`
+	Level *levelXML `xml:"lvl"`
 }
 
 type stylesXML struct {
@@ -93,9 +93,9 @@ type levelDef struct {
 
 // numDef 一个 numId：指向哪个抽象编号，以及它对某些级的覆盖。
 type numDef struct {
-	abstract   string
-	startOf    map[string]int       // startOverride
-	levelOf    map[string]levelDef  // 整级替换
+	abstract string
+	startOf  map[string]int      // startOverride
+	levelOf  map[string]levelDef // 整级替换
 }
 
 // numberingPart 解析出来的编号定义。
@@ -401,10 +401,12 @@ func chineseNumeral(n int) string {
 	return b.String()
 }
 
-// heavenlyStem 天干：甲乙丙丁戊己庚辛壬癸。
+// heavenlyStems 天干：甲乙丙丁戊己庚辛壬癸。
+var heavenlyStems = []string{"甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"}
+
 func heavenlyStem(n int) string {
-	if n <= 0 || n > 10 {
+	if n <= 0 || n > len(heavenlyStems) {
 		return strconv.Itoa(n)
 	}
-	return string(rune(0x7530 + n - 1))
+	return heavenlyStems[n-1]
 }

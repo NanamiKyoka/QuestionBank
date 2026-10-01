@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -211,13 +212,17 @@ func safeArchiveName(name string) bool {
 
 // docx 内几个固定成员的路径。
 const (
-	docxDocumentPart = "word/document.xml"
-	docxMediaPrefix  = "word/media/"
+	docxDocumentPart  = "word/document.xml"
+	docxNumberingPart = "word/numbering.xml"
+	docxStylesPart    = "word/styles.xml"
+	docxMediaPrefix   = "word/media/"
 )
 
 // DocxToMarkdown 把 .docx 的正文转成 Markdown。
 //
-// 只取段落文本、表格（转成管道表）与图片引用；公式（OMML）转成 LaTeX。
+// 只取段落文本、表格（转成管道表）与图片引用；公式（OMML）转成 LaTeX；
+// Word 的自动编号还原成普通文字前缀——卷子的题号多半是自动编号，
+// 不还原就只剩纯文本，按题号切题会整条失效。
 // 样式、批注、页眉页脚一概不取——录题只需要题目本身。
 func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -225,12 +230,20 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 		return "", nil, fmt.Errorf("Word 文档无法打开：%w", err)
 	}
 
-	var docPart *zip.File
-	media := map[string][]byte{}
+	var (
+		docPart   *zip.File
+		numbering []byte
+		styles    []byte
+		media     = map[string][]byte{}
+	)
 	for _, f := range zr.File {
 		switch {
 		case f.Name == docxDocumentPart:
 			docPart = f
+		case f.Name == docxNumberingPart:
+			numbering = readDocxPart(f)
+		case f.Name == docxStylesPart:
+			styles = readDocxPart(f)
 		case strings.HasPrefix(f.Name, docxMediaPrefix) && !strings.HasSuffix(f.Name, "/"):
 			rc, err := f.Open()
 			if err != nil {
@@ -252,11 +265,30 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 	defer rc.Close()
 
 	var warns []string
-	p := &docxParser{images: images, media: media, warns: &warns}
+	p := &docxParser{
+		images:    images,
+		media:     media,
+		warns:     &warns,
+		numbering: newNumberingState(parseNumbering(numbering, styles)),
+	}
 	if err := p.parse(rc); err != nil {
 		return "", warns, fmt.Errorf("Word 正文解析失败：%w", err)
 	}
 	return p.out(), warns, nil
+}
+
+// readDocxPart 读一个结构化部件，带上限兜底。
+func readDocxPart(f *zip.File) []byte {
+	rc, err := f.Open()
+	if err != nil {
+		return nil
+	}
+	defer rc.Close()
+	b, _ := io.ReadAll(io.LimitReader(rc, MaxDocFileBytes+1))
+	if len(b) > MaxDocFileBytes {
+		return nil
+	}
+	return b
 }
 
 // docxParser 逐 token 扫 document.xml。
@@ -264,9 +296,10 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 // 刻意不解码成结构体再遍历：OOXML 的段落可以任意嵌套（表格里的单元格、
 // 文本框里的段落），递归结构体需要处理大量容错；顺着 token 流走反而稳。
 type docxParser struct {
-	images ImageSaver
-	media  map[string][]byte
-	warns  *[]string
+	images    ImageSaver
+	media     map[string][]byte
+	warns     *[]string
+	numbering *numberingState
 
 	lines []string
 	// para 攒当前段落：Word 会把一句话拆成很多个 run，逐 token 直接写会把
@@ -276,22 +309,63 @@ type docxParser struct {
 	inTable bool
 	rowBuf  []string
 	cellBuf strings.Builder
+
+	// ---- 当前段落的编号属性（w:pPr） ----
+	// styleID 段落样式：编号常常挂在样式上，段落自己反而只挂个 pStyle。
+	styleID string
+	// numID/ilvl 是段落自己声明的；hasNumPr 区分"声明了 numId=0"
+	// （显式取消编号）和"什么都没声明"（要回落到样式上的那个）。
+	numID    string
+	ilvl     int
+	hasNumPr bool
+	// numPr 只在 w:pPr 里才是段落编号，用深度计数把它与别处的同名元素分开。
+	depthPPr   int
+	depthNumPr int
 }
 
 func (p *docxParser) out() string { return strings.TrimSpace(strings.Join(p.lines, "\n")) }
 
-// flushPara 段落结束：表格里进单元格，否则单独成行。
+// flushPara 段落结束：编号还原成文字前缀，表格里进单元格，否则单独成行。
 func (p *docxParser) flushPara() {
 	s := strings.TrimSpace(p.para.String())
+	prefix := p.currentNumbering()
 	p.para.Reset()
+	p.resetParaNumbering()
 	if s == "" {
 		return
+	}
+	if prefix != "" {
+		s = prefix + s
 	}
 	if p.inTable {
 		p.cellBuf.WriteString(s)
 		return
 	}
 	p.lines = append(p.lines, s)
+}
+
+// currentNumbering 算出本段该带的编号前缀。
+//
+// 优先级：段落自己声明的 numPr > 段落样式带来的 numPr。
+// 两者都没有就是普通段落，不加任何前缀。
+func (p *docxParser) currentNumbering() string {
+	if p.numbering == nil {
+		return ""
+	}
+	if p.hasNumPr {
+		return p.numbering.prefix(p.numID, p.ilvl)
+	}
+	if ref, ok := p.numbering.part.styles[p.styleID]; ok {
+		return p.numbering.prefix(ref.numID, ref.ilvl)
+	}
+	return ""
+}
+
+func (p *docxParser) resetParaNumbering() {
+	p.styleID = ""
+	p.numID = ""
+	p.ilvl = 0
+	p.hasNumPr = false
 }
 
 // flushRow 把攒够的单元格收成一行管道表。
@@ -331,12 +405,29 @@ func (p *docxParser) parse(r io.Reader) error {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			switch t.Name.Local {
+			case "p":
+				p.resetParaNumbering()
 			case "tbl":
 				p.inTable = true
 			case "tr":
 				p.rowBuf = nil
 			case "tc":
 				p.cellBuf.Reset()
+			case "pPr":
+				p.depthPPr++
+			case "numPr":
+				if p.depthPPr > 0 {
+					p.depthNumPr++
+					p.hasNumPr = true
+				}
+			case "ilvl":
+				p.ilvl = atoiOrZero(attrValue(t, "val"))
+			case "numId":
+				// val="0" 是 Word 显式取消编号，如实记下来，
+				// 它必须压过样式上那个编号。
+				p.numID = attrValue(t, "val")
+			case "pStyle":
+				p.styleID = attrValue(t, "val")
 			case "oMath", "oMathPara":
 				if mathDepth == 0 {
 					inMath = true
@@ -375,6 +466,10 @@ func (p *docxParser) parse(r io.Reader) error {
 
 		case xml.EndElement:
 			switch t.Name.Local {
+			case "numPr":
+				p.depthNumPr--
+			case "pPr":
+				p.depthPPr--
 			case "oMath", "oMathPara":
 				mathDepth--
 				if mathDepth <= 0 {
@@ -421,6 +516,24 @@ func (p *docxParser) parse(r io.Reader) error {
 		}
 	}
 	return nil
+}
+
+// attrValue 取属性值，不带命名空间前缀。
+func attrValue(t xml.StartElement, name string) string {
+	for _, a := range t.Attr {
+		if a.Name.Local == name {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // escapeLatexText 处理公式里的特殊字符，避免 LaTeX 语法被正文破坏。
