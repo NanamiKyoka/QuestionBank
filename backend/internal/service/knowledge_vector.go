@@ -331,9 +331,8 @@ func (s *VectorService) searchByVector(ctx context.Context, subjectID uint, quer
 		})
 	}
 
-	// 阈值 0.25：留得比较宽松，因为向量检索只负责"从上千个知识点里
-	// 粗筛出几个候选"，精挑由后续的 LLM 重排负责。
-	// 这里卡太严会把正确答案筛掉，而漏掉的候选是没法补救的。
+	// 阈值 0.25：留得比较宽松。向量召回**直接决定结果**——目前没有
+	// 第二段精挑，卡太严会把正确答案整个筛掉，而漏掉的候选没法补救。
 	return vector.Search(query, items, topK, 0.25), nil
 }
 
@@ -341,10 +340,10 @@ func (s *VectorService) searchByVector(ctx context.Context, subjectID uint, quer
 
 // SuggestKnowledgePoints 为一段文本推荐知识点。
 //
-// 两段式：向量检索粗筛候选 → LLM 在候选里精挑。直接让 LLM 从上千个
-// 知识点里选既不现实（超出上下文）也不可靠；而只靠向量检索，
-// 同义不同词的表述又会漏掉。先用向量把范围缩到 8 个，再让模型判断，
-// 是成本与准确率之间比较实际的取舍。
+// 直接让 LLM 从上千个知识点里选既不现实（超出上下文）也不可靠，
+// 所以先向量检索把范围缩到 searchTopK 个，再按相似度取前 limit 个。
+// 目前**没有**第二段 LLM 精挑：同义不同词的表述因此仍会漏掉，
+// 阈值也只能相应放宽。
 func (s *VectorService) SuggestKnowledgePoints(ctx context.Context, subjectID uint, text string, limit int) []schema.KnowledgeSuggestion {
 	text = strings.TrimSpace(text)
 	if text == "" {

@@ -960,10 +960,9 @@ func (s *ImportService) CancelTask(ctx context.Context, user *model.User, subjec
 
 // RetryTask 把失败、已放弃、或"已完成但一题都没抽出来"的任务重新放回队列。
 //
-// 同样要说清楚：没有 worker 的时候，重新排队**不会**自动重跑抽取。
-// 它把任务复位成 pending、清空上一轮的报错，让它排在队首等执行；
-// 要立刻重跑，用户需要回到智能录题页重新发起（原文仍在用户手里）。
-// 这条规则和队列面板上 worker_online=false 的提示是同一件事的两面。
+// 复位成 pending 之后由进程内的 worker 认领并重跑，用户不用重新发起：
+// 原文仍在任务里。这是"取消"的反面——取消不中断正在跑的抽取，
+// 只是把它从队列里拿掉。
 func (s *ImportService) RetryTask(ctx context.Context, user *model.User, subjectID, taskID uint) (*schema.ImportTaskResponse, error) {
 	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
 		return nil, err

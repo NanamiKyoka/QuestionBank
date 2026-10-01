@@ -7,9 +7,10 @@ import (
 	"testing"
 )
 
-// 前端题库页固定发送 "updated_at_desc"（QuestionsView.vue 的默认排序）。
-// 它不在早期白名单里，于是静默退化成 created_desc——
+// updated_at_desc 是"updated_desc"的历史别名。前端早期一直发这个值，
+// 而它不在白名单里，于是静默退化成 created_desc——
 // 界面上「更新于」这一列看起来能用，实际排序的却是创建时间。
+// 前端早已改发 updated_desc，这个用例守住的是兼容后门本身。
 func TestQuestionSortAcceptsUpdatedAtDesc(t *testing.T) {
 	got := SortByUpdatedAtDesc.Normalize()
 	if got != SortByUpdatedAtDesc {

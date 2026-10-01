@@ -15,9 +15,9 @@ import type { QuestionBrief } from './types'
  * 视图层不自己拼 URL，也不在别处重复定义响应类型。
  *
  * ⚠️ 语义提醒（与后端 model.ImportTask 的注释同源）：
- * 抽取目前是**同步**执行的，队列里没有 worker 在消费。
- * 因此 retry 只是把任务复位成"等待处理"，cancel 只是**放弃**这条记录，
- * 两者都不会中断任何正在进行的抽取。`queueStatus().worker_online` 恒为 false。
+ * 抽取跑在后端的进程内 worker 上，并发度是 1，队列里没有 worker 在消费的
+ * 那种"没人管"状态不会发生。cancel 是**放弃**这条记录、不是中断，
+ * retry 则由 worker 重新认领并重跑原文。
  */
 
 export type ImportTaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
@@ -225,9 +225,9 @@ export interface ImportQueueItem {
 export interface ImportQueueStatus {
   stats: ImportStatusCounts
   active_tasks: ImportQueueItem[]
-  /** 恒为 false：抽取同步执行，没有后台 worker 消费队列。 */
+  /** 是否有后台 worker 在消费队列。它掉线时队列会停在原地不动。 */
   worker_online: boolean
-  /** 面向用户的一句话说明（当前是"队列不会自动开始"）。 */
+  /** 面向用户的一句话说明（通常是并发度与轮询间隔带来的排队预期）。 */
   hint: string
 }
 

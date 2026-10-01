@@ -66,18 +66,15 @@ const MaxImportAttempt = 3
 
 // ImportTask 导入任务。
 //
-// **现状（没有后台 worker）**：抽取是同步的——HTTP 请求线程里跑完模型调用再返回。
-// 因此任务的真实生命周期是
+// 抽取跑在进程内的后台 worker（service/import_worker.go）上，HTTP 请求
+// 只建行就返回。因此任务的真实生命周期是
 //
 //	pending → processing → completed / failed
 //	              ↘ cancelled（放弃，不是中断）
 //
 // pending/processing 只有在两个地方出现：
-//   - 抽取/入库开始前先建行，让长达数分钟的等待在历史里看得见；
+//   - 建行后、worker 认领前，让长达数分钟的等待在历史里看得见；
 //   - 用户点"重试"把任务重新放回 pending。
-//
-// 将来接入 worker（见 model/worker 阶段的规划）时，pending 才是真正的排队，
-// processing 才由 worker 认领时写入。
 //
 // Source 字段保留用于将来区分「同步审计记录」与「真正的后台任务」，
 // 避免 worker 误领同步记录。

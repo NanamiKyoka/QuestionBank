@@ -15,9 +15,9 @@ import { useSubjectStore } from '@/stores/subject'
  * 导入历史。
  *
  * 回答三个问题：**我导入过什么**、**哪一次出了问题**、**那次导出来的题在哪**。
- * 抽取本身是同步的（点一次、等几分钟），没有后台队列，
- * 所以这一页刻意不假装自己是一个任务看板：队列区只如实展示计数与位置，
- * 并明确告诉用户"排队中不等于马上会开始"（后端 worker_online 恒为 false）。
+ * 抽取跑在后端的进程内 worker 上（并发 1），这一页刻意不假装自己是一个
+ * 任务看板：队列区只如实展示计数与位置，并明确告诉用户
+ * "排队中不等于马上会开始"。
  *
  * 状态相关的判断（能不能重试、能不能放弃）全部由后端随任务一起下发，
  * 前端不复制状态机——两份规则必然漂移，漂移的表象是"按钮能点，点了报 409"。
@@ -261,14 +261,14 @@ function countText(row: ImportTask): string {
       </el-card>
     </div>
 
-    <!-- 没有 worker 这件事必须说在前面：否则用户会对着不动的队列反复刷新 -->
+    <!-- worker 掉线时必须说在前面：否则用户会对着不动的队列反复刷新 -->
     <el-alert
       v-if="queue && !queue.worker_online"
       type="info"
       show-icon
       :closable="false"
       :title="queue.hint"
-      description="「重试」只会把任务重新放回队列，不会自动重跑识别；要立刻重跑请回到智能录题页重新发起。"
+      description="队列暂时不会推进：worker 未在运行。可稍后刷新，或回到智能录题页重新发起。"
     />
 
     <el-card shadow="never">
