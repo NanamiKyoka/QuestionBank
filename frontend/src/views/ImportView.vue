@@ -48,6 +48,14 @@ const form = reactive({
   method: 'ai' as ImportParseMethod,
   /** 待上传的文档。文件与文本是二选一：文档优先，因为格式信息只有文件里有。 */
   file: null as File | null,
+  /**
+   * 答案页 / 解析页的图片（已上传，拿到的地址）。
+   *
+   * 单列一个字段而不是复用 images：images 是"题目本身就是图片"，
+   * 这里 是"题目有文本、答案在图上"。两者混在一起的话，
+   * "这次到底识别了什么"在界面上说不清楚。
+   */
+  answerImages: [] as string[],
 })
 
 const uploading = ref(false)
@@ -264,6 +272,57 @@ function removeImage(index: number) {
   form.images.splice(index, 1)
 }
 
+// ---- 答案页 ----
+
+/** 答案页数量上限，与后端 maxAnswerImages 一致。 */
+const MAX_ANSWER_IMAGES = 10
+
+/**
+ * 加入答案页图片。
+ *
+ * 没有答案页时，模型只能把每道解答题自己算一遍——实测约 1370 输出
+ * token/题，一份二十题的卷子近三万 token，几分钟起步且极易撞上
+ * 供应商的超时上限。有答案页时它只需转写，快一个数量级。
+ */
+async function onPickAnswerImages(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (!files.length) return
+
+  const room = MAX_ANSWER_IMAGES - form.answerImages.length
+  if (room <= 0) {
+    ElMessage.warning(`一次最多 ${MAX_ANSWER_IMAGES} 张答案页`)
+    return
+  }
+  const picked = files.slice(0, room)
+  if (picked.length < files.length) {
+    ElMessage.warning(`一次最多 ${MAX_ANSWER_IMAGES} 张，已取前 ${room} 张`)
+  }
+
+  uploading.value = true
+  try {
+    for (const file of picked) {
+      const saved = await uploadApi.image(file)
+      form.answerImages.push(saved.url)
+    }
+  } finally {
+    uploading.value = false
+  }
+}
+
+function removeAnswerImage(index: number) {
+  form.answerImages.splice(index, 1)
+}
+
+/** 换文件时答案页要一并清掉：上一份卷子的答案对新卷子毫无意义。 */
+watch(
+  () => form.file,
+  () => {
+    form.answerImages = []
+  },
+)
+
 // ---- 解析方式 ----
 
 function onMethodChange(value: ImportParseMethod) {
@@ -384,6 +443,7 @@ async function extract() {
             file: form.file,
             method: form.method,
             mode: form.mode,
+            answerImages: form.answerImages,
           })
         : await importTaskApi.extract(subject.currentId, {
             content: tab.value === 'text' ? form.content : '',
@@ -639,6 +699,50 @@ function goToPaper(paperId: number) {
             :disabled="loading || !canEdit"
             @image="onImageFile"
           />
+
+          <!-- 答案页。放在文件页而不是图片页，是因为它的意义完全依附于文档：
+               有试卷才有对应它的答案。 -->
+          <div class="mt-3 rounded border border-dashed border-gray-200 p-3">
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+              <span class="text-sm text-gray-600">答案页（选填，可加快识别）</span>
+              <el-tag size="small" type="info" effect="plain">
+                {{ form.answerImages.length }} / {{ MAX_ANSWER_IMAGES }}
+              </el-tag>
+            </div>
+
+            <div v-if="form.answerImages.length" class="mb-2 flex flex-wrap gap-2">
+              <div v-for="(img, index) in form.answerImages" :key="img" class="relative">
+                <img :src="img" class="h-16 w-16 rounded border border-gray-200 object-cover" />
+                <el-icon
+                  class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-red-500 text-white"
+                  @click="removeAnswerImage(index)"
+                >
+                  <Close />
+                </el-icon>
+              </div>
+            </div>
+
+            <label
+              class="inline-flex cursor-pointer items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:border-blue-400"
+            >
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                class="hidden"
+                :disabled="loading || !canEdit"
+                @change="onPickAnswerImages"
+              />
+              <el-icon :size="14"><Plus /></el-icon>
+              添加答案页图片
+            </label>
+
+            <div class="mt-2 text-xs text-gray-400">
+              试卷本身通常不带答案。没有答案页时模型要把每道解答题自己算一遍，
+              一份二十题的卷子约三万输出 token、耗时以分钟计；<b>附上答案页后模型只需转写</b>，
+              快一个数量级。图片对不上的题目会留空答案并标注，不会硬凑。
+            </div>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane label="粘贴文本" name="text">

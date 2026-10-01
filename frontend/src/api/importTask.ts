@@ -259,19 +259,32 @@ export const importTaskApi = {
   ) => post<ImportExtractResponse>(`/subjects/${subjectId}/imports/extract`, payload, SLOW_TIMEOUT),
 
   /**
-   * 上传**一个**文档（.docx / .md / .txt / .zip）并抽取。
+   * 上传**一个**文档（.docx / .md / .txt / .pdf / .zip）并抽取。
    *
    * 响应体与 /extract 完全一致，因此调用方拿到的处理路径（多文件过滤、
    * 方法说明、逐题审核）两边共用，不需要为文件上传另写一套。
+   *
+   * `answerImages` 是**已经传过一次**的图片地址（走 /upload/image 拿到），
+   * 不是文件本身：让用户在两个地方各传一次同一张图，
+   * 只会让"到底传了没有"变得无法核对。
    */
   upload: (
     subjectId: number,
-    payload: { file: File; method: ImportParseMethod; mode: ImportMode },
+    payload: {
+      file: File
+      method: ImportParseMethod
+      mode: ImportMode
+      answerImages?: string[]
+    },
   ) => {
     const form = new FormData()
     form.append('file', payload.file)
     form.append('method', payload.method)
     form.append('mode', payload.mode)
+    for (const ref of payload.answerImages ?? []) {
+      // 每个地址作为一个独立部分，字段名固定为 images。
+      form.append('images', new Blob([ref], { type: 'text/plain' }), ref)
+    }
     return post<ImportExtractResponse>(`/subjects/${subjectId}/imports/upload`, form, SLOW_TIMEOUT)
   },
 
