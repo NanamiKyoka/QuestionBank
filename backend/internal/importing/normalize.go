@@ -78,10 +78,13 @@ type KnowledgeSuggestion struct {
 // 但输出必须是严格的结构，供后续校验与入库使用。
 // 无法确定的地方不猜——降级为 free_response 并附上 warning，
 // 让用户来定，比猜错导致答案错位要好。
-func Normalize(extracted []ai.ExtractedQuestion) []Draft {
+//
+// mode 决定"这道题本来该不该有答案"：仅录题模式下模型按要求不求解，
+// 于是缺答案不是抽取出错，草稿会直接标成待补（见 parseAnswer）。
+func Normalize(extracted []ai.ExtractedQuestion, mode Mode) []Draft {
 	out := make([]Draft, 0, len(extracted))
 	for i := range extracted {
-		out = append(out, normalizeOne(&extracted[i], i+1))
+		out = append(out, normalizeOne(&extracted[i], i+1, mode))
 	}
 	linkParents(out)
 	return out
@@ -118,7 +121,7 @@ func linkParents(drafts []Draft) {
 	}
 }
 
-func normalizeOne(q *ai.ExtractedQuestion, index int) Draft {
+func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
 	// 题号优先从题干开头的「3.」里取：模型经常原样保留原卷编号，
 	// 取不到（下标是最常见的实际情况）才退回数组下标。
 	sourceNumber := captureSourceNumber(q.Stem)
@@ -171,12 +174,13 @@ func normalizeOne(q *ai.ExtractedQuestion, index int) Draft {
 	d.Analysis = markdownOrNil(q.Analysis)
 
 	// 5) 答案：按题型解析。
-	answer, warns := parseAnswer(qtype, q.Answer, normalized, d.StemMarkdown)
+	answer, warns := parseAnswer(qtype, q.Answer, normalized, d.StemMarkdown, mode)
 	d.Answer = answer
 	d.Warnings = append(d.Warnings, warns...)
 
 	// 6) 交叉校验：术语上说不通的地方标出来。
-	if qtype == model.QuestionTypeFillBlank {
+	// 答案待补时跳过：拿"没有答案"去比对题干空位，报出来的只会是"不一致"。
+	if qtype == model.QuestionTypeFillBlank && answer.Kind != model.AnswerKindPending {
 		if n := CountBlanksInMarkdown(d.StemMarkdown); n > 0 && n != len(answer.Blanks) {
 			d.Warnings = append(d.Warnings,
 				"题干空位数量与答案个数不一致，请核对")
@@ -477,9 +481,17 @@ func extractChoiceLetters(answer string, labels []string) []string {
 }
 
 // parseAnswer 按题型解析答案文本，返回答案结构与警告。
-func parseAnswer(qtype model.QuestionType, raw string, opts []model.Option, stem string) (model.AnswerSpec, []string) {
+func parseAnswer(qtype model.QuestionType, raw string, opts []model.Option, stem string, mode Mode) (model.AnswerSpec, []string) {
 	raw = strings.TrimSpace(raw)
 	var warns []string
+
+	// 仅录题：模型被要求只记录题目，答案本就不该有。
+	// 这种情况不是"没抽出来"，所以不给 warning——满屏"请手动选择正确选项"
+	// 只会让审核界面看起来像坏了。标成 pending，入库后由老师补答案。
+	// 材料里本来就有答案时照常解析：模型给了就用，没人会想把它丢掉。
+	if mode == ModeRecord && raw == "" {
+		return model.AnswerSpec{Kind: model.AnswerKindPending}, nil
+	}
 
 	switch qtype {
 	case model.QuestionTypeSingleChoice, model.QuestionTypeMultipleChoice:

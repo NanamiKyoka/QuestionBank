@@ -36,7 +36,7 @@ func NewImportHandler(imports *service.ImportService) *ImportHandler {
 
 // Upload POST /subjects/:subject_id/imports/upload
 //
-// 表单字段：file（必填，单个）、method（ai|template）、mode（extract|solve）。
+// 表单字段：file（必填，单个）、method（ai|template）、mode（extract|solve|record）。
 // 可选字段 images（可重复）：答案页 / 解析页的图片地址。
 // 响应体与 /extract 完全一致，因此前端两条路径共用同一套审核界面。
 //

@@ -235,6 +235,14 @@ func ValidateShape(qtype model.QuestionType, opts []model.Option, answer model.A
 			WithDetail("type=%s options=%d", qtype, len(opts))
 	}
 
+	// 答案还没填（智能录题的「仅录题」模式）时，答案结构无从谈起。
+	// 题型与选项仍要校验——它们是题目本身，缺了就没法入库。
+	// 早于 requireKind 返回，否则空答案会被报成"答案结构与题型不匹配"，
+	// 那是把"还没写"说成"写错了"。
+	if answerPending(answer) {
+		return nil
+	}
+
 	switch qtype {
 	case model.QuestionTypeSingleChoice:
 		return requireKind(answer, "single")
@@ -255,6 +263,12 @@ func ValidateShape(qtype model.QuestionType, opts []model.Option, answer model.A
 func ValidateQuestion(qtype model.QuestionType, stem RichDoc, opts []model.Option, answer model.AnswerSpec) error {
 	if err := ValidateShape(qtype, opts, answer); err != nil {
 		return err
+	}
+
+	// 答案待补的题目只校验题目本身：每一条答案规则都在问
+	// "这个答案对不对"，而它压根还没有答案。
+	if answerPending(answer) {
+		return nil
 	}
 
 	ids := OptionIDs(opts)
@@ -338,6 +352,9 @@ func requireKind(answer model.AnswerSpec, want string) error {
 	}
 	return nil
 }
+
+// answerPending 判断这道题的答案是否还没填。
+func answerPending(answer model.AnswerSpec) bool { return answer.Kind == model.AnswerKindPending }
 
 // NormalizeQuestionDisplay 把显示设置补齐为四个确定的布尔值。
 func NormalizeQuestionDisplay(raw model.JSON) (model.JSON, model.QuestionDisplay) {

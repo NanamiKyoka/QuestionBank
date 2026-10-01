@@ -213,7 +213,7 @@ func TestNormalizeFullQuestion(t *testing.T) {
 		Difficulty:      2,
 		KnowledgePoints: []string{"质数"},
 		Tags:            []string{"基础"},
-	}})
+	}}, ModeExtract)
 
 	if len(drafts) != 1 {
 		t.Fatalf("应产出 1 个草稿，实际 %d", len(drafts))
@@ -260,7 +260,7 @@ func TestNormalizeSplitsOptionsAndWarns(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{{
 		Stem:   "下列哪个是偶数？ A. 3 B. 8 C. 5 D. 7",
 		Answer: "B",
-	}})
+	}}, ModeExtract)
 	d := drafts[0]
 
 	if len(d.Options) != 4 {
@@ -283,7 +283,7 @@ func TestNormalizeWarnsOnUnparseableAnswer(t *testing.T) {
 			{Label: "A", Content: "甲"}, {Label: "B", Content: "乙"},
 		},
 		Answer: "因为乙更符合题意", // 混了解释，不该被解析成字母
-	}})
+	}}, ModeExtract)
 	d := drafts[0]
 
 	if len(d.Answer.Correct) != 0 {
@@ -299,7 +299,7 @@ func TestNormalizeWarnsOnBlankCountMismatch(t *testing.T) {
 		QuestionType: "fill_blank",
 		Stem:         "求 ___ 与 ___ 的和",
 		Answer:       "3",
-	}})
+	}}, ModeExtract)
 	d := drafts[0]
 
 	if len(d.Answer.Blanks) != 1 {
@@ -318,7 +318,7 @@ func TestNormalizeTrueFalseVariants(t *testing.T) {
 	for raw, want := range cases {
 		drafts := Normalize([]ai.ExtractedQuestion{{
 			QuestionType: "true_false", Stem: "题目", Answer: raw,
-		}})
+		}}, ModeExtract)
 		d := drafts[0]
 		if d.Answer.BoolAnswer == nil {
 			t.Fatalf("答案 %q 应被解析为布尔值", raw)
@@ -332,7 +332,7 @@ func TestNormalizeTrueFalseVariants(t *testing.T) {
 func TestNormalizeEssayWithoutReference(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{{
 		QuestionType: "essay", Stem: "证明题", Answer: "",
-	}})
+	}}, ModeExtract)
 	d := drafts[0]
 	if d.Answer.Kind != "reference" {
 		t.Fatalf("解答题答案类型应为 reference，实际 %s", d.Answer.Kind)
@@ -342,11 +342,52 @@ func TestNormalizeEssayWithoutReference(t *testing.T) {
 	}
 }
 
+// 仅录题：模型按要求没有给答案。这不是抽取失败，草稿应标成"待补充"，
+// 而且不能报"未能识别答案"——那会让审核界面看起来像坏了。
+func TestNormalizeRecordModeLeavesAnswerPending(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{{
+		QuestionType: "single_choice",
+		Stem:         "下列哪个是质数？ A. 3 B. 4 C. 6 D. 8",
+		Options:      []ai.ExtractedOption{{Label: "A", Content: "3"}, {Label: "B", Content: "4"}},
+	}}, ModeRecord)
+	d := drafts[0]
+	if d.Answer.Kind != model.AnswerKindPending {
+		t.Fatalf("仅录题的答案应待补充，实际 %s", d.Answer.Kind)
+	}
+	if len(d.Warnings) != 0 {
+		t.Fatalf("仅录题不该因为没有答案而告警，实际 %v", d.Warnings)
+	}
+}
+
+// 同一份材料里本来就有答案时，仅录题也不该把它丢掉。
+func TestNormalizeRecordModeKeepsProvidedAnswer(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{{
+		QuestionType: "single_choice",
+		Stem:         "下列哪个是质数？ A. 3 B. 4 C. 6 D. 8",
+		Options:      []ai.ExtractedOption{{Label: "A", Content: "3"}, {Label: "B", Content: "4"}},
+		Answer:       "A",
+	}}, ModeRecord)
+	if len(drafts[0].Answer.Correct) != 1 {
+		t.Fatalf("模型给出的答案应照常解析，实际 %+v", drafts[0].Answer)
+	}
+}
+
+// 题干有空位、答案还没填时，"空位数与答案个数不一致"这条提示是拿空气比空气。
+func TestNormalizeRecordModeSkipsBlankCountWarning(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{{
+		QuestionType: "fill_blank",
+		Stem:         "求 ___ 与 ___ 的和",
+	}}, ModeRecord)
+	if hasWarning(drafts[0].Warnings, "不一致") {
+		t.Fatalf("答案待补时不该报空位不一致，实际 %v", drafts[0].Warnings)
+	}
+}
+
 func TestNormalizeInfersTypeWhenModelOmitsIt(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{{
 		Stem:   "求 ___ 的值",
 		Answer: "42",
-	}})
+	}}, ModeExtract)
 	d := drafts[0]
 	if d.QuestionType == "" {
 		t.Fatal("题型不应为空")
@@ -359,13 +400,13 @@ func TestNormalizeInfersTypeWhenModelOmitsIt(t *testing.T) {
 // 难度超出 1-5 时回落为默认值，而不是原样落库。
 func TestNormalizeDifficultyClamped(t *testing.T) {
 	for _, in := range []int{0, -1, 99} {
-		drafts := Normalize([]ai.ExtractedQuestion{{Stem: "x", Difficulty: in}})
+		drafts := Normalize([]ai.ExtractedQuestion{{Stem: "x", Difficulty: in}}, ModeExtract)
 		if got := drafts[0].Difficulty; got != 3 {
 			t.Fatalf("难度 %d 应回落为 3，实际 %d", in, got)
 		}
 	}
 	for _, in := range []int{1, 5} {
-		drafts := Normalize([]ai.ExtractedQuestion{{Stem: "x", Difficulty: in}})
+		drafts := Normalize([]ai.ExtractedQuestion{{Stem: "x", Difficulty: in}}, ModeExtract)
 		if got := drafts[0].Difficulty; got != in {
 			t.Fatalf("合法难度 %d 应保留，实际 %d", in, got)
 		}
@@ -382,7 +423,7 @@ func TestNormalizeHandlesBadOptions(t *testing.T) {
 			{Label: "A", Content: "乙"}, // 重复标签
 		},
 		Answer: "A",
-	}})
+	}}, ModeExtract)
 	d := drafts[0]
 	if len(d.Options) != 0 {
 		t.Fatalf("重复标签应被忽略，实际保留 %d 个选项", len(d.Options))
@@ -424,7 +465,7 @@ func TestNormalizeRealisticBatch(t *testing.T) {
 			Answer:       "错",
 			Analysis:     "2 是质数但不是奇数。",
 		},
-	})
+	}, ModeExtract)
 
 	if len(drafts) != 3 {
 		t.Fatalf("应产出 3 个草稿，实际 %d", len(drafts))

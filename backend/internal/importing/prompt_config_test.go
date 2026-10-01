@@ -237,6 +237,50 @@ func TestBuildSystemPromptSolveMode(t *testing.T) {
 	mustContain(t, got, `"stem": "原样返回题干，不要改动"`)
 }
 
+// 仅录题模式：结构说明里没有 analysis，answer 固定为空串。
+// 留着这两个字段，模型就会"顺手"给出一份没人要的推导——
+// 那正是这个模式要省掉的开销。
+func TestBuildSystemPromptRecordModeAsksForNoAnswers(t *testing.T) {
+	withStore(t, &memoryStore{byKey: map[string]string{}})
+	got := BuildSystemPrompt(PromptOptions{Mode: ModeRecord, SubjectName: "物理"})
+
+	mustContain(t, got, "**不要解题**", `"answer": "固定输出空字符串`)
+	if strings.Contains(got, `"analysis"`) {
+		t.Fatal("仅录题的结构说明里不应再要求解析")
+	}
+}
+
+// 三种模式各走各的提示词键：串台会让管理员在「提示词」页改了一条却不生效。
+func TestPromptKeyOfModePerMode(t *testing.T) {
+	cases := map[Mode]string{
+		ModeExtract: PromptKeyImportExtract,
+		ModeSolve:   PromptKeyImportSolve,
+		ModeRecord:  PromptKeyImportRecord,
+		Mode(""):    PromptKeyImportExtract,
+	}
+	for mode, want := range cases {
+		if got := PromptKeyOfMode(mode); got != want {
+			t.Fatalf("模式 %q 应取提示词 %s，实际 %s", mode, want, got)
+		}
+	}
+}
+
+// 答案页的转写提示只在完整抽取里出现：仅录题要的就是不碰答案，
+// 补写答案模式则连题干都由用户给全了。
+func TestAnswerImagesHintOnlyInExtractMode(t *testing.T) {
+	opt := PromptOptions{AnswerImages: 2}
+	for _, mode := range []Mode{ModeExtract, ModeRecord, ModeSolve} {
+		opt.Mode = mode
+		got := BuildUserContent("材料", opt)
+		hasHint := strings.Contains(got, "答案与解析页")
+		if want := mode == ModeExtract; hasHint != want {
+			t.Fatalf("模式 %q 的答案页提示应为 %v，实际 %v", mode, want, hasHint)
+		}
+	}
+	opt.Mode = ModeRecord
+	mustContain(t, BuildUserContent("材料", opt), "只记录题目本身，不要给出答案与解析")
+}
+
 // 没有知识点/标签时，对应的引导段整段消失，而不是留下空标题。
 func TestBuildSystemPromptOmitsEmptyBlocks(t *testing.T) {
 	withStore(t, &memoryStore{byKey: map[string]string{}})

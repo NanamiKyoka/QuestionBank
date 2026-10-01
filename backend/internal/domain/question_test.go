@@ -146,6 +146,12 @@ func TestValidateShape(t *testing.T) {
 		{"非选择题不应带选项", model.QuestionTypeEssay, opts, model.AnswerSpec{Kind: "reference"}, true},
 		{"答案种类不符", model.QuestionTypeSingleChoice, opts, model.AnswerSpec{Kind: "boolean"}, true},
 		{"unresolved 被拒绝", model.QuestionTypeSingleChoice, opts, model.AnswerSpec{Kind: "unresolved"}, true},
+		{"答案待补充时放行", model.QuestionTypeSingleChoice, opts,
+			model.AnswerSpec{Kind: model.AnswerKindPending}, false},
+		{"答案待补充仍要校验题型", model.QuestionTypeSingleChoice, nil,
+			model.AnswerSpec{Kind: model.AnswerKindPending}, true},
+		{"答案待补充仍要校验选项", model.QuestionTypeEssay, opts,
+			model.AnswerSpec{Kind: model.AnswerKindPending}, true},
 	}
 
 	for _, tc := range cases {
@@ -253,6 +259,31 @@ func TestValidateQuestion(t *testing.T) {
 			model.AnswerSpec{Kind: "reference", Reference: jsonOf(t, doc(t, "参考答案"))})
 		if err != nil {
 			t.Fatalf("不应报错: %v", err)
+		}
+	})
+
+	// 「仅录题」录进来的题目一道题都还没有答案：把它们挡在入库之外，
+	// 这个模式就等于没法用。每种题型都要放行，否则只有某几种题能录。
+	t.Run("答案待补充的各种题型都放行", func(t *testing.T) {
+		pending := model.AnswerSpec{Kind: model.AnswerKindPending}
+		cases := []struct {
+			qtype model.QuestionType
+			opts  []model.Option
+		}{
+			{model.QuestionTypeSingleChoice, opts},
+			{model.QuestionTypeMultipleChoice, opts},
+			{model.QuestionTypeTrueFalse, nil},
+			{model.QuestionTypeFillBlank, nil},
+			{model.QuestionTypeEssay, nil},
+		}
+		for _, tc := range cases {
+			stem := doc(t, "x")
+			if tc.qtype == model.QuestionTypeFillBlank {
+				stem = docWithBlanks(t, "求 x：", 2)
+			}
+			if err := ValidateQuestion(tc.qtype, stem, tc.opts, pending); err != nil {
+				t.Fatalf("%s 的待补答案不应报错: %v", tc.qtype, err)
+			}
 		}
 	})
 }

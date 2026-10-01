@@ -125,9 +125,19 @@ type Blank struct {
 	Accepts [][]JSON `json:"accepts"`
 }
 
+// AnswerKindPending 答案待补充：智能录题的「仅录题」模式只录题目，
+// 答案与解析留给老师事后填写。
+const AnswerKindPending = "pending"
+
 // AnswerSpec 答案的判别联合，用 Kind 区分具体结构。
 type AnswerSpec struct {
-	Kind string `json:"kind"` // single | multiple | boolean | blanks | reference | unresolved
+	// single | multiple | boolean | blanks | reference | pending | unresolved
+	//
+	// pending 表示"这道题还没有答案"：智能录题的「仅录题」模式只录题目，
+	// 答案与解析留给老师事后填写。unresolved 则相反——它带着一段读不懂的
+	// 原文，是需要人来收拾的残局。两者必须分开：混用一个 kind，
+	// 界面就没法区分"按计划留白"和"出错了"。
+	Kind string `json:"kind"`
 
 	// single / multiple
 	Correct []string `json:"correct,omitempty"`

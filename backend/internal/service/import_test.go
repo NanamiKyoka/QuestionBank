@@ -133,6 +133,85 @@ const realisticExtraction = `{
   ]
 }`
 
+// 仅录题：模型按提示词要求只给题目，答案与解析一律留空。
+const recordExtraction = `{
+  "questions": [
+    {
+      "temp_id": "q1",
+      "question_type": "single_choice",
+      "stem": "已知函数 $f(x)=x^2$，则 $f(2)=$（  ）",
+      "options": [
+        {"label":"A","content":"2"},
+        {"label":"B","content":"4"},
+        {"label":"C","content":"8"},
+        {"label":"D","content":"16"}
+      ],
+      "answer": "",
+      "difficulty": 1
+    },
+    {
+      "temp_id": "q2",
+      "question_type": "essay",
+      "stem": "证明：三角形的内角和为 180 度。",
+      "answer": ""
+    }
+  ]
+}`
+
+// 仅录题的整条链路：草稿标成待补答案 → 入库成功 → 题目确实还没有答案。
+// 中间任何一环把题目挡下来，这个模式就等于不能用。
+func TestRecordModeCommitsQuestionsWithoutAnswers(t *testing.T) {
+	fx := newImportFixture(t, recordExtraction)
+	ctx := context.Background()
+
+	res, err := fx.svc.Extract(ctx, fx.editor, fx.subject.ID, &schema.ExtractRequest{
+		Content: "（试卷原文）",
+		Mode:    string(importing.ModeRecord),
+	})
+	if err != nil {
+		t.Fatalf("仅录题抽取失败: %v", err)
+	}
+	if len(res.Drafts) != 2 {
+		t.Fatalf("应抽取 2 道题，实际 %d", len(res.Drafts))
+	}
+	for _, d := range res.Drafts {
+		if d.Answer.Kind != model.AnswerKindPending {
+			t.Fatalf("草稿答案应待补充，实际 %s", d.Answer.Kind)
+		}
+		if len(d.Warnings) != 0 {
+			t.Fatalf("仅录题不该产生告警，实际 %v", d.Warnings)
+		}
+	}
+
+	committed, err := fx.svc.Commit(ctx, fx.editor, fx.subject.ID, &schema.CommitRequest{Drafts: res.Drafts})
+	if err != nil {
+		t.Fatalf("入库失败: %v", err)
+	}
+	if committed.CreatedCount != 2 || committed.FailedCount != 0 {
+		t.Fatalf("应入库 2 道题，实际成功 %d 失败 %d：%+v",
+			committed.CreatedCount, committed.FailedCount, committed.Failures)
+	}
+
+	list, total, err := fx.repos.Questions.List(ctx, model.QuestionFilter{
+		SubjectID: fx.subject.ID, ViewerID: fx.editor.ID,
+	}, model.SortByCreatedDesc, 10, 0)
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("库里应有 2 道题，实际 %d", total)
+	}
+	for i := range list {
+		var answer model.AnswerSpec
+		if err := list[i].Answer.Into(&answer); err != nil {
+			t.Fatalf("解析答案失败: %v", err)
+		}
+		if answer.Kind != model.AnswerKindPending {
+			t.Fatalf("入库后的答案应保持待补充，实际 %s", answer.Kind)
+		}
+	}
+}
+
 func TestExtractProducesDraftsWithoutWriting(t *testing.T) {
 	fx := newImportFixture(t, realisticExtraction)
 	ctx := context.Background()

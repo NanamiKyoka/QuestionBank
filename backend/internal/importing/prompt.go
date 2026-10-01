@@ -16,13 +16,22 @@ import (
 type Mode string
 
 const (
-	// ModeExtract 抽取新题：从文档里识别出题目。
+	// ModeExtract 抽取新题：从文档里识别出题目，材料里有答案就连答案一起抽。
 	ModeExtract Mode = "extract"
 	// ModeSolve 补写答案：题目已有，让模型给出答案与解析。
 	ModeSolve Mode = "solve"
+	// ModeRecord 仅录题：只识别题目本身，不要答案与解析。
+	//
+	// 它存在的理由是成本与等待：完整抽取要为每道解答题写出推导
+	// （实测约 1370 输出 token/题），一份二十题的卷子近三万 token，
+	// 几分钟起步且极易撞上供应商的超时上限。答案与解析改由老师填写，
+	// 或者之后在题库里单独让模型补写。
+	ModeRecord Mode = "record"
 )
 
-func (m Mode) Valid() bool { return m == ModeExtract || m == ModeSolve }
+func (m Mode) Valid() bool {
+	return m == ModeExtract || m == ModeSolve || m == ModeRecord
+}
 
 // extractSchema 给模型的输出结构说明。
 //
@@ -58,6 +67,27 @@ const solveSchema = `{
   ]
 }`
 
+// recordSchema 仅录题模式的结构说明。
+//
+// 与 extractSchema 的差别只有两处，而且都是**减法**：不要求 analysis，
+// 并把 answer 固定成空串。求解正是输出里最贵的那部分（解析动辄上千 token/题），
+// 把这两个字段从契约里拿掉，模型才不会"顺手"给出一份没人要的推导。
+const recordSchema = `{
+  "questions": [
+    {
+      "temp_id": "题目的临时编号，字符串，用于子题关联母题",
+      "parent_temp_id": "若本题是某道母题的小问，填母题的 temp_id，否则省略",
+      "question_type": "single_choice | multiple_choice | fill_blank | true_false | essay",
+      "stem": "题干内容，Markdown 格式，行内公式写成 $...$，独立公式写成 $$...$$，填空题的空位写成六个下划线 ______",
+      "options": [ {"label": "A", "content": "选项内容"} ],
+      "answer": "固定输出空字符串：本模式不求解，答案由老师填写",
+      "difficulty": 1,
+      "knowledge_points": ["涉及的知识点名称"],
+      "tags": ["建议的标签"]
+    }
+  ]
+}`
+
 // ---- 可配置提示词 ----
 //
 // 本文件是全系统"提示词"的唯一真相源：有哪些提示词、每个支持哪些占位符、
@@ -70,6 +100,8 @@ const (
 	PromptKeyImportExtract = "import_extract"
 	// PromptKeyImportSolve 智能录题·为已有题目补写答案与解析。
 	PromptKeyImportSolve = "import_solve"
+	// PromptKeyImportRecord 智能录题·只识别题目，不求解。
+	PromptKeyImportRecord = "import_record"
 	// PromptKeyAssistant AI 助手的系统提示词（人设与行为约束）。
 	PromptKeyAssistant = "chat_assistant"
 )
@@ -166,6 +198,17 @@ var promptSpecs = []PromptSpec{
 		Default:      defaultSolveTemplate,
 	},
 	{
+		Key:         PromptKeyImportRecord,
+		Name:        "智能录题 · 仅录题",
+		Scene:       "import",
+		Description: "只从材料里识别题目本身，不要答案与解析——省下求解的输出与等待。",
+		// 没有 SettingKey：这一条是新增的，不存在对应的历史系统设置键。
+		// 造一个永远没人写入的键只会让「系统设置」页多一行死配置。
+		Placeholders: importPlaceholders,
+		SchemaAware:  true,
+		Default:      defaultRecordTemplate,
+	},
+	{
 		Key:          PromptKeyAssistant,
 		Name:         "AI 助手 · 系统提示词",
 		Scene:        "chat",
@@ -194,8 +237,11 @@ func SpecOf(key string) (PromptSpec, bool) {
 
 // PromptKeyOfMode 导入模式对应的提示词键。
 func PromptKeyOfMode(m Mode) string {
-	if m == ModeSolve {
+	switch m {
+	case ModeSolve:
 		return PromptKeyImportSolve
+	case ModeRecord:
+		return PromptKeyImportRecord
 	}
 	return PromptKeyImportExtract
 }
@@ -236,6 +282,28 @@ const defaultSolveTemplate = `你是一位资深的中小学与大学学科教�
 不要使用 Unicode 数学符号（如 ×÷≤），一律用 LaTeX 命令（\times \div \leq）。
 
 填空题的空位统一写成六个下划线：______ 。答案里同一个空的多个可接受写法用「或」分隔。
+本材料属于学科：{{subject_name}}
+{{knowledge_point_block}}
+{{tag_block}}
+严格只输出一个 JSON 对象，不要输出任何解释文字，也不要用 Markdown 代码块包裹。
+输出结构如下（这是结构说明，不是示例数据）：
+{{output_schema}}`
+
+const defaultRecordTemplate = `你是一位资深的中小学与大学学科教研员，擅长把试卷、讲义、教案等材料整理成结构化的题库数据。
+
+任务：从下面的材料中识别出所有题目，**只记录题目本身**。
+注意：
+1. 材料里可能有标题、考号说明、分数说明等非题目内容，这些不要当成题目。
+2. 每道题必须包含题干；材料里有选项、知识点提示时一并提取。
+3. **不要解题**：不写答案，也不写解析。材料里印着答案或解析时同样留空——
+   答案与解析由老师事后填写，你写出来的会被丢弃，却让整份识别多花几倍时间与费用。
+4. 材料里出现的小题（如「(1)」「(2)」）作为母题的小问处理，用 parent_temp_id 关联。
+
+数学公式必须使用 LaTeX：行内用 $...$，独立成行用 $$...$$。
+例如：函数 $f(x) = \frac{1}{2}x^2$ 在 $x=1$ 处的导数为 $f'(1)$。
+不要使用 Unicode 数学符号（如 ×÷≤），一律用 LaTeX 命令（\times \div \leq）。
+
+填空题的空位统一写成六个下划线：______ 。
 本材料属于学科：{{subject_name}}
 {{knowledge_point_block}}
 {{tag_block}}
@@ -552,6 +620,7 @@ type PromptOptions struct {
 	// 这个差别是巨大的——没有答案页时，模型要为每道解答题写出完整推导
 	// （实测约 1370 输出 token/题，整卷近三万 token，几分钟起步）；
 	// 有答案页时它只需要抄，比自己算快一个数量级。
+	// 仅 ModeExtract 会用到它：另两种模式不碰答案页。
 	AnswerImages int
 }
 
@@ -575,8 +644,11 @@ func BuildSystemPrompt(opt PromptOptions) string {
 // importVars 组装录题提示词的占位符取值。
 func importVars(opt PromptOptions) Vars {
 	schema := extractSchema
-	if opt.Mode == ModeSolve {
+	switch opt.Mode {
+	case ModeSolve:
 		schema = solveSchema
+	case ModeRecord:
+		schema = recordSchema
 	}
 	return Vars{
 		"subject_name":          opt.SubjectName,
@@ -622,9 +694,12 @@ func BuildUserContent(content string, opt PromptOptions) string {
 	content = strings.TrimSpace(content)
 	var b strings.Builder
 
-	if opt.Mode == ModeSolve {
+	switch opt.Mode {
+	case ModeSolve:
 		b.WriteString("请为下列题目补写答案与解析：\n\n")
-	} else {
+	case ModeRecord:
+		b.WriteString("请从下列材料中提取题目，只记录题目本身，不要给出答案与解析：\n\n")
+	default:
 		b.WriteString("请从下列材料中提取题目：\n\n")
 	}
 	if content != "" {
@@ -634,7 +709,10 @@ func BuildUserContent(content string, opt PromptOptions) string {
 
 	// 有答案页时把用法说清楚。不说，模型很可能仍然把图片当成
 	// "补充插图"而去自己解题——于是图片白传，耗时一分没省。
-	if opt.AnswerImages > 0 && opt.Mode != ModeSolve {
+	//
+	// 仅录题是这条提示的唯一例外：它要的就是不碰答案，
+	// 告诉模型去"转写答案页"会让它重新干回求解的活。
+	if opt.AnswerImages > 0 && opt.Mode == ModeExtract {
 		b.WriteString(answerImagesHint(opt.AnswerImages))
 	}
 	return strings.TrimSpace(b.String())

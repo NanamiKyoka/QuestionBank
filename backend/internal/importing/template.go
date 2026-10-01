@@ -677,7 +677,8 @@ func buildDrafts(blocks []rawBlock, answers, analyses map[int]string) []Draft {
 		}
 	}
 
-	drafts := Normalize(extracted)
+	// 规则解析只按标签逐字取值，不求解，所以模式恒为抽取。
+	drafts := Normalize(extracted, ModeExtract)
 	for i := range drafts {
 		// 题块上捕获的题号优先于题干里的：标签前的「3.【题目】」是原卷题号，
 		// 而题干正文里那个 3 有可能是小问编号。

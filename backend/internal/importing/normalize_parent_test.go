@@ -13,7 +13,7 @@ func TestNormalizeTrimsTempIDs(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{
 		{TempID: " q1 ", Stem: "母题", Answer: "42", Analysis: "略"},
 		{TempID: " c1 ", ParentTempID: " q1 ", Stem: "小问", Answer: "42", Analysis: "略"},
-	})
+	}, ModeExtract)
 	if len(drafts) != 2 {
 		t.Fatalf("应得到 2 道草稿，实际 %d", len(drafts))
 	}
@@ -29,7 +29,7 @@ func TestNormalizeTrimsTempIDs(t *testing.T) {
 func TestNormalizeWarnsOnUnknownParent(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{
 		{TempID: "c1", ParentTempID: "missing", Stem: "小问", Answer: "42", Analysis: "略"},
-	})
+	}, ModeExtract)
 	if drafts[0].ParentTempID != "" {
 		t.Fatalf("无法解析的母题引用应被清空，实际 %q", drafts[0].ParentTempID)
 	}
@@ -42,7 +42,7 @@ func TestNormalizeWarnsOnUnknownParent(t *testing.T) {
 func TestNormalizeWarnsOnSelfParent(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{
 		{TempID: "a", ParentTempID: "a", Stem: "题", Answer: "42", Analysis: "略"},
-	})
+	}, ModeExtract)
 	if drafts[0].ParentTempID != "" {
 		t.Fatalf("自引用应被清空，实际 %q", drafts[0].ParentTempID)
 	}
@@ -56,7 +56,7 @@ func TestNormalizeKeepsValidParentLink(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{
 		{TempID: "m1", QuestionType: "essay", Stem: "母题", Answer: "42", Analysis: "略"},
 		{TempID: "c1", ParentTempID: "m1", QuestionType: "essay", Stem: "小问", Answer: "42", Analysis: "略"},
-	})
+	}, ModeExtract)
 	if drafts[1].ParentTempID != "m1" {
 		t.Fatalf("合法母子关系应保留，实际 %q", drafts[1].ParentTempID)
 	}

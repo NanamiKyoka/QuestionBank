@@ -225,6 +225,8 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 
 	if method == importing.MethodTemplate {
 		// 规则解析：确定性的，毫秒级返回，不消耗任何额度。
+		// 它只按标签逐字取值，本来就一步也不求解，所以「仅录题」在这里
+		// 与「完整抽取」没有区别——前端也不让用户组合出这个选择。
 		// 走 Full 版本是为了拿到版面大纲——整卷导入要靠它还原卷面。
 		drafts, outline, docWarnings = importing.ParseTemplateFull(content, task.OriginalFilename)
 		modelLabel = "规则解析（未调用模型）"
@@ -241,7 +243,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 			}
 			return nil, apperr.New(apperr.CodeAIUnavailable, humanizeAIError(err)).WithCause(err)
 		}
-		drafts = importing.Normalize(extracted)
+		drafts = importing.Normalize(extracted, mode)
 		modelLabel = resolved.Display
 		// 模型只吐题目、不吐版面。这里给一份"只有题目引用"的大纲：
 		// 整卷导入仍然可用，只是没有标题与说明文字——
@@ -1482,6 +1484,9 @@ func fileTypeOf(req *schema.ExtractRequest, mode importing.Mode) string {
 	if mode == importing.ModeSolve {
 		return "solve"
 	}
+	if mode == importing.ModeRecord {
+		return "record"
+	}
 	return "text"
 }
 
@@ -1525,6 +1530,8 @@ func extractSourceLabel(req *schema.ExtractRequest, mode importing.Mode) string 
 		return fmt.Sprintf("图片识别（%d 张）", len(req.Images))
 	case mode == importing.ModeSolve:
 		return "补写答案"
+	case mode == importing.ModeRecord:
+		return "仅录题"
 	default:
 		return "粘贴文本"
 	}

@@ -406,7 +406,7 @@ func TestParseTemplateDraftShapeMatchesModelPath(t *testing.T) {
 		Stem:    "题干",
 		Options: []ai.ExtractedOption{{Label: "A", Content: "甲"}, {Label: "B", Content: "乙"}},
 		Answer:  "A",
-	}})
+	}}, ModeExtract)
 	if len(fromTemplate) != 1 || len(fromModel) != 1 {
 		t.Fatalf("两条路径都应产出 1 道草稿")
 	}
@@ -432,7 +432,7 @@ func TestNormalizeCapturesSourceNumberFromStem(t *testing.T) {
 	drafts := Normalize([]ai.ExtractedQuestion{
 		{Stem: "下列说法正确的是", Answer: "A"},
 		{Stem: "12. 下列说法错误的是", Answer: "B"},
-	})
+	}, ModeExtract)
 	if drafts[0].SourceNumber != 1 {
 		t.Fatalf("没有题号时应退回下标 1，实际 %d", drafts[0].SourceNumber)
 	}

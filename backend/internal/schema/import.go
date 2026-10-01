@@ -14,8 +14,8 @@ type ExtractRequest struct {
 	// Images 图片，形如 data:image/png;base64,xxx 。
 	// 支持多图：一道题可能配多张图。
 	Images []string `json:"images" binding:"max=10"`
-	// Mode extract（抽取新题）| solve（补写答案）。
-	Mode string `json:"mode" binding:"omitempty,oneof=extract solve"`
+	// Mode extract（抽取新题）| solve（补写答案）| record（仅录题，不求解）。
+	Mode string `json:"mode" binding:"omitempty,oneof=extract solve record"`
 	// SolveForContent 仅在 mode=solve 时使用：待补答案的题目文本。
 	SolveForContent string `json:"solve_for_content" binding:"max=200000"`
 	// Filename 本次导入内容的来源名称（原始文件名、粘贴的文档标题等）。
