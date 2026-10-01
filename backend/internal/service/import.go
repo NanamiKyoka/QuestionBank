@@ -345,7 +345,7 @@ func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID 
 	}
 	if !importing.UploadSupported(name) {
 		return nil, apperr.New(apperr.CodeInvalidParam,
-			"暂不支持这种文件").WithDetail("filename=%s；目前支持 .md / .txt / .docx / .zip", name)
+			"暂不支持这种文件").WithDetail("filename=%s；目前支持 %s", name, importing.UploadExtHint())
 	}
 
 	// 权限先判：不该让无权用户靠"文件能不能解析"探测系统能力。
@@ -501,6 +501,10 @@ func humanizeIngestError(err error) string {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "压缩包"):
+		return msg
+	case strings.Contains(msg, "文字层"):
+		// PDF 抽取层已经把"该改走截图识别"写进消息里了，原样透出即可：
+		// 再包一层只会把"下一步该做什么"这条关键信息冲淡。
 		return msg
 	case strings.Contains(msg, "Word"):
 		return "无法读取这个 Word 文档，请确认它是 .docx 而不是 .doc 等旧格式"

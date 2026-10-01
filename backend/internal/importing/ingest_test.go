@@ -355,13 +355,56 @@ func TestIngestZipRejectsPathTraversal(t *testing.T) {
 }
 
 func TestIngestRejectsUnsupportedType(t *testing.T) {
-	if _, err := Ingest([]byte("x"), "a.pdf", nil); err == nil {
-		t.Fatal("PDF 不在支持范围内，必须报错而不是静默导入二进制")
+	if _, err := Ingest([]byte("x"), "a.doc", nil); err == nil {
+		t.Fatal(".doc 不在支持范围内，必须报错而不是把二进制当文本导入")
 	}
 	if UploadSupported("a.DOCX") != true {
 		t.Fatal("扩展名匹配应当大小写不敏感")
 	}
-	if UploadSupported("a.pdf") {
-		t.Fatal("PDF 不应被标记为支持")
+	if !UploadSupported("a.PDF") {
+		t.Fatal("PDF 现在受支持，且扩展名匹配应当大小写不敏感")
+	}
+}
+
+// PDF 现在能被摄取了，但它取的是**文字层**。
+// 没有文字层的扫描件必须被明确告知改走截图，而不是静默返回空文档——
+// 后者会让用户看到"识别出 0 道题"，然后怀疑系统坏了。
+func TestIngestPDFReportsMissingTextLayer(t *testing.T) {
+	pdf := minimalPDF(t)
+	_, err := Ingest(pdf, "scan.pdf", nil)
+	if err == nil {
+		t.Fatal("没有文字层的 PDF 应当报错")
+	}
+	if !strings.Contains(err.Error(), "文字层") {
+		t.Fatalf("错误信息应当说清是没有文字层，实际 %v", err)
+	}
+	if !strings.Contains(err.Error(), "上传图片") {
+		t.Fatalf("错误信息应当给出下一步该怎么做，实际 %v", err)
+	}
+}
+
+// 有文字层的 PDF 应当带上"来源"说明：文本层里的公式是拆开的，
+// 不告诉模型的话，它会把 x2 当成正文、把碎片当成多出来的段落。
+func TestIngestPDFMarksProvenance(t *testing.T) {
+	pdf := textPDF(t, "BT /F1 12 Tf 72 700 Td (1. What is 1 + 1) Tj ET")
+
+	res, err := Ingest(pdf, "paper.pdf", nil)
+	if err != nil {
+		t.Fatalf("摄取失败: %v", err)
+	}
+	if !strings.HasPrefix(res.Docs[0].Text, PDFTextPrefix) {
+		t.Fatalf("PDF 文本应当带来源说明，实际开头是 %q", truncate(res.Docs[0].Text, 40))
+	}
+	if !strings.Contains(res.Docs[0].Text, "1. What is 1 + 1") {
+		t.Fatalf("正文没有取到: %q", res.Docs[0].Text)
+	}
+	var noted bool
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "PDF 版面提示") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Fatalf("应当给出 PDF 版面提示，实际 %v", res.Warnings)
 	}
 }

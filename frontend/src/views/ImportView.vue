@@ -288,6 +288,7 @@ const STRUCTURED_TAG_PATTERN = /[【\[]\s*(题目|题干|question|title)\s*[】\
 const plainTextPreview = ref<string | null>(null)
 const structuredTagWarning = computed(() => {
   if (form.method !== 'template') return null
+  if (fileIsPDF.value) return null // PDF 里根本不会有【题目】标签，提示没有意义
   const text = tab.value === 'text' ? form.content : (plainTextPreview.value ?? '')
   if (!text.trim()) return null
   if (STRUCTURED_TAG_PATTERN.test(text)) return null
@@ -333,8 +334,23 @@ function canSubmit(): boolean {
   return form.content.trim().length > 0
 }
 
-/** 缺东西时说清是哪一样缺了，而不是把按钮灰掉让人猜。 */
+/** 选中的文件是不是一份 PDF。 */
+const fileIsPDF = computed(() => !!form.file && /\.pdf$/i.test(form.file.name))
+
+/**
+ * PDF + 规则解析是个行不通的组合。
+ *
+ * PDF 取到的是**排版后的文字**，里面不会有【题目】这类标签，
+ * 规则解析器认的恰恰只有标签。与其让它跑一遍再返回 0 道题，
+ * 不如在提交前就说清楚。
+ */
+const pdfNeedsModel = computed(
+  () => fileIsPDF.value && form.method === 'template' && tab.value === 'file',
+)
+
+/** 缺东西或选法不成立时说清是哪一样不对，而不是把按钮灰掉让人猜。 */
 const submitHint = computed(() => {
+  if (pdfNeedsModel.value) return '规则解析不认 PDF 的排版文字，请改用「模型识别」'
   if (canSubmit()) return ''
   if (tab.value === 'file') return '请先选择要导入的文件'
   if (tab.value === 'image') return '请先添加图片'
@@ -348,6 +364,10 @@ async function extract() {
   }
   if (form.mode === 'solve' && !form.solve_for_content.trim()) {
     ElMessage.warning('“只求解”模式需要提供原题内容')
+    return
+  }
+  if (pdfNeedsModel.value) {
+    ElMessage.warning(submitHint.value)
     return
   }
   if (!canSubmit()) {
@@ -680,7 +700,11 @@ function goToPaper(paperId: number) {
         @update:mode="onModeChange"
       />
 
-      <el-alert v-if="structuredTagWarning" type="warning" :closable="false" show-icon class="mt-2">
+      <el-alert v-if="pdfNeedsModel" type="warning" :closable="false" show-icon class="mt-2">
+        <template #title>{{ submitHint }}</template>
+      </el-alert>
+
+      <el-alert v-else-if="structuredTagWarning" type="warning" :closable="false" show-icon class="mt-2">
         <template #title>{{ structuredTagWarning }}</template>
       </el-alert>
 

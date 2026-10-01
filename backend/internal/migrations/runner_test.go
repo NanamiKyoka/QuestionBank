@@ -220,7 +220,7 @@ func TestCheckHeadRejectsUnmigratedDatabase(t *testing.T) {
 		t.Fatalf("空库必须被拒绝，实际: %v", err)
 	}
 
-// 只有账本、没有基线结构：版本落后于代码。
+	// 只有账本、没有基线结构：版本落后于代码。
 	if _, err := NewRunner(gdb); err != nil {
 		t.Fatalf("构造 runner 失败: %v", err)
 	}

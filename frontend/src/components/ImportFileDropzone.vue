@@ -21,7 +21,7 @@ const props = withDefaults(
     /** 允许的扩展名（同时用于 <input accept> 与拖拽校验）。 */
     accept?: string
   }>(),
-  { disabled: false, accept: '.docx,.md,.txt,.zip' },
+  { disabled: false, accept: '.docx,.md,.txt,.pdf,.zip' },
 )
 
 const emit = defineEmits<{
@@ -144,6 +144,9 @@ function clear() {
         </div>
         <div class="text-xs text-gray-400">
           {{ formatHint }} 均可；.zip 会一次导入压缩包里的多份文档。
+        </div>
+        <div class="text-xs text-gray-400">
+          .pdf 取的是文字层：扫描件没有文字层，请改用「上传图片」逐页截图。
         </div>
       </div>
     </template>

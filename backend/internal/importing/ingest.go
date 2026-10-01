@@ -9,6 +9,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/NanamiKyoka/questionmind/internal/pdftext"
 )
 
 // 文档摄取：把上传的文件变成"可交给规则解析器或模型的文本"。
@@ -57,12 +59,17 @@ const (
 	MaxDocFileBytes = 32 << 20 // 32MB
 )
 
-// 支持的上传扩展名。PDF 不在其中：解析 PDF 需要额外的排版还原，
-// 收益远低于成本（与参考项目的判断一致——它同样不接 PDF）。
+// 支持的上传扩展名。
+//
+// .pdf 在其中，但它走的不是"PDF 解析"那条路：PDF 是排版格式而非内容格式，
+// 把它变成可读文字本身就是一项独立工程（见 internal/pdftext）。
+// 这里只取文本层——有文字层的电子卷直接就能录，纯扫描件会被明确告知
+// 改走截图识别，而不是悄悄返回一份 0 题的草稿。
 var supportedUploadExt = map[string]bool{
 	".md": true, ".markdown": true,
 	".txt":  true,
 	".docx": true,
+	".pdf":  true,
 	".zip":  true,
 }
 
@@ -70,6 +77,10 @@ var supportedUploadExt = map[string]bool{
 func UploadSupported(filename string) bool {
 	return supportedUploadExt[strings.ToLower(path.Ext(filename))]
 }
+
+// UploadExtHint 面向用户的一句话格式说明。
+// 界面、错误提示与文档共用同一份，免得三处各写一遍然后慢慢漂移。
+func UploadExtHint() string { return ".md / .txt / .docx / .pdf / .zip" }
 
 // Ingest 把上传内容转成文档文本。
 //
@@ -83,6 +94,8 @@ func Ingest(data []byte, filename string, images ImageSaver) (*IngestResult, err
 	switch {
 	case ext == ".zip":
 		return ingestZip(data, filename, images)
+	case ext == ".pdf":
+		return ingestPDF(data, filename)
 	case ext == ".docx":
 		text, warn, err := DocxToMarkdown(data, images)
 		if err != nil {
@@ -100,6 +113,49 @@ func Ingest(data []byte, filename string, images ImageSaver) (*IngestResult, err
 		}, nil
 	}
 	return nil, fmt.Errorf("暂不支持的文件类型：%s", ext)
+}
+
+// PDFTextPrefix 标在 PDF 取出的文本前面，告诉模型（以及读日志的人）
+// 这段文字的来历。
+//
+// 有必要：PDF 文本层里的公式是**按视觉位置拆开**的——x² 变成 "x2"，
+// 分式变成上下两行。于是模型看到的是
+// "3. 已知 sinα = ，则 cos2α = ．" 夹着孤零零的一行 "1" 和一行 "5"。
+// 不说明来历的话，模型多半会把这些碎片当成正文里多出来的段落，
+// 凭空多出好几道"题"。
+const PDFTextPrefix = "<!-- 来源：PDF 文本层。公式与上下标已按视觉位置拆开，" +
+	"分式的分子分母、根号、上下标可能落在相邻行；" +
+	"请结合上下文还原成 LaTeX，例如 x2 还原为 x^2、竖排的分子分母还原为 \\frac{a}{b}。 -->\n"
+
+// PDFLayoutNote 追加到文档级警告里的版面说明。
+const PDFLayoutNote = "PDF 版面提示：公式与上下标在文本层里是拆开的，" +
+	"分式的分子分母会落在相邻两行；几何图形只保留标注文字、不含线条，" +
+	"请在识别结果里把公式还原为 LaTeX，图形部分留空由人工补图。"
+
+// ingestPDF 从 PDF 的文本层取出题面文字。
+//
+// 刻意**不渲染页面**：渲染要完整实现字体、路径与图像的栅格化，
+// 是另一个数量级的工程，而录题要的是题面文字。文本层加坐标已经
+// 足够让模型还原公式与表格；图形部分如实告诉用户需要补图——
+// 凭空生成一张画不出来却看着像那么回事的图，比说清楚更糟。
+func ingestPDF(data []byte, filename string) (*IngestResult, error) {
+	res, err := pdftext.Extract(data)
+	if err != nil {
+		return nil, err
+	}
+	if !res.HasText() {
+		return nil, fmt.Errorf(
+			"这份 PDF 没有可读取的文字层，多半是扫描件或纯图片；请改用「上传图片」逐页截图识别")
+	}
+
+	warnings := append([]string(nil), res.Warnings...)
+	warnings = append(warnings, PDFLayoutNote)
+
+	return &IngestResult{
+		Docs:     []IngestedDoc{{Name: filename, Text: PDFTextPrefix + res.Text}},
+		Files:    []string{filename},
+		Warnings: warnings,
+	}, nil
 }
 
 // ingestZip 展开包含 Markdown 的归档。
@@ -163,18 +219,28 @@ func ingestZip(data []byte, filename string, images ImageSaver) (*IngestResult, 
 			continue
 		}
 
-		var body string
+		var (
+			body   string
+			extraW []string
+		)
 		switch ext {
 		case ".docx":
-			md, w, err := DocxToMarkdown(buf, images)
+			body, extraW, err = DocxToMarkdown(buf, images)
 			if err != nil {
 				warns = append(warns, fmt.Sprintf("无法解析 %s：%v", name, err))
 				continue
 			}
-			body, warns = md, append(warns, w...)
+		case ".pdf":
+			pdfRes, err := ingestPDF(buf, path.Base(name))
+			if err != nil {
+				warns = append(warns, fmt.Sprintf("无法解析 %s：%v", name, err))
+				continue
+			}
+			body, extraW = pdfRes.Docs[0].Text, pdfRes.Warnings
 		default:
 			body = string(buf)
 		}
+		warns = append(warns, extraW...)
 		if strings.TrimSpace(body) == "" {
 			continue
 		}
@@ -183,7 +249,7 @@ func ingestZip(data []byte, filename string, images ImageSaver) (*IngestResult, 
 	}
 
 	if len(docs) == 0 {
-		return nil, fmt.Errorf("压缩包里没有可导入的文档（支持 md / txt / docx）")
+		return nil, fmt.Errorf("压缩包里没有可导入的文档（支持 %s）", UploadExtHint())
 	}
 	return &IngestResult{Docs: docs, Files: files, Warnings: warns}, nil
 }

@@ -216,7 +216,7 @@ func (s *ImportService) EnqueueFile(ctx context.Context, user *model.User, subje
 	}
 	if !importing.UploadSupported(name) {
 		return nil, apperr.New(apperr.CodeInvalidParam, "暂不支持这种文件").
-			WithDetail("filename=%s；目前支持 .md / .txt / .docx / .zip", name)
+			WithDetail("filename=%s；目前支持 %s", name, importing.UploadExtHint())
 	}
 	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
 		return nil, err
@@ -350,6 +350,8 @@ func fileTypeOfName(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".docx":
 		return "docx"
+	case ".pdf":
+		return "pdf"
 	case ".zip":
 		return "zip"
 	case ".md", ".markdown":
