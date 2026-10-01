@@ -237,6 +237,8 @@ export function answerTextOf(projection: QuestionProjectionLike | undefined | nu
         .join('；')
     case 'reference':
       return '见参考答案'
+    case 'pending':
+      return '待补充'
     default:
       return ''
   }

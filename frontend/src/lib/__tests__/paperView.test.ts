@@ -391,6 +391,11 @@ describe('answerTextOf', () => {
     expect(answerTextOf({ answer: { kind: 'reference' } })).toBe('见参考答案')
   })
 
+  it('待补充答案说清楚是欠着的，不落回空串', () => {
+    // 空串与"答案是空的"分不清：老师会以为答案被弄丢了。
+    expect(answerTextOf({ answer: { kind: 'pending' } })).toBe('待补充')
+  })
+
   it('缺失、空答案、未知类型都返回空串而不是抛错', () => {
     expect(answerTextOf(undefined)).toBe('')
     expect(answerTextOf(null)).toBe('')

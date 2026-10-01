@@ -22,6 +22,19 @@ const emit = defineEmits<{
   'update:method': [value: ImportParseMethod]
   'update:mode': [value: ImportMode]
 }>()
+
+/**
+ * 各模式的代价与去向。
+ *
+ * 「仅录题」值得单列一句：省下的不是一点钱，而是整份卷子最慢的那部分输出。
+ * 求解才是抽取里的大头（实测约 1370 输出 token/题），把它拿掉之后
+ * 一次识别的耗时基本只剩读材料的时间。
+ */
+const modeHint: Record<ImportMode, string> = {
+  extract: '「完整抽取」连材料里印着的答案与解析一起抽。',
+  record: '「仅录题」只认题干、选项与知识点，不写答案与解析——题量大或材料本身不带答案时用它。',
+  solve: '「只求解」保留你提供的原题，只让模型补上答案与解析。',
+}
 </script>
 
 <template>
@@ -110,14 +123,11 @@ const emit = defineEmits<{
         @update:model-value="emit('update:mode', $event as ImportMode)"
       >
         <el-radio-button value="extract">完整抽取</el-radio-button>
+        <el-radio-button value="record">仅录题</el-radio-button>
         <el-radio-button value="solve">只求解</el-radio-button>
       </el-radio-group>
       <div class="mt-1 text-xs text-gray-400">
-        {{
-          method === 'template'
-            ? '「只求解」需要模型补答案，规则解析下不可用。'
-            : '「只求解」保留你提供的原题，只让模型补上答案与解析。'
-        }}
+        {{ method === 'template' ? '「只求解」需要模型补答案，规则解析下不可用。' : modeHint[mode] }}
       </div>
     </div>
   </div>

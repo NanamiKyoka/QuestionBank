@@ -190,7 +190,8 @@ function answerTextOf(q: PaperQuestionProjection): string {
         .map((b) => (b.accepts ?? []).map((g) => g.map(() => '').join('')).join(' 或 '))
         .join('；')
     default:
-      // 'reference'（解答题）的答案本身就是一段富文本，由模板单独渲染。
+      // 'reference'（解答题）的答案本身就是一段富文本，由模板单独渲染；
+      // 'pending'（待补充答案）没有可渲染的内容，留空才是如实的。
       return ''
   }
 }

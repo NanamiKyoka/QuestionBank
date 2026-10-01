@@ -891,6 +891,12 @@ function pad(n: number): string {
             <template v-else-if="detail.answer.kind === 'reference'">
               <RichContent :doc="detail.answer.reference" />
             </template>
+            <template v-else-if="detail.answer.kind === 'pending'">
+              <span class="text-gray-500">待补充答案</span>
+              <span class="ml-1 text-xs text-gray-400">
+                这道题由智能录题的「仅录题」模式录入，答案与解析由老师填写。
+              </span>
+            </template>
             <template v-else>
               <span class="text-gray-500">未能识别答案结构</span>
             </template>

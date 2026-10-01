@@ -35,8 +35,12 @@ export type ImportTaskSource = 'manual' | 'upload' | 'paper' | 'ai_assist'
  */
 export type ImportParseMethod = 'ai' | 'template'
 
-/** extract = 抽取新题；solve = 保留你给的原题、只补答案与解析。 */
-export type ImportMode = 'extract' | 'solve'
+/**
+ * extract = 抽取新题（材料里有答案就连答案一起抽）；
+ * solve = 保留你给的原题、只补答案与解析；
+ * record = 仅录题：只识别题目本身，不求解，答案与解析事后补。
+ */
+export type ImportMode = 'extract' | 'solve' | 'record'
 
 /**
  * 一道待审核的草稿。

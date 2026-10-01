@@ -75,6 +75,7 @@ const editingIndex = ref<number | null>(null)
 const runMeta = ref<{
   method: string
   methodReported: boolean
+  mode: ImportMode
   model: string
   elapsed_ms: number
   task_id: number
@@ -443,7 +444,9 @@ async function extract() {
             file: form.file,
             method: form.method,
             mode: form.mode,
-            answerImages: form.answerImages,
+            // 仅录题不读答案页：不发过去，省下的不只是一次读图，
+            // 还有模型照着答案页把每道题"顺手"算一遍的可能。
+            answerImages: form.mode === 'record' ? undefined : form.answerImages,
           })
         : await importTaskApi.extract(subject.currentId, {
             content: tab.value === 'text' ? form.content : '',
@@ -469,6 +472,7 @@ function acceptResult(result: ImportExtractResponse) {
   runMeta.value = {
     method: reported || form.method,
     methodReported: !!reported,
+    mode: form.mode,
     model: result.model,
     elapsed_ms: result.elapsed_ms,
     task_id: result.task_id,
@@ -704,46 +708,57 @@ function goToPaper(paperId: number) {
                有试卷才有对应它的答案。 -->
           <div class="mt-3 rounded border border-dashed border-gray-200 p-3">
             <div class="mb-2 flex flex-wrap items-center gap-2">
-              <span class="text-sm text-gray-600">答案页（选填，可加快识别）</span>
+              <span class="text-sm text-gray-600">
+                {{ form.mode === 'record' ? '答案页（仅录题模式下不读取）' : '答案页（选填，可加快识别）' }}
+              </span>
               <el-tag size="small" type="info" effect="plain">
                 {{ form.answerImages.length }} / {{ MAX_ANSWER_IMAGES }}
               </el-tag>
             </div>
 
-            <div v-if="form.answerImages.length" class="mb-2 flex flex-wrap gap-2">
-              <div v-for="(img, index) in form.answerImages" :key="img" class="relative">
-                <img :src="img" class="h-16 w-16 rounded border border-gray-200 object-cover" />
-                <el-icon
-                  class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-red-500 text-white"
-                  @click="removeAnswerImage(index)"
-                >
-                  <Close />
-                </el-icon>
+            <template v-if="form.mode === 'record'">
+              <div class="text-xs text-gray-400">
+                「仅录题」不读答案页：题目之外的答案与解析由老师事后填写，
+                随本次请求提交时也会被忽略。要让模型转写答案页，请切回「完整抽取」。
               </div>
-            </div>
+            </template>
 
-            <label
-              class="inline-flex cursor-pointer items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:border-blue-400"
-            >
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                class="hidden"
-                :disabled="loading || !canEdit"
-                @change="onPickAnswerImages"
-              />
-              <el-icon :size="14"><Plus /></el-icon>
-              添加答案页图片
-            </label>
+            <template v-else>
+              <div v-if="form.answerImages.length" class="mb-2 flex flex-wrap gap-2">
+                <div v-for="(img, index) in form.answerImages" :key="img" class="relative">
+                  <img :src="img" class="h-16 w-16 rounded border border-gray-200 object-cover" />
+                  <el-icon
+                    class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-red-500 text-white"
+                    @click="removeAnswerImage(index)"
+                  >
+                    <Close />
+                  </el-icon>
+                </div>
+              </div>
 
-            <div class="mt-2 text-xs text-gray-400">
-              试卷本身通常不带答案。没有答案页时模型要把每道解答题自己算一遍；
-              附上答案页后它可以改为<b>转写</b>，输出量因此下降。
-              但模型还要先"读图"，这部分时间由模型速度决定——
-              实测某些模型读两张图就要多花一分多钟，此时反而更慢。
-              图片对不上的题目会留空答案并标注，不会硬凑。
-            </div>
+              <label
+                class="inline-flex cursor-pointer items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:border-blue-400"
+              >
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  class="hidden"
+                  :disabled="loading || !canEdit"
+                  @change="onPickAnswerImages"
+                />
+                <el-icon :size="14"><Plus /></el-icon>
+                添加答案页图片
+              </label>
+
+              <div class="mt-2 text-xs text-gray-400">
+                试卷本身通常不带答案。没有答案页时模型要把每道解答题自己算一遍；
+                附上答案页后它可以改为<b>转写</b>，输出量因此下降。
+                但模型还要先"读图"，这部分时间由模型速度决定——
+                实测某些模型读两张图就要多花一分多钟，此时反而更慢。
+                图片对不上的题目会留空答案并标注，不会硬凑。
+              </div>
+            </template>
           </div>
         </el-tab-pane>
 
@@ -864,7 +879,10 @@ function goToPaper(paperId: number) {
           <span v-if="ranTemplate" class="text-gray-500">
             本次由确定性规则解析器完成，<b>没有调用任何模型</b>。结果只认标签格式，请重点核对题型与答案。
           </span>
-          <span v-else-if="runMeta.model" class="text-gray-500">模型 {{ runMeta.model }}</span>
+          <span v-if="runMeta.model" class="text-gray-500">模型 {{ runMeta.model }}</span>
+          <el-tag v-if="runMeta.mode === 'record'" size="small" type="warning" effect="plain">
+            仅录题 · 未求解
+          </el-tag>
           <span class="text-gray-400">耗时 {{ runMeta.elapsed_ms }}ms · 任务 #{{ runMeta.task_id }}</span>
           <el-tag v-if="!runMeta.methodReported" size="small" type="info" effect="plain">
             服务端未回报实际路径
@@ -958,6 +976,15 @@ function goToPaper(paperId: number) {
         </el-button>
         <span class="text-xs text-gray-400">只写入你勾选的题目。未匹配到的知识点名不会自动创建。</span>
       </div>
+
+      <el-alert
+        v-if="runMeta?.mode === 'record'"
+        type="info"
+        :closable="false"
+        show-icon
+        class="mt-2"
+        title="本次是「仅录题」：没有答案的题目以「待补充答案」入库，之后在题库里补写即可。"
+      />
 
       <!-- 整卷导入 -->
       <div class="mt-3 border-t border-gray-100 pt-3">

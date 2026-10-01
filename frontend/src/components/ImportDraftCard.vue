@@ -70,6 +70,8 @@ function answerText(draft: ImportDraft): string {
       return (answer.blanks ?? []).map((b) => b.accepts.length).join(' / ') + ' 个空'
     case 'reference':
       return '见参考答案'
+    case 'pending':
+      return '待老师补充'
     default:
       return answer.kind
   }
@@ -123,7 +125,11 @@ function answerText(draft: ImportDraft): string {
 
         <div class="mt-1 text-xs">
           <span class="text-gray-500">答案：</span>
-          <span class="text-green-700">{{ answerText(draft) || '未识别' }}</span>
+          <!-- 待补充的答案不着绿色：绿色是"识别到了"的信号，
+               涂成一样的颜色，一屏题目就分不出哪些答案还欠着。 -->
+          <span :class="draft.answer?.kind === 'pending' ? 'text-gray-400' : 'text-green-700'">
+            {{ answerText(draft) || '未识别' }}
+          </span>
         </div>
 
         <!-- 解析预览 -->

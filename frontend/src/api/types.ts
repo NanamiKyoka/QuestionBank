@@ -170,9 +170,15 @@ export interface Option {
   content: RichDoc | null
 }
 
-/** 答案的判别联合，用 kind 区分结构。 */
+/**
+ * 答案的判别联合，用 kind 区分结构。
+ *
+ * `pending` 表示这道题还没有答案：智能录题的「仅录题」模式只录题目，
+ * 答案与解析留给老师事后填写。它与 `unresolved` 相反——后者带着一段
+ * 读不懂的原文，是需要人收拾的残局。
+ */
 export interface AnswerSpec {
-  kind: 'single' | 'multiple' | 'boolean' | 'blanks' | 'reference' | 'unresolved'
+  kind: 'single' | 'multiple' | 'boolean' | 'blanks' | 'reference' | 'pending' | 'unresolved'
   correct?: string[]
   bool_answer?: boolean | null
   blanks?: Blank[]

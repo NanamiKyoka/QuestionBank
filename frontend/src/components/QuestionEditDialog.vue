@@ -86,6 +86,13 @@ const form = reactive({
   knowledge_point_ids: [] as number[],
   /** 改动已发布题目时的说明，写入审核日志。 */
   change_note: '',
+  /**
+   * 这道题还没有答案（智能录题的「仅录题」模式录进来的）。
+   *
+   * 保留这个开关是为了改别处时不被迫先编一个答案——不然老师想给这道题
+   * 打个标签，都得先把它做出来。
+   */
+  answerPending: false,
 })
 
 const rules: FormRules = {
@@ -192,6 +199,7 @@ function reset() {
   form.tag_ids = []
   form.knowledge_point_ids = []
   form.change_note = ''
+  form.answerPending = false
   originalStatus.value = null
 }
 
@@ -222,6 +230,9 @@ async function loadQuestion(id: number) {
     // 答案：后端存的是选项 id，界面显示的是标签，需要一次映射。
     const labelOf = new Map(detail.options.map((o) => [o.id, o.label]))
     switch (detail.answer.kind) {
+      case 'pending':
+        form.answerPending = true
+        break
       case 'single':
       case 'multiple':
         form.correctLabels = (detail.answer.correct ?? [])
@@ -297,6 +308,10 @@ function removeBlank(index: number) {
 
 /** 组装答案结构。选择/判断以**标签**提交，由后端解析成选项 id。 */
 function buildAnswer(): AnswerSpec {
+  // 仍是「待补充答案」时原样交还，别按题型编一个空壳：空的 single
+  // 既过不了后端校验，也会被界面显示成"没识别出来"。
+  if (form.answerPending) return { kind: 'pending' }
+
   switch (form.question_type) {
     case 'single_choice':
     case 'multiple_choice':
@@ -333,7 +348,8 @@ async function onSubmit() {
 
   // 提交前做几项本地校验：把明显的问题挡在请求之前，
   // 用户能立刻看到原因，而不是等一次往返才被后端拒绝。
-  if (isChoice.value) {
+  // 答案标着"稍后补充"时不查答案：这一轮改的是别的字段。
+  if (isChoice.value && !form.answerPending) {
     if (form.options.filter((o) => o.text.trim()).length < 2) {
       ElMessage.warning('选择题至少需要两个有内容的选项')
       return
@@ -499,48 +515,67 @@ async function onSubmit() {
       </el-form-item>
 
       <!-- 答案：按题型给出对应的录入方式 -->
-      <el-form-item label="正确答案" required>
-        <el-radio-group v-if="isSingle" v-model="form.correctLabels[0]">
-          <el-radio v-for="option in form.options" :key="option.label" :value="option.label">
-            {{ option.label }}
-          </el-radio>
-        </el-radio-group>
-
-        <el-checkbox-group v-else-if="form.question_type === 'multiple_choice'" v-model="form.correctLabels">
-          <el-checkbox v-for="option in form.options" :key="option.label" :value="option.label">
-            {{ option.label }}
-          </el-checkbox>
-        </el-checkbox-group>
-
-        <el-radio-group v-else-if="form.question_type === 'true_false'" v-model="form.boolAnswer">
-          <el-radio :value="true">正确</el-radio>
-          <el-radio :value="false">错误</el-radio>
-        </el-radio-group>
-
-        <div v-else-if="form.question_type === 'fill_blank'" class="w-full space-y-2">
-          <div v-for="(_, index) in form.blanks" :key="index" class="flex items-center gap-2">
-            <el-tag class="w-14 shrink-0 justify-center" type="info">第 {{ index + 1 }} 空</el-tag>
-            <el-input
-              v-model="form.blanks[index]"
-              placeholder="多个可接受答案用「或」分隔，如：3 或 三"
-              class="flex-1"
-            />
-            <el-button text type="danger" :disabled="form.blanks.length <= 1" @click="removeBlank(index)">
-              删除
-            </el-button>
-          </div>
-          <el-button text type="primary" @click="addBlank">+ 添加空位</el-button>
-          <div class="text-xs text-gray-400">
-            提示：题干里用工具栏的「填空位」按钮插入空位，数量需与答案个数一致。
-          </div>
+      <el-form-item label="正确答案" :required="!form.answerPending">
+        <div v-if="form.answerPending" class="w-full">
+          <el-alert type="info" :closable="false" show-icon>
+            <template #title>这道题还没有答案，保存后会继续显示为「待补充答案」。</template>
+          </el-alert>
+          <el-button text type="primary" size="small" class="mt-1" @click="form.answerPending = false">
+            现在填写答案
+          </el-button>
         </div>
 
-        <RichTextEditor
-          v-else
-          v-model="form.reference"
-          placeholder="参考答案"
-          min-height="100px"
-        />
+        <template v-else>
+          <el-radio-group v-if="isSingle" v-model="form.correctLabels[0]">
+            <el-radio v-for="option in form.options" :key="option.label" :value="option.label">
+              {{ option.label }}
+            </el-radio>
+          </el-radio-group>
+
+          <el-checkbox-group
+            v-else-if="form.question_type === 'multiple_choice'"
+            v-model="form.correctLabels"
+          >
+            <el-checkbox v-for="option in form.options" :key="option.label" :value="option.label">
+              {{ option.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+
+          <el-radio-group v-else-if="form.question_type === 'true_false'" v-model="form.boolAnswer">
+            <el-radio :value="true">正确</el-radio>
+            <el-radio :value="false">错误</el-radio>
+          </el-radio-group>
+
+          <div v-else-if="form.question_type === 'fill_blank'" class="w-full space-y-2">
+            <div v-for="(_, index) in form.blanks" :key="index" class="flex items-center gap-2">
+              <el-tag class="w-14 shrink-0 justify-center" type="info">第 {{ index + 1 }} 空</el-tag>
+              <el-input
+                v-model="form.blanks[index]"
+                placeholder="多个可接受答案用「或」分隔，如：3 或 三"
+                class="flex-1"
+              />
+              <el-button
+                text
+                type="danger"
+                :disabled="form.blanks.length <= 1"
+                @click="removeBlank(index)"
+              >
+                删除
+              </el-button>
+            </div>
+            <el-button text type="primary" @click="addBlank">+ 添加空位</el-button>
+            <div class="text-xs text-gray-400">
+              提示：题干里用工具栏的「填空位」按钮插入空位，数量需与答案个数一致。
+            </div>
+          </div>
+
+          <RichTextEditor
+            v-else
+            v-model="form.reference"
+            placeholder="参考答案"
+            min-height="100px"
+          />
+        </template>
       </el-form-item>
 
       <el-form-item label="解析">
