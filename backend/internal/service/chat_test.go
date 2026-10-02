@@ -421,10 +421,12 @@ func TestChatToolRegistryIsWired(t *testing.T) {
 	fx := newChatFixture(t, []string{textTurn("x")})
 	names := fx.svc.Registry().Names()
 	want := []string{
-		"add_questions_to_paper", "create_paper", "edit_paper", "get_paper",
-		"get_question", "get_subject_stats", "list_knowledge_points", "list_papers",
-		"list_review_queue", "list_subjects", "list_tags", "propose_questions",
-		"read_paper_outline", "search_questions", "semantic_search_knowledge_points",
+		"add_questions_to_paper", "archive_question", "create_paper", "create_question",
+		"delete_question", "edit_paper", "get_paper", "get_question", "get_subject_stats",
+		"list_knowledge_points", "list_papers", "list_review_queue", "list_subjects",
+		"list_tags", "propose_questions", "read_paper_outline", "restore_question",
+		"search_questions", "semantic_search_knowledge_points", "set_question_knowledge_points",
+		"set_question_tags", "submit_question", "update_question",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("工具数量不符，期望 %d 个，实际 %d 个: %v", len(want), len(names), names)

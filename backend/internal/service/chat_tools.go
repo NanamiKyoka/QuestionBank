@@ -39,6 +39,7 @@ func buildToolRegistry(deps toolDeps) *aiagent.Registry {
 	registerLibraryTools(r, deps)
 	registerPaperTools(r, deps)
 	registerReadTools(r, deps)
+	registerQuestionWriteTools(r, deps)
 
 	return r
 }
