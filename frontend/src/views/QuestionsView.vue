@@ -25,6 +25,7 @@ import {
   type PendingQuestionEdits,
 } from '@/composables/useQuestionAiTools'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const route = useRoute()
@@ -186,6 +187,19 @@ const activeMoreFilterCount = computed(
     (filters.review_count !== null && filters.review_count !== undefined ? 1 : 0) +
     (filters.created_by ? 1 : 0) +
     (filters.reviewer_id ? 1 : 0),
+)
+
+/** 是否存在任何非默认筛选，决定"重置"该不该可点。 */
+const activeFilterCount = computed(
+  () =>
+    activeMoreFilterCount.value +
+    (filters.keyword ? 1 : 0) +
+    (filters.type ? 1 : 0) +
+    (filters.status ? 1 : 0) +
+    (filters.difficulty !== null && filters.difficulty !== undefined ? 1 : 0) +
+    (filters.knowledge_point_ids?.length ? 1 : 0) +
+    (filters.tag_ids?.length ? 1 : 0) +
+    (filters.root_only ? 0 : 1),
 )
 
 function openCreate() {
@@ -665,6 +679,17 @@ function pad(n: number): string {
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="题库">
+      <template #actions>
+        <el-button text size="small" @click="router.push({ name: 'recycle-bin' })">
+          <el-icon class="mr-1"><Delete /></el-icon>回收站
+        </el-button>
+        <el-button v-if="canEdit" type="primary" :disabled="!subject.currentId" @click="openCreate">
+          <el-icon class="mr-1"><Plus /></el-icon>新建题目
+        </el-button>
+      </template>
+    </PageHeader>
+
     <!-- 筛选栏 -->
     <el-card shadow="never">
       <div class="flex flex-wrap items-center gap-2">
@@ -760,21 +785,7 @@ function pad(n: number): string {
           />
         </el-button>
 
-        <el-button @click="resetFilters">重置</el-button>
-
-        <div class="ml-auto flex items-center gap-2">
-          <el-button text size="small" @click="router.push({ name: 'recycle-bin' })">
-            <el-icon class="mr-1"><Delete /></el-icon>回收站
-          </el-button>
-          <el-button
-            v-if="canEdit"
-            type="primary"
-            :disabled="!subject.currentId"
-            @click="openCreate"
-          >
-            <el-icon class="mr-1"><Plus /></el-icon>新建题目
-          </el-button>
-        </div>
+        <el-button :disabled="!activeFilterCount" @click="resetFilters">重置</el-button>
       </div>
 
       <div
@@ -1062,7 +1073,16 @@ function pad(n: number): string {
         </el-table-column>
 
         <template #empty>
-          <el-empty :description="subject.currentId ? '还没有题目' : '请先选择学科'" />
+          <EmptyState
+            :description="subject.currentId ? '这个筛选条件下还没有题目' : '请先选择学科'"
+            :hint="
+              subject.currentId
+                ? '可以从「智能录题」批量导入，或直接新建一道。母题与子题按「只看母题」开关区分。'
+                : '学科是题库的一级边界，请先在右上角选择或创建一个学科。'
+            "
+            :action-label="subject.currentId && canEdit ? '新建题目' : undefined"
+            @action="openCreate"
+          />
         </template>
       </el-table>
 

@@ -6,6 +6,7 @@ import RichContent from '@/components/RichContent.vue'
 import { useBasketStore, type BasketItem } from '@/stores/basket'
 import { useSubjectStore } from '@/stores/subject'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import type { AppendQuestionsResult } from '@/api/paper'
 
 /**
@@ -93,7 +94,7 @@ async function clearAll() {
       </el-button>
     </div>
 
-    <el-empty v-if="basket.count === 0" description="试题篮是空的。在题库里挑几道题加进来。" :image-size="72" />
+    <EmptyState v-if="basket.count === 0" description="试题篮是空的。在题库里挑几道题加进来。" />
 
     <div v-else>
       <div v-for="[sid, list] in basket.groupedBySubject" :key="sid" class="mb-5 last:mb-0">

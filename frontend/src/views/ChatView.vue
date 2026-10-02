@@ -8,6 +8,7 @@ import {
   abandonInflightClientTools,
   answerClientToolFrame,
 } from '@/composables/useAiClientTools'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 
 /**
@@ -40,6 +41,16 @@ const input = ref('')
 const sending = ref(false)
 const loadingHistory = ref(false)
 const scene = ref('')
+
+const EXAMPLES = [
+  '帮我找 3 道关于函数单调性的题',
+  '这份卷子一共几道题？',
+  '新建一份「高一月考」试卷',
+]
+
+function useExample(text: string) {
+  input.value = text
+}
 
 let controller: AbortController | null = null
 const scrollBox = ref<HTMLElement | null>(null)
@@ -259,7 +270,7 @@ function formatTime(value: string): string {
 </script>
 
 <template>
-  <div class="flex h-[calc(100vh-140px)] gap-3">
+  <div class="flex h-[calc(100dvh-96px)] gap-3">
     <!-- 会话列表 -->
     <el-card shadow="never" class="w-60 shrink-0">
       <template #header>
@@ -293,7 +304,7 @@ function formatTime(value: string): string {
           </div>
         </div>
 
-        <el-empty v-if="sessions.length === 0" description="还没有对话" :image-size="48" />
+        <EmptyState v-if="sessions.length === 0" description="还没有对话" />
       </div>
     </el-card>
 
@@ -318,16 +329,22 @@ function formatTime(value: string): string {
       </template>
 
       <div ref="scrollBox" v-loading="loadingHistory" class="flex-1 space-y-3 overflow-y-auto pr-1">
-        <el-empty
+        <EmptyState
           v-if="bubbles.length === 0"
           description="问我题库里的任何内容，或者让我帮你组卷"
         >
-          <div class="space-y-1 text-left text-xs text-ink-muted">
-            <div>· 帮我找 3 道关于函数单调性的题</div>
-            <div>· 这份卷子一共几道题？</div>
-            <div>· 新建一份「高一月考」试卷</div>
+          <div class="flex flex-wrap justify-center gap-2">
+            <button
+              v-for="example in EXAMPLES"
+              :key="example"
+              type="button"
+              class="rounded-full border border-hairline px-3 py-1.5 text-xs text-ink-muted transition-colors hover:border-accent-border hover:bg-accent-soft hover:text-accent-text"
+              @click="useExample(example)"
+            >
+              {{ example }}
+            </button>
           </div>
-        </el-empty>
+        </EmptyState>
 
         <div
           v-for="(bubble, index) in bubbles"

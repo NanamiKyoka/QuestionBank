@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { profileApi } from '@/api/profile'
 import { useAuthStore } from '@/stores/auth'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -187,6 +188,8 @@ function formatTime(value: string | null | undefined): string {
 
 <template>
   <div v-loading="loading" class="space-y-3">
+    <PageHeader title="个人资料" description="修改昵称、密码，并查看自己的学科成员关系与权限。" />
+
     <el-row :gutter="12">
       <!-- 个人资料 -->
       <el-col :xs="24" :md="14">

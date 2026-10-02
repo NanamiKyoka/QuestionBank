@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { knowledgePointApi } from '@/api'
 import type { KnowledgePoint } from '@/api/types'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const subject = useSubjectStore()
@@ -129,6 +131,8 @@ async function reindex(force: boolean) {
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="知识点" description="按学科维护知识点树。题目与试卷引用这里的节点，取消勾选的节点不会出现在组卷搜索里。" />
+
     <!-- 向量索引状态 -->
     <el-alert
       v-if="vectorStatus"
@@ -189,7 +193,14 @@ async function reindex(force: boolean) {
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty :description="subject.currentId ? '还没有知识点' : '请先选择学科'" />
+          <EmptyState
+            :description="subject.currentId ? '还没有知识点' : '请先选择学科'"
+            :hint="
+              subject.currentId
+                ? '知识点是题目与试卷的检索维度。智能录题会尝试自动匹配，手工补全能明显提高后续的检索质量。'
+                : ''
+            "
+          />
         </template>
       </el-table>
     </el-card>

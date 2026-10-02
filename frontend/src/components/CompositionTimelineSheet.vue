@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { paperApi, type PaperEvent } from '@/api/paper'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 /**
  * 操作时间线。
@@ -103,10 +104,10 @@ watch(open, (isOpen) => {
         </template>
       </el-alert>
 
-      <el-empty
+      <EmptyState
         v-else-if="isEmpty"
         :description="props.title ? `《${props.title}》还没有操作记录` : '还没有操作记录'"
-        :image-size="72"
+        hint="保存、定稿、导出这类操作会按时间倒序记在这里。"
       />
 
       <template v-else-if="events.length">

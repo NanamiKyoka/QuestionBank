@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { activityApi, type ActivityLog, type ActivityLogQuery } from '@/api/activity'
 import { userApi } from '@/api'
 import type { User } from '@/api/types'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -255,6 +257,8 @@ function formatTime(value: string): string {
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="操作日志" description="记录每一次写操作，读取不记录。高负载时队列满会丢弃少量记录，因此这是排障线索而不是合规凭证。" />
+
     <el-alert
       type="info"
       show-icon
@@ -338,7 +342,7 @@ function formatTime(value: string): string {
         </div>
       </template>
 
-      <el-empty v-if="!loading && rows.length === 0" description="没有符合条件的记录" />
+      <EmptyState v-if="!loading && rows.length === 0" description="没有符合条件的记录" />
 
       <el-table
         v-else

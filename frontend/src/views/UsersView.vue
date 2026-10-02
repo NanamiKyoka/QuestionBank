@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subjectApi, userApi } from '@/api'
 import type { Subject, SubjectRole, User } from '@/api/types'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -143,6 +144,8 @@ function roleLabel(row: User): string {
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="用户管理" description="创建账号并分配学科角色。角色决定该用户在本学科能看到什么、能改什么。" />
+
     <el-card shadow="never">
       <template #header>
         <div class="flex items-center justify-between">

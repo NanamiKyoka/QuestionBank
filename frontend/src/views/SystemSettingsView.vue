@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { settingsApi, type SystemSettingItem } from '@/api/settings'
 
 /**
@@ -131,6 +133,8 @@ function displayValue(item: SystemSettingItem): string {
 
 <template>
   <div v-loading="loading" class="space-y-3">
+    <PageHeader title="系统设置" description="这里只列出后端真正会读取的设置项。" />
+
     <el-alert
       type="info"
       show-icon
@@ -145,7 +149,7 @@ function displayValue(item: SystemSettingItem): string {
         <span class="text-sm font-medium">生效中的设置</span>
       </template>
 
-      <el-empty v-if="!loading && editableItems.length === 0" description="没有可修改的设置项" />
+      <EmptyState v-if="!loading && editableItems.length === 0" description="没有可修改的设置项" />
 
       <div
         v-for="item in editableItems"
@@ -223,7 +227,7 @@ function displayValue(item: SystemSettingItem): string {
         </div>
       </template>
 
-      <el-empty v-if="!loading && readOnlyItems.length === 0" description="没有只读设置项" />
+      <EmptyState v-if="!loading && readOnlyItems.length === 0" description="没有只读设置项" />
 
       <el-table v-else :data="readOnlyItems" row-key="key" size="small">
         <el-table-column prop="label" label="名称" min-width="160">

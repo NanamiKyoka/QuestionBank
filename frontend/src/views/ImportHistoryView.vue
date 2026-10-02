@@ -10,6 +10,7 @@ import {
 } from '@/api/importTask'
 import type { QuestionBrief } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -252,6 +253,8 @@ function countText(row: ImportTask): string {
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="导入历史" description="每一批导入产出了什么、失败在哪，处理完之后从这里回看。" />
+
     <!-- 队列概览 -->
     <div v-if="queue" class="flex flex-wrap gap-2">
       <el-card v-for="tile in STAT_TILES" :key="tile.key" shadow="never" class="!w-40 flex-1">
@@ -358,17 +361,18 @@ function countText(row: ImportTask): string {
         </el-table-column>
 
         <template #empty>
-          <el-empty
+          <EmptyState
             :description="
               !subject.currentId
                 ? '请先选择学科'
                 : query.status
                   ? '没有该状态的导入记录'
-                  : '还没有导入记录，去智能录题页跑一次吧'
+                  : '还没有导入记录'
             "
-          >
-            <el-button v-if="subject.currentId" type="primary" @click="goImport">去录题</el-button>
-          </el-empty>
+            hint="每次智能录题都会留下一条记录，可以在这里看到产出了多少题、失败在哪里。"
+            :action-label="subject.currentId ? '去录题' : undefined"
+            @action="goImport"
+          />
         </template>
       </el-table>
 
@@ -414,7 +418,10 @@ function countText(row: ImportTask): string {
         </el-table-column>
 
         <template #empty>
-          <el-empty description="这次导入没有产出题目（可能只做了抽取、还没有入库）" />
+          <EmptyState
+            description="这次导入没有产出题目"
+            hint="可能只做了抽取、还没有入库，或者所有草稿都被取消勾选了。"
+          />
         </template>
       </el-table>
 

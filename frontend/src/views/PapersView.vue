@@ -5,6 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/http'
 import { paperApi, type PaperBrief, type PaperFolder, type PaperScope, type PaperStatus } from '@/api/paper'
 import { useSubjectStore } from '@/stores/subject'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 
 const router = useRouter()
 const subject = useSubjectStore()
@@ -351,7 +353,10 @@ function formatTime(value: string): string {
 </script>
 
 <template>
-  <div class="flex gap-3">
+  <div class="space-y-3">
+    <PageHeader title="试卷" description="按目录组织试卷，进入组卷工作台后可拖拽排序、插入分页并导出 Word 或 LaTeX。" />
+
+    <div class="flex gap-3">
     <!-- 目录侧栏 -->
     <el-card shadow="never" class="w-56 shrink-0">
       <template #header>
@@ -401,7 +406,7 @@ function formatTime(value: string): string {
         </span>
       </div>
 
-      <el-empty v-if="flatFolders.length === 0" description="暂无目录" :image-size="48" />
+      <EmptyState v-if="flatFolders.length === 0" description="暂无目录" />
     </el-card>
 
     <div class="min-w-0 flex-1 space-y-3">
@@ -529,7 +534,12 @@ function formatTime(value: string): string {
           </el-table-column>
 
           <template #empty>
-            <el-empty :description="subject.currentId ? '还没有试卷' : '请先选择学科'" />
+            <EmptyState
+              :description="subject.currentId ? '还没有试卷' : '请先选择学科'"
+              :hint="subject.currentId ? '新建一份试卷后进入组卷工作台，从题库或试题篮选题排版。' : ''"
+              :action-label="subject.currentId ? '新建试卷' : undefined"
+              @action="openCreate"
+            />
           </template>
         </el-table>
 
@@ -626,5 +636,6 @@ function formatTime(value: string): string {
         <el-button type="primary" @click="submitMoveFolder">移动</el-button>
       </template>
     </el-dialog>
+    </div>
   </div>
 </template>

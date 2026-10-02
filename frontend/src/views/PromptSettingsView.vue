@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subjectApi } from '@/api'
 import type { Subject } from '@/api/types'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { promptApi, type PromptCatalogEntry, type SubjectPrompt, type SubjectPrompts } from '@/api/prompt'
 
 /**
@@ -235,6 +237,8 @@ function insertSubjectToken(key: string, token: string) {
 
 <template>
   <div v-loading="loading" class="space-y-3">
+    <PageHeader title="提示词" description="决定智能录题与 AI 助手的抽取与对话行为。留空表示未配置，正在使用内置默认。" />
+
     <el-alert
       type="info"
       show-icon
@@ -352,7 +356,7 @@ function insertSubjectToken(key: string, token: string) {
         </el-tag>
       </div>
 
-      <el-empty v-if="!subjectData" description="请选择学科" />
+      <EmptyState v-if="!subjectData" description="请选择学科" />
 
       <div v-else class="space-y-3">
         <p class="text-xs text-ink-muted">

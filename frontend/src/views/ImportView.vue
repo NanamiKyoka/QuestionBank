@@ -20,6 +20,8 @@ import ImportDraftEditDialog from '@/components/ImportDraftEditDialog.vue'
 import ImportFileDropzone from '@/components/ImportFileDropzone.vue'
 import ImportParseOptions from '@/components/ImportParseOptions.vue'
 import { useSubjectStore } from '@/stores/subject'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 
 /**
  * 智能录题。
@@ -734,6 +736,11 @@ function goToPaper(paperId: number) {
 
 <template>
   <div class="space-y-3">
+    <PageHeader
+      title="智能录题"
+      description="上传试卷文件、截图或直接粘贴文本，模型识别题型与选项后逐题确认再入库。"
+    />
+
     <el-alert v-if="!canEdit" type="warning" :closable="false" show-icon>
       <template #title>你在当前学科没有录入权限</template>
     </el-alert>
@@ -976,7 +983,7 @@ function goToPaper(paperId: number) {
         </div>
       </div>
 
-      <el-empty v-if="!visibleTree.length" description="当前筛选下没有题目" :image-size="60" />
+      <EmptyState v-if="!visibleTree.length" description="当前筛选下没有题目" />
 
       <div v-else class="space-y-2">
         <ImportDraftCard

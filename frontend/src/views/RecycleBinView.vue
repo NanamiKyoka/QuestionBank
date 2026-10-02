@@ -6,6 +6,8 @@ import { paperApi, type PaperBrief, type PaperScope } from '@/api/paper'
 import type { QuestionBrief, QuestionSort, QuestionType } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -185,6 +187,8 @@ function formatTime(value: string): string {
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="回收站" description="删除的题目与试卷会先放进这里，确认误删后可以恢复。" />
+
     <el-alert
       type="info"
       show-icon
@@ -282,7 +286,7 @@ function formatTime(value: string): string {
             </el-table-column>
 
             <template #empty>
-              <el-empty
+              <EmptyState
                 :description="
                   !subject.currentId
                     ? '请先选择学科'
@@ -384,7 +388,7 @@ function formatTime(value: string): string {
             </el-table-column>
 
             <template #empty>
-              <el-empty
+              <EmptyState
                 :description="
                   !subject.currentId
                     ? '请先选择学科'

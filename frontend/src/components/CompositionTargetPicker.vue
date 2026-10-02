@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ApiError } from '@/api/http'
 import { paperApi, type AppendQuestionsResult, type PaperBrief, type PaperScope } from '@/api/paper'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -159,11 +160,7 @@ async function createAndAdd() {
         </div>
       </div>
 
-      <el-empty
-        v-if="!loading && filtered.length === 0"
-        :description="keyword ? '没有匹配的试卷' : '还没有试卷，可以直接新建一份'"
-        :image-size="56"
-      />
+      <EmptyState v-if="!loading && filtered.length === 0" description="keyword ? '没有匹配的试卷' : '还没有试卷，可以直接新建一份'" />
     </div>
 
     <div class="mt-3 flex items-center gap-2 border-t border-hairline pt-3">

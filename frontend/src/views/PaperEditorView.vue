@@ -35,6 +35,7 @@ import { abandonInflightClientTools, answerClientToolFrame } from '@/composables
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -702,6 +703,12 @@ const subject = useSubjectStore()
 const chatVisible = ref(false)
 const chatSessionId = ref<number | null>(null)
 const chatInput = ref('')
+
+const CHAT_EXAMPLES = [
+  '这份卷子现在什么结构？',
+  '找 3 道二次函数的题加进来',
+  '在每道大题前加一行「（本大题 12 分）」',
+]
 const chatSending = ref(false)
 const chatScroll = ref<HTMLElement | null>(null)
 const chatBubbles = ref<ChatBubble[]>([])
@@ -999,26 +1006,28 @@ function isUsed(row: QuestionBrief): boolean {
 </script>
 
 <template>
-  <div v-loading="loading" class="space-y-3">
+  <div class="space-y-3">
     <!-- 顶部工具栏 -->
-    <el-card shadow="never">
+    <el-card shadow="never" body-class="!px-3 !py-2.5">
       <div class="flex flex-wrap items-center gap-3">
-        <el-button text @click="router.push({ name: 'papers' })">
+        <el-button text aria-label="返回试卷列表" @click="router.push({ name: 'papers' })">
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
 
         <div class="min-w-0">
           <div class="flex items-center gap-2">
-            <span class="truncate text-base font-semibold">{{ paper?.title ?? '加载中…' }}</span>
+            <h1 class="truncate text-base font-semibold tracking-tight text-ink">
+              {{ paper?.title ?? '加载中' }}
+            </h1>
             <el-tag v-if="paper" size="small" :type="paper.status === 'finalized' ? 'success' : 'info'">
               {{ paper.status_label }}
             </el-tag>
-            <el-tag v-if="paper?.finalized_version" size="small" effect="plain">
+            <el-tag v-if="paper?.finalized_version" size="small" effect="plain" class="num">
               v{{ paper.finalized_version }}
             </el-tag>
             <el-tag v-if="dirty" size="small" type="warning">未保存</el-tag>
           </div>
-          <div class="text-xs text-ink-subtle">
+          <div class="num text-xs text-ink-subtle">
             共 {{ questionCount }} 题 · 修订 r{{ revision }}
             <template v-if="scoringEnabled">
               · 总分 {{ displayTotalScore }}<template v-if="dirty">（未保存）</template>
@@ -1037,7 +1046,9 @@ function isUsed(row: QuestionBrief): boolean {
           <el-button @click="openVersions">版本</el-button>
           <el-button @click="timelineVisible = true">时间线</el-button>
           <el-dropdown :disabled="exporting" @command="(f: 'docx' | 'latex') => exportPaper(f)">
-            <el-button :loading="exporting">导出<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
+            <el-button :loading="exporting">
+              导出<el-icon class="ml-1"><ArrowDown /></el-icon>
+            </el-button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="docx">Word (.docx)</el-dropdown-item>
@@ -1115,7 +1126,7 @@ function isUsed(row: QuestionBrief): boolean {
             </div>
           </div>
 
-          <el-empty v-if="!pickerLoading && pickerRows.length === 0" description="没有匹配的题目" :image-size="48" />
+          <EmptyState v-if="!pickerLoading && pickerRows.length === 0" description="没有匹配的题目" />
 
           <el-button v-if="pickerHasMore" text size="small" class="w-full" @click="loadMorePicker">
             加载更多
@@ -1208,7 +1219,7 @@ function isUsed(row: QuestionBrief): boolean {
 
     <!-- 版本 -->
     <el-drawer v-model="versionsVisible" title="版本历史" size="520px">
-      <el-empty v-if="versions.length === 0" description="还没有定稿版本" />
+      <EmptyState v-if="versions.length === 0" description="还没有定稿版本" />
       <div v-for="version in versions" :key="version.id" class="mb-2 rounded border border-hairline p-3">
         <div class="flex items-center justify-between">
           <div>
@@ -1313,13 +1324,19 @@ function isUsed(row: QuestionBrief): boolean {
 
       <div class="flex h-full flex-col">
         <div ref="chatScroll" class="flex-1 space-y-3 overflow-y-auto pr-1">
-          <el-empty v-if="chatBubbles.length === 0" description="让助手帮你排这份卷子" :image-size="48">
-            <div class="space-y-1 text-left text-xs text-ink-muted">
-              <div>· 这份卷子现在什么结构？</div>
-              <div>· 找 3 道二次函数的题加进来</div>
-              <div>· 在每道大题前加一行「（本大题 12 分）」</div>
+          <EmptyState v-if="chatBubbles.length === 0" description="让助手帮你排这份卷子">
+            <div class="flex flex-wrap justify-center gap-2">
+              <button
+                v-for="example in CHAT_EXAMPLES"
+                :key="example"
+                type="button"
+                class="rounded-full border border-hairline px-3 py-1.5 text-xs text-ink-muted transition-colors hover:border-accent-border hover:bg-accent-soft hover:text-accent-text"
+                @click="chatInput = example"
+              >
+                {{ example }}
+              </button>
             </div>
-          </el-empty>
+          </EmptyState>
 
           <div
             v-for="(bubble, index) in chatBubbles"

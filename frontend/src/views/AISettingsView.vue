@@ -10,6 +10,7 @@ import {
   type ModelType,
   type Provider,
 } from '@/api/ai'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import { ApiError, get } from '@/api/http'
 
 /**
@@ -399,6 +400,8 @@ watch(active, syncSelection, { immediate: true })
 
 <template>
   <div v-loading="loading" class="space-y-3">
+    <PageHeader title="AI 设置" description="配置模型供应商、密钥与默认模型。密钥加密存储，界面只回显掩码。" />
+
     <!-- 就绪状态 -->
     <el-alert
       v-if="active"
@@ -464,9 +467,13 @@ watch(active, syncSelection, { immediate: true })
         </div>
       </template>
 
-      <el-empty v-if="providers.length === 0" description="还没有配置供应商">
-        <el-button type="primary" @click="openCreateProvider">添加第一个供应商</el-button>
-      </el-empty>
+      <EmptyState
+        v-if="providers.length === 0"
+        description="还没有配置供应商"
+        hint="供应商决定模型从哪里调用。填入服务商文档里的准确名称与密钥后，智能录题与 AI 助手才能工作。"
+        action-label="添加第一个供应商"
+        @action="openCreateProvider"
+      />
 
       <div v-for="provider in providers" :key="provider.id" class="mb-3 rounded border border-hairline p-3">
         <div class="flex flex-wrap items-center gap-2">

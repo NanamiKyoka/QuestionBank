@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { subjectApi, userApi } from '@/api'
 import type { Subject, SubjectMember, SubjectRole } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const auth = useAuthStore()
@@ -175,6 +177,8 @@ void hintOf
 
 <template>
   <div class="space-y-3">
+    <PageHeader title="学科管理" description="学科是题库的一级边界。每个用户按学科获得角色，而不是全系统统一授权。" />
+
     <el-card shadow="never">
       <template #header>
         <div class="flex items-center justify-between">
@@ -293,7 +297,7 @@ void hintOf
             <el-button text size="small" type="danger" @click="removeMember(row)">移出</el-button>
           </template>
         </el-table-column>
-        <template #empty><el-empty description="还没有成员" /></template>
+        <template #empty><EmptyState description="还没有成员" hint="添加成员并指定角色后，对方才能看到这个学科的题目。" /></template>
       </el-table>
     </el-drawer>
   </div>

@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { tagApi } from '@/api'
 import type { Tag, TagCategory } from '@/api/types'
 import { useSubjectStore } from '@/stores/subject'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 
 /** 未指定颜色时的兜底，跟随主题走而不是钉死一个十六进制值。 */
 const DEFAULT_TAG_COLOR = 'var(--qm-accent)'
@@ -148,7 +150,10 @@ async function removeCategory(category: TagCategory) {
 </script>
 
 <template>
-  <div class="flex gap-3">
+  <div class="space-y-3">
+    <PageHeader title="标签" description="用标签给题目分组，同一标签可以在任意学科下复用。" />
+
+    <div class="flex gap-3">
     <!-- 分类侧栏 -->
     <el-card shadow="never" class="w-56 shrink-0">
       <template #header>
@@ -229,10 +234,7 @@ async function removeCategory(category: TagCategory) {
           </template>
         </div>
 
-        <el-empty
-          v-if="!loading && filtered.length === 0"
-          :description="subject.currentId ? '该分类下还没有标签' : '请先选择学科'"
-        />
+        <EmptyState v-if="!loading && filtered.length === 0" description="subject.currentId ? '该分类下还没有标签' : '请先选择学科'" />
       </div>
     </el-card>
 
@@ -281,5 +283,6 @@ async function removeCategory(category: TagCategory) {
         <el-button type="primary" @click="submitCategory">创建</el-button>
       </template>
     </el-dialog>
+    </div>
   </div>
 </template>

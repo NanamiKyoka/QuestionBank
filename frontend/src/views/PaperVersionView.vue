@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { paperApi, type PaperQuestionProjection, type PaperVersion, type PaperSnapshot, type SnapshotNode } from '@/api/paper'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import RichContent from '@/components/RichContent.vue'
 
 /**
@@ -401,11 +402,7 @@ function itemNumberOf(item: SnapshotNode): string {
             </template>
           </div>
 
-          <el-empty
-            v-if="roots.length === 0"
-            description="这个版本里没有可显示的内容"
-            :image-size="72"
-          />
+          <EmptyState v-if="roots.length === 0" description="这个版本里没有可显示的内容" />
         </div>
       </el-card>
     </template>
