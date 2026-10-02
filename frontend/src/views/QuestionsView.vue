@@ -18,6 +18,12 @@ import type {
 } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
 import QuestionEditDialog from '@/components/QuestionEditDialog.vue'
+import QuestionAiChangesBar from '@/components/QuestionAiChangesBar.vue'
+import {
+  applyQuestionEdits,
+  useQuestionAiTools,
+  type PendingQuestionEdits,
+} from '@/composables/useQuestionAiTools'
 import { useSubjectStore } from '@/stores/subject'
 
 const route = useRoute()
@@ -415,6 +421,51 @@ async function submitForReview(row: QuestionBrief) {
   await load()
 }
 
+// ---- AI 改动的确认通道 ----
+
+const pendingAiEdits = ref<PendingQuestionEdits | null>(null)
+const aiApplying = ref(false)
+
+useQuestionAiTools({
+  canEdit: () => canEdit.value,
+  // 删除与归档没有独立的权限位，服务端按「是否本人建的 / 有没有编辑权」逐题判定，
+  // 这里用 edit_question 当闸只是提前拦掉整块无权限的情况。
+  canDelete: () => canEdit.value,
+  hasPending: () => pendingAiEdits.value !== null,
+  stagePending: (change) => {
+    pendingAiEdits.value = change
+  },
+  refresh: load,
+  openDetail,
+})
+
+async function applyPendingAiEdits() {
+  const pending = pendingAiEdits.value
+  if (!pending) return
+  aiApplying.value = true
+  try {
+    const { applied, failed } = await applyQuestionEdits(pending.edits)
+    pendingAiEdits.value = null
+    // 部分成功是常态（无权限、已被别人改动），因此要如实报失败而不是只报成功数。
+    if (failed.length) {
+      ElMessage.warning(`已应用 ${applied} 处，${failed.length} 处失败：${failed[0]}`)
+    } else {
+      ElMessage.success(`已应用 ${applied} 处改动`)
+    }
+    await load()
+  } finally {
+    aiApplying.value = false
+  }
+}
+
+function discardPendingAiEdits() {
+  pendingAiEdits.value = null
+}
+
+async function inspectPendingEdit(questionId: number) {
+  await openDetail(questionId)
+}
+
 /**
  * 归档 / 取消归档。
  *
@@ -797,6 +848,17 @@ function pad(n: number): string {
           批量删除
         </el-button>
       </div>
+
+      <QuestionAiChangesBar
+        v-if="pendingAiEdits"
+        class="mt-2"
+        :summary="pendingAiEdits.summary"
+        :lines="pendingAiEdits.lines"
+        :applying="aiApplying"
+        @apply="applyPendingAiEdits"
+        @discard="discardPendingAiEdits"
+        @inspect="inspectPendingEdit"
+      />
     </el-card>
 
     <!-- AI 解题：进度与结果 -->
