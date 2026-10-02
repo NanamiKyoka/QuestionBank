@@ -316,7 +316,7 @@ function formatTime(value: string): string {
     <el-card shadow="never" class="flex min-w-0 flex-1 flex-col" body-class="flex flex-col h-full">
       <template #header>
         <div class="flex items-center gap-2">
-          <span class="text-sm font-medium">AI 助手</span>
+          <h1 class="text-sm font-medium text-ink">AI 助手</h1>
           <el-select v-model="scene" size="small" class="w-40" clearable placeholder="通用模式">
             <el-option label="通用模式" value="" />
             <el-option label="题库场景" value="question_library" />
