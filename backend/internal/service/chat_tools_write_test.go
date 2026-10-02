@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -333,19 +334,36 @@ func TestEveryToolHasADescription(t *testing.T) {
 	}
 }
 
-// 工具 schema 全部要进提示词，因此单个场景下的工具数量必须有上限。
-// 这个数只防"某天随手加了一个工具"造成上下文膨胀，不是质量指标。
+// 工具 schema 全部要进提示词，因此每个场景实际发出的体积必须有上限。
+//
+// 这里量的是字节而不是工具个数：个数相同的两个工具集，体积可以差三倍
+// （一个 update 带七个可选字段，另一个只有一个 id）。名字也不重要，
+// 模型认的是 description 和 properties。
+//
+// unscoped 的上限更松：它是"客户端没报场景"时的兜底，拿到的是全集，
+// 比任何真实场景都大。它仍然要有上限——前端万一漏报 scene，
+// 这条路径就是唯一挡在上下文膨胀前面的东西。
+//
+// 这些数只防"某天随手加了一个工具"，不是质量指标。
 func TestToolSetStaysWithinContextBudget(t *testing.T) {
-	const maxPerScene = 30
+	caps := map[aiagent.Scene]int{
+		aiagent.SceneQuestionLibrary:   24_000,
+		aiagent.SceneCompositionEditor: 24_000,
+		aiagent.SceneImportReview:      24_000,
+		aiagent.SceneUnscoped:          30_000,
+	}
 
 	deps, _, _, _ := newWriteDeps(t)
-	for _, scene := range []aiagent.Scene{
-		aiagent.SceneUnscoped, aiagent.SceneQuestionLibrary,
-		aiagent.SceneCompositionEditor, aiagent.SceneImportReview,
-	} {
-		got := len(buildToolRegistry(deps).Schemas(scene, true))
-		if got > maxPerScene {
-			t.Fatalf("场景 %s 暴露了 %d 个工具，超过上限 %d", scene, got, maxPerScene)
+	reg := buildToolRegistry(deps)
+	for scene, max := range caps {
+		specs := reg.Schemas(scene, true)
+		raw, err := json.Marshal(specs)
+		if err != nil {
+			t.Fatalf("序列化失败: %v", err)
+		}
+		if len(raw) > max {
+			t.Fatalf("场景 %s 的工具 schema 有 %d 字节（%d 个工具），超过上限 %d",
+				scene, len(raw), len(specs), max)
 		}
 	}
 }

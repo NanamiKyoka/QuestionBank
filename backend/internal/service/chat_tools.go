@@ -41,6 +41,8 @@ func buildToolRegistry(deps toolDeps) *aiagent.Registry {
 	registerReadTools(r, deps)
 	registerQuestionWriteTools(r, deps)
 	registerBatchTools(r, deps)
+	registerMetadataWriteTools(r, deps)
+	registerJobTools(r, deps)
 
 	return r
 }
