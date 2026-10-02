@@ -40,6 +40,7 @@ func buildToolRegistry(deps toolDeps) *aiagent.Registry {
 	registerPaperTools(r, deps)
 	registerReadTools(r, deps)
 	registerQuestionWriteTools(r, deps)
+	registerBatchTools(r, deps)
 
 	return r
 }

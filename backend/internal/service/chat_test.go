@@ -421,7 +421,9 @@ func TestChatToolRegistryIsWired(t *testing.T) {
 	fx := newChatFixture(t, []string{textTurn("x")})
 	names := fx.svc.Registry().Names()
 	want := []string{
-		"add_questions_to_paper", "archive_question", "create_paper", "create_question",
+		"add_questions_to_paper", "archive_question", "batch_archive_questions",
+		"batch_delete_questions", "batch_review_questions", "batch_set_source",
+		"batch_update_questions", "create_paper", "create_question",
 		"delete_question", "edit_paper", "get_paper", "get_question", "get_subject_stats",
 		"list_knowledge_points", "list_papers", "list_review_queue", "list_subjects",
 		"list_tags", "propose_questions", "read_paper_outline", "restore_question",

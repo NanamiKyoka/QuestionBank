@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
@@ -140,20 +141,28 @@ func (c ToolCall) ArgStringSlice(key string) []string {
 	return out
 }
 
-// ArgBool 取布尔参数。
-//
-// 缺省为 false：布尔开关的语义天然偏向"不做"，而模型漏写一个可选的
-// dry_run 恰恰是我们希望它落到的分支。
+// ArgBool 取布尔参数，缺省为 false。
 func (c ToolCall) ArgBool(key string) bool {
+	return c.ArgBoolOr(key, false)
+}
+
+// ArgBoolOr 取布尔参数，缺省由 def 决定。
+//
+// 对「安全侧是默认值」的开关必须用这个而不是 ArgBool：模型偶尔会漏写
+// 一个可选参数，而漏写 dry_run 落到的分支决定了数据到底写不写。
+// 那种情况下让"没写"等同于"先别动"，比让"没写"等同于"照做"安全得多。
+func (c ToolCall) ArgBoolOr(key string, def bool) bool {
 	switch v := c.Arguments[key].(type) {
 	case bool:
 		return v
 	case string:
-		return strings.EqualFold(strings.TrimSpace(v), "true")
+		if parsed, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			return parsed
+		}
 	case float64:
 		return v != 0
 	}
-	return false
+	return def
 }
 
 // ToolResult 工具执行结果。

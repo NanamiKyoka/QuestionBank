@@ -368,7 +368,10 @@ func TestAssistantPromptFallsBackToLegacyText(t *testing.T) {
 	for _, want := range []string{
 		"你是 QuestionMind 题库系统的 AI 助手，帮助教师管理题目和组卷。",
 		"1. 需要题库信息时先调用工具查，不要凭空编造题目 id 或内容。",
-		"5. 找不到合适内容时如实说明，不要勉强凑数。",
+		"7. 找不到合适内容时如实说明，不要勉强凑数。",
+		// 预演约定必须写进默认提示词：dry_run 只是工具上的一个参数，
+		// 模型不会因为它"叫这个名字"就知道该怎么用它。
+		"dry_run",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("内置默认缺少片段 %q，实际 %q", want, sp)
