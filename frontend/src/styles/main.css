@@ -38,3 +38,28 @@ body {
   overflow: hidden;
   word-break: break-word;
 }
+
+/* 题干预览只留一行（小问列表、解析摘要等窄栏位）。 */
+.stem-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/*
+ * -webkit-line-clamp 只在盒子里全是行内内容时生效，
+ * 而 RichContent 把段落渲染成 <p>（块级）。这里把段落摊成行内，
+ * 否则"限制两行"会退化成"不限制"——一行题干能撑到半屏高。
+ * 非段落块（公式块、表格）保持原样，它们本来就该独占一行。
+ */
+.stem-clamp.rich-content > p,
+.stem-clamp-1.rich-content > p {
+  display: inline;
+  margin: 0;
+}
+.stem-clamp.rich-content > p + p::before,
+.stem-clamp-1.rich-content > p + p::before {
+  content: ' ';
+}

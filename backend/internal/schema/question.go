@@ -132,8 +132,8 @@ type KnowledgePointBrief struct {
 
 // QuestionBrief 列表项。
 //
-// 刻意不返回 stem 的富文本、选项与答案：列表一页可能有几十条，
-// 带上这些字段会让响应体膨胀几十倍，而列表页只需要展示题干纯文本。
+// 刻意不返回选项、答案与解析：列表一页可能有几十条，
+// 带上这些字段会让响应体膨胀几十倍，而列表页只需要展示题干。
 // 这是从参考实现"列表查询放大"问题中吸取的教训。
 type QuestionBrief struct {
 	ID                uint                 `json:"id"`
@@ -146,8 +146,18 @@ type QuestionBrief struct {
 	StatusLabel       string               `json:"status_label"`
 	Visibility        model.Visibility     `json:"visibility"`
 
-	// StemText 题干纯文本，列表展示与搜索命中高亮使用。
+	// StemText 题干的纯文本投影，用于关键词检索与不需要排版的地方。
 	StemText string `json:"stem_text"`
+
+	// StemDoc 题干富文本，列表渲染用。
+	//
+	// 此前这里刻意只给 StemText，于是列表把公式摊平成 LaTeX 源码显示——
+	// "已知平面向量 $\boldsymbol{a}$" 在题库里就是字面的 \boldsymbol{a}，
+	// 而公式恰恰是题库的主体内容。题库页最需要一眼看清的就是题干。
+	//
+	// 代价是一页几十条多传几十 KB；不传的代价是整页看不懂。
+	// 详情接口不再重复携带它（见 QuestionDetail.Stem）。
+	StemDoc model.JSON `json:"stem_doc"`
 
 	Tags            []TagBrief            `json:"tags"`
 	KnowledgePoints []KnowledgePointBrief `json:"knowledge_points"`
@@ -236,6 +246,7 @@ func NewQuestionBrief(q *model.Question, tags []model.Tag, kps []model.Knowledge
 		StatusLabel:       q.Status.Label(),
 		Visibility:        q.Visibility,
 		StemText:          q.StemText,
+		StemDoc:           q.Stem,
 		Tags:              NewTagBriefs(tags),
 		KnowledgePoints:   NewKnowledgePointBriefs(kps),
 		ChildCount:        childCount,

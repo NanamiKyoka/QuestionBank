@@ -14,6 +14,15 @@ type ExtractRequest struct {
 	// Images 图片，形如 data:image/png;base64,xxx 。
 	// 支持多图：一道题可能配多张图。
 	Images []string `json:"images" binding:"max=10"`
+	// PageImages 由 PDF 渲染出的页图地址。
+	//
+	// 与 Images 分开而不是混在一起是有意的：两者对模型的意义完全不同——
+	// Images 是"同一份卷子的答案页"，要**转写**不要重算；
+	// PageImages 是"卷子的题目页"，要照着它识别题目。
+	// 混在一起时提示词无法区分，模型会把题目页当成答案页照抄。
+	//
+	// 由服务端内部流转（PDF 上传路径），客户端一般不填。
+	PageImages []string `json:"page_images,omitempty"`
 	// Mode extract（抽取新题）| solve（补写答案）| record（仅录题，不求解）。
 	Mode string `json:"mode" binding:"omitempty,oneof=extract solve record"`
 	// SolveForContent 仅在 mode=solve 时使用：待补答案的题目文本。

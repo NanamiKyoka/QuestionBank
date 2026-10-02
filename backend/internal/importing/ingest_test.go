@@ -3,6 +3,8 @@ package importing
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -294,7 +296,7 @@ func TestDocxToMarkdownMath(t *testing.T) {
 }
 
 func TestIngestMarkdownAndZip(t *testing.T) {
-	res, err := Ingest([]byte("【题目】甲"), "a.md", nil)
+	res, err := Ingest(context.Background(), []byte("【题目】甲"), "a.md", nil)
 	if err != nil {
 		t.Fatalf("md 摄取失败: %v", err)
 	}
@@ -307,7 +309,7 @@ func TestIngestMarkdownAndZip(t *testing.T) {
 		"包/二.txt":  "【题目】乙",
 		"包/图片.png": "not a document",
 	})
-	res, err = Ingest(zipData, "卷子.zip", nil)
+	res, err = Ingest(context.Background(), zipData, "卷子.zip", nil)
 	if err != nil {
 		t.Fatalf("zip 摄取失败: %v", err)
 	}
@@ -337,7 +339,7 @@ func TestIngestZipRejectsPathTraversal(t *testing.T) {
 		"../逃逸.md": "【题目】不该出现",
 		"正常.md":    "【题目】应该出现",
 	})
-	res, err := Ingest(zipData, "bad.zip", nil)
+	res, err := Ingest(context.Background(), zipData, "bad.zip", nil)
 	if err != nil {
 		t.Fatalf("包内仍有合法文档，不该整包失败: %v", err)
 	}
@@ -355,7 +357,7 @@ func TestIngestZipRejectsPathTraversal(t *testing.T) {
 }
 
 func TestIngestRejectsUnsupportedType(t *testing.T) {
-	if _, err := Ingest([]byte("x"), "a.doc", nil); err == nil {
+	if _, err := Ingest(context.Background(), []byte("x"), "a.doc", nil); err == nil {
 		t.Fatal(".doc 不在支持范围内，必须报错而不是把二进制当文本导入")
 	}
 	if UploadSupported("a.DOCX") != true {
@@ -366,14 +368,74 @@ func TestIngestRejectsUnsupportedType(t *testing.T) {
 	}
 }
 
-// PDF 现在能被摄取了，但它取的是**文字层**。
-// 没有文字层的扫描件必须被明确告知改走截图，而不是静默返回空文档——
-// 后者会让用户看到"识别出 0 道题"，然后怀疑系统坏了。
+// PDF 优先渲染成页图交给视觉模型；渲染不了才退回文字层。
+//
+// 这两个用例分别盯住新行为的两个分支：渲染成功（产出 PageImages、没有 Docs），
+// 与渲染不可用时的回退（产出带来源说明的 Docs）。
+//
+// 为什么测试里显式传 nil ImageSaver：媒体存储是 service 层注入的，
+// 这里只关心"摄取层拿到页图后怎么组织结果"，不牵扯真实存储。
+func TestIngestPDFRendersPagesToImages(t *testing.T) {
+	pdf := textPDF(t, "BT /F1 12 Tf 72 700 Td (1. What is 1 + 1) Tj ET")
+
+	saver := &countingSaver{}
+	res, err := Ingest(context.Background(), pdf, "paper.pdf", saver)
+	if err != nil {
+		t.Fatalf("摄取失败: %v", err)
+	}
+
+	if len(res.PageImages) == 0 {
+		t.Fatal("PDF 应当被渲染成页图交给视觉模型")
+	}
+	if len(res.Docs) != 0 {
+		t.Fatalf("渲染路径下不应再有文本文档，实际 %d 份", len(res.Docs))
+	}
+	if saver.saved == 0 {
+		t.Fatal("页图应当被交给 ImageSaver 存下")
+	}
+	if !containsText(res.Warnings, "页图") && !containsText(res.Warnings, "页图片") {
+		t.Fatalf("应当告知用户走了渲染路径，实际告警 %v", res.Warnings)
+	}
+}
+
+// ImageSaver 不可用时不能静默出错：要么退回文字层，要么给出明确原因。
+//
+// 此前 nil saver 会直接 panic——而 PDF 走渲染路径后 Docs 为空，
+// 下面取 Docs[0] 的旧代码就会在真实链路上炸掉。
+func TestIngestPDFWithoutSaverFallsBackToTextLayer(t *testing.T) {
+	pdf := textPDF(t, "BT /F1 12 Tf 72 700 Td (1. What is 1 + 1) Tj ET")
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("缺少 ImageSaver 不应 panic: %v", r)
+		}
+	}()
+	res, err := Ingest(context.Background(), pdf, "paper.pdf", nil)
+	if err != nil {
+		t.Fatalf("没有存图能力时应当退回文字层而不是报错: %v", err)
+	}
+	if len(res.PageImages) != 0 {
+		t.Fatal("没有存图的地方就不该声称拿到了页图")
+	}
+	if len(res.Docs) != 1 {
+		t.Fatalf("应当退回 1 份文本文档，实际 %d", len(res.Docs))
+	}
+	if !containsText(res.Warnings, "文字层") {
+		t.Fatalf("应当说明为什么退回文字层，实际告警 %v", res.Warnings)
+	}
+}
+
+// 没有文字层的扫描件，且渲染也不可用时，必须被明确告知改走截图，
+// 而不是静默返回空文档——后者会让用户看到"识别出 0 道题"，然后怀疑系统坏了。
 func TestIngestPDFReportsMissingTextLayer(t *testing.T) {
 	pdf := minimalPDF(t)
-	_, err := Ingest(pdf, "scan.pdf", nil)
+	res, err := Ingest(context.Background(), pdf, "scan.pdf", nil)
 	if err == nil {
-		t.Fatal("没有文字层的 PDF 应当报错")
+		// 渲染成功是好事：扫描件也能靠视觉模型识别。
+		if len(res.PageImages) == 0 {
+			t.Fatal("既没有页图也没有错误，等于什么都没发生")
+		}
+		return
 	}
 	if !strings.Contains(err.Error(), "文字层") {
 		t.Fatalf("错误信息应当说清是没有文字层，实际 %v", err)
@@ -383,14 +445,14 @@ func TestIngestPDFReportsMissingTextLayer(t *testing.T) {
 	}
 }
 
-// 有文字层的 PDF 应当带上"来源"说明：文本层里的公式是拆开的，
+// 文字层回退路径（渲染不可用）必须带"来源"说明：文本层里的公式是拆开的，
 // 不告诉模型的话，它会把 x2 当成正文、把碎片当成多出来的段落。
-func TestIngestPDFMarksProvenance(t *testing.T) {
+func TestIngestPDFTextLayerMarksProvenance(t *testing.T) {
 	pdf := textPDF(t, "BT /F1 12 Tf 72 700 Td (1. What is 1 + 1) Tj ET")
 
-	res, err := Ingest(pdf, "paper.pdf", nil)
+	res, err := ingestPDFTextLayer(pdf, "paper.pdf", fmt.Errorf("渲染器不可用"), nil)
 	if err != nil {
-		t.Fatalf("摄取失败: %v", err)
+		t.Fatalf("文字层摄取失败: %v", err)
 	}
 	if !strings.HasPrefix(res.Docs[0].Text, PDFTextPrefix) {
 		t.Fatalf("PDF 文本应当带来源说明，实际开头是 %q", truncate(res.Docs[0].Text, 40))
@@ -407,4 +469,30 @@ func TestIngestPDFMarksProvenance(t *testing.T) {
 	if !noted {
 		t.Fatalf("应当给出 PDF 版面提示，实际 %v", res.Warnings)
 	}
+
+	// 渲染失败的原因必须一并说出来：用户看到"公式缺失"时需要知道
+	// 是这份 PDF 的问题，还是系统的渲染能力出了问题。
+	if !containsText(res.Warnings, "渲染器不可用") {
+		t.Fatalf("应当说明为什么退回文字层，实际 %v", res.Warnings)
+	}
+}
+
+// countingSaver 记录存了几张图的假存储。
+type countingSaver struct{ saved int }
+
+func (c *countingSaver) Save(data []byte, name string) (string, error) {
+	if len(data) == 0 {
+		return "", fmt.Errorf("空图")
+	}
+	c.saved++
+	return "/media/" + name, nil
+}
+
+func containsText(list []string, sub string) bool {
+	for _, s := range list {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

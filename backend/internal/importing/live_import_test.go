@@ -90,7 +90,7 @@ func liveFixture(t *testing.T) ([]Chunk, *ai.OpenAIProvider, PromptOptions, bool
 		t.Fatalf("读取 PDF 失败: %v", err)
 	}
 	start := time.Now()
-	res, err := Ingest(raw, "paper.pdf", nil)
+	res, err := Ingest(context.Background(), raw, "paper.pdf", nil)
 	if err != nil {
 		t.Fatalf("摄取失败: %v", err)
 	}

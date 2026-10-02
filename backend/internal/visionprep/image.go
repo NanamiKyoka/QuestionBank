@@ -37,6 +37,21 @@ const MaxEdge = 1600
 // 而它比 95 小三成——十张图的差别是 5 MB 与 3.5 MB 的区别。
 const JPEGQuality = 85
 
+// ImageToDataURL 把解码好的图像编码成 data URL（缩放 + JPEG 重编码）。
+//
+// 与 ToDataURL 的区别只在于输入已经是 image.Image：切图这类操作
+// 拿到的中间结果是图像而不是字节，再 encode 一次解回来纯属浪费。
+func ImageToDataURL(img image.Image) (string, error) {
+	if img == nil {
+		return "", fmt.Errorf("图像为空")
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, Downscale(img, MaxEdge), &jpeg.Options{Quality: JPEGQuality}); err != nil {
+		return "", fmt.Errorf("图片编码失败：%w", err)
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
 // ToDataURL 把图片字节整理成可以直接放进 image_url 的 data URL。
 //
 // 已经是 data URL 或 http(s) 地址的原样返回：前端也可能直接传

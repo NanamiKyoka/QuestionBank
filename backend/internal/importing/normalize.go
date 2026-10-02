@@ -480,6 +480,17 @@ func extractChoiceLetters(answer string, labels []string) []string {
 	return out
 }
 
+// ParseSolvedAnswer 把模型给出的答案文本按**题目原有的题型**解析成答案结构。
+//
+// 与抽取路径的关键差别：这里题型是已知的（题目已经在题库里），
+// 不需要让模型回答"这是什么题型"，也就不会因为它判断失误而把一道好题改写坏。
+// 选项标签同样以题库里那份为准，模型写 B 就对应题库的 B。
+//
+// 返回的第二个值是警告（例如"未能识别答案"），由调用方决定是写库还是报错。
+func ParseSolvedAnswer(qtype model.QuestionType, raw string, opts []model.Option, stemText string) (model.AnswerSpec, []string) {
+	return parseAnswer(qtype, raw, opts, stemText, ModeSolve)
+}
+
 // parseAnswer 按题型解析答案文本，返回答案结构与警告。
 func parseAnswer(qtype model.QuestionType, raw string, opts []model.Option, stem string, mode Mode) (model.AnswerSpec, []string) {
 	raw = strings.TrimSpace(raw)
@@ -655,6 +666,13 @@ func cleanStrings(in []string) []string {
 
 // plainTextOfRichDoc 从富文本 JSON 提取纯文本（与 domain.PlainText 等价，
 // 但这里只依赖自己的结构，避免为了一行文本引入跨包依赖）。
+//
+// 公式必须显式处理，这一点是从线上事故里学到的：数学题的题干里
+// 数字与变量几乎全在 inlineMath 里（"样本数据 $6,8,4,5,12$ 的中位数"），
+// 只走 Text 分支就会把它们全丢掉，得到"样本数据 的中位数为（　）"。
+// 数据其实一直好好地存在 stem_markdown 与 stem 里，丢的只有这个**摘要**，
+// 而审核列表与题库列表显示的正是它——于是界面上看着像公式凭空消失了，
+// 实际是投影函数漏了一种节点类型。
 func plainTextOfRichDoc(raw model.JSON) string {
 	var doc richNode
 	if err := raw.Into(&doc); err != nil {
@@ -667,10 +685,17 @@ func plainTextOfRichDoc(raw model.JSON) string {
 			if nodes[i].Text != "" {
 				sb.WriteString(nodes[i].Text)
 			}
-			if nodes[i].Type == nodeBlank {
+			switch nodes[i].Type {
+			case nodeBlank:
 				sb.WriteString("________")
-			}
-			if nodes[i].Type == nodeParagraph || nodes[i].Type == nodeHeading {
+			case nodeInlineMath:
+				// 用 LaTeX 原文：既保住内容，也让用户能按 "x^2" 这样的写法搜索。
+				sb.WriteString(latexOf(nodes[i].Attrs))
+			case nodeBlockMath:
+				sb.WriteString(" ")
+				sb.WriteString(latexOf(nodes[i].Attrs))
+				sb.WriteString(" ")
+			case nodeParagraph, nodeHeading:
 				// 段落之间不加分隔符，保持与显示文本一致。
 				_ = i
 			}
@@ -679,4 +704,15 @@ func plainTextOfRichDoc(raw model.JSON) string {
 	}
 	walk(doc.Content)
 	return strings.TrimSpace(sb.String())
+}
+
+// latexOf 从公式节点的 attrs 里取 LaTeX 原文。
+func latexOf(attrs map[string]any) string {
+	if attrs == nil {
+		return ""
+	}
+	if latex, ok := attrs["latex"].(string); ok {
+		return latex
+	}
+	return ""
 }

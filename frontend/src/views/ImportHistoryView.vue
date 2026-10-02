@@ -9,6 +9,7 @@ import {
   type ImportTaskStatus,
 } from '@/api/importTask'
 import type { QuestionBrief } from '@/api/types'
+import RichContent from '@/components/RichContent.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -398,7 +399,7 @@ function countText(row: ImportTask): string {
       <el-table v-loading="drawer.loading" :data="drawer.rows" row-key="id">
         <el-table-column label="题干" min-width="320">
           <template #default="{ row }">
-            <div class="text-sm">{{ row.stem_text || '（无题干）' }}</div>
+            <RichContent :doc="row.stem_doc" compact class="stem-clamp text-sm" />
           </template>
         </el-table-column>
         <el-table-column label="题型" width="90">

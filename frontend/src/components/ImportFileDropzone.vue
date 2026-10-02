@@ -146,7 +146,8 @@ function clear() {
           {{ formatHint }} 均可；.zip 会一次导入压缩包里的多份文档。
         </div>
         <div class="text-xs text-gray-400">
-          .pdf 取的是文字层：扫描件没有文字层，请改用「上传图片」逐页截图。
+          .pdf 会先渲染成页图再由模型识别：公式与几何图形按排版原样保留，比读文字层准确得多；
+          代价是比 .md/.txt 慢（模型要逐页看图）。扫描件同样适用。
         </div>
       </div>
     </template>

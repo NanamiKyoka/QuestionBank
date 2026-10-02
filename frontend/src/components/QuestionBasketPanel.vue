@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import CompositionTargetPicker from '@/components/CompositionTargetPicker.vue'
+import RichContent from '@/components/RichContent.vue'
 import { useBasketStore, type BasketItem } from '@/stores/basket'
 import { useSubjectStore } from '@/stores/subject'
 import type { AppendQuestionsResult } from '@/api/paper'
@@ -118,7 +119,8 @@ async function clearAll() {
               <el-tag size="small" effect="plain">{{ item.question_type_label }}</el-tag>
               <span>{{ '★'.repeat(item.difficulty) }}</span>
             </div>
-            <div class="stem-clamp text-sm">{{ item.stem_text || '（无题干文本）' }}</div>
+            <RichContent v-if="item.stem_doc" :doc="item.stem_doc" compact class="stem-clamp text-sm" />
+            <div v-else class="stem-clamp text-sm">{{ item.stem_text || '（无题干文本）' }}</div>
           </div>
           <el-button text size="small" type="danger" @click="basket.remove(item.id)">
             <el-icon><Close /></el-icon>
@@ -136,13 +138,3 @@ async function clearAll() {
     />
   </el-drawer>
 </template>
-
-<style scoped>
-.stem-clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
-</style>

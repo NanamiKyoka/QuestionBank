@@ -95,6 +95,59 @@ func mathLatex(attrs map[string]any) string {
 	return ""
 }
 
+// MarkdownText 把富文本还原成 Markdown 风格的文本，**保留公式定界符**。
+//
+// 与 PlainText 的区别只有一处，但这一处是决定性的：
+// PlainText 把公式原样摊平成 `x^2`，那是给检索和列表摘要用的；
+// 而喂给模型时，`$x^2$` 这层定界符是"这里是数学"的信号——少了它，
+// 模型会把 `f(x)=x^2` 里的一串符号当成散文，解题时凭感觉编。
+// 公式与空位同为"内容藏在 attrs 里"的节点，必须显式取出来。
+//
+// 只用于"把题目交给模型"（AI 解题）这条路径，不用于展示或检索。
+func MarkdownText(doc RichDoc) string {
+	var sb strings.Builder
+	walkMarkdown(doc.Content, &sb)
+	return collapseBlankLines(strings.TrimSpace(sb.String()))
+}
+
+func walkMarkdown(nodes []Node, sb *strings.Builder) {
+	for i := range nodes {
+		n := &nodes[i]
+		switch n.Type {
+		case "text":
+			sb.WriteString(n.Text)
+		case "hardBreak":
+			sb.WriteString("\n")
+		case "blank":
+			// 与提示词里的约定一致：空位写成六个下划线。
+			sb.WriteString("______")
+		case "inlineMath":
+			sb.WriteString("$")
+			sb.WriteString(mathLatex(n.Attrs))
+			sb.WriteString("$")
+		case "blockMath":
+			sb.WriteString("\n$$\n")
+			sb.WriteString(mathLatex(n.Attrs))
+			sb.WriteString("\n$$\n")
+		case "image":
+			// 图片节点带的是本服务的相对地址，模型拿不到；写成人能看懂的占位符，
+			// 至少让模型知道"这里有一张图"，而不是以为题干就是残缺的。
+			sb.WriteString("[图片]")
+		case "tableRow":
+			walkMarkdown(n.Content, sb)
+			sb.WriteString("\n")
+		case "tableCell":
+			walkMarkdown(n.Content, sb)
+			sb.WriteString(" ")
+		case "paragraph", "heading":
+			walkMarkdown(n.Content, sb)
+			sb.WriteString("\n")
+		default:
+			walkMarkdown(n.Content, sb)
+		}
+	}
+}
+
 func collapseBlankLines(text string) string {
 	if !strings.Contains(text, "\n\n") {
 		return text

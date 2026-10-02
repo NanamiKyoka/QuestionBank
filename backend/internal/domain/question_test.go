@@ -378,3 +378,36 @@ func TestValidateQuestionRejectsSingleAnswerMultipleChoice(t *testing.T) {
 		t.Fatalf("两个正确答案应通过，实际 %v", err)
 	}
 }
+
+// MarkdownText 与 PlainText 的唯一差别就是公式的定界符，而这一处差别是决定性的：
+// 少了 $，模型读到的是一串"散文里的符号"，解题时会凭感觉编。
+func TestMarkdownTextKeepsMathDelimiters(t *testing.T) {
+	d := RichDoc{Type: "doc", Content: []Node{
+		{Type: "paragraph", Content: []Node{
+			{Type: "text", Text: "已知 "},
+			{Type: "inlineMath", Attrs: map[string]any{"latex": "f(x)=x^2"}},
+			{Type: "text", Text: "，则 $f(2)=$"},
+			{Type: "blank"},
+		}},
+		{Type: "blockMath", Attrs: map[string]any{"latex": `\int_0^1 x\,dx`}},
+	}}
+
+	got := MarkdownText(d)
+
+	if !strings.Contains(got, "$f(x)=x^2$") {
+		t.Fatalf("行内公式应带上 $ 定界符，实际 %q", got)
+	}
+	if !strings.Contains(got, "$$") || !strings.Contains(got, `\int_0^1 x\,dx`) {
+		t.Fatalf("独立公式应包在 $$ 里，实际 %q", got)
+	}
+	if !strings.Contains(got, "______") {
+		t.Fatalf("空位应渲染为下划线，实际 %q", got)
+	}
+	// 纯文本自己写的 $ 不能被当成公式节点处理，只能原样透传。
+	if !strings.Contains(got, "则 $f(2)=$") {
+		t.Fatalf("正文里的文字应原样保留，实际 %q", got)
+	}
+	if strings.Contains(got, "\n\n\n") {
+		t.Fatalf("不应出现两个以上连续空行，实际 %q", got)
+	}
+}

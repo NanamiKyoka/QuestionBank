@@ -46,7 +46,7 @@ const extractSchema = `{
       "question_type": "single_choice | multiple_choice | fill_blank | true_false | essay",
       "stem": "题干内容，Markdown 格式，行内公式写成 $...$，独立公式写成 $$...$$，填空题的空位写成六个下划线 ______",
       "options": [ {"label": "A", "content": "选项内容"} ],
-      "answer": "参考答案。选择题只写选项字母，如 B 或 BD；判断题写 对 或 错；填空题多个空用分号分隔，同一个空的多个可接受答案用 或 分隔；解答题写完整答案",
+      "answer": "参考答案。严格按题型给出：单选题只写一个选项字母（如 B）；多选题只写选项字母（如 BD 或 B、D）；判断题只写「对」或「错」；填空题多个空用分号分隔，同一个空的多个可接受答案用 或 分隔；解答题写完整答案。不要写「答案是」「故选」等前后缀，也不要在答案里附加解释文字",
       "analysis": "解析过程，Markdown 格式，可选",
       "difficulty": 1,
       "knowledge_points": ["涉及的知识点名称"],
@@ -56,13 +56,20 @@ const extractSchema = `{
 }`
 
 // solveSchema 补写答案模式的结构说明。
+//
+// answer 字段的格式约定是这里最要紧的一行。曾经只写「你给出的答案」，
+// 模型于是按自己的习惯作答："正确答案是选项 B（$x=3$）"、"故选 B"、
+// 甚至直接复述选项内容。而解析侧 extractChoiceLetters 要求整串都是
+// 选项字母才肯认，于是这些作答全被判成"未能识别答案，请手动选择正确选项"——
+// 用户看到的现象是"AI 解题没看选项 / 没按题目作答"，实际是契约没写清楚。
+// 抽取模式的 extractSchema 一直带着同样的格式说明，补写模式漏了。
 const solveSchema = `{
   "questions": [
     {
       "temp_id": "与输入题目对应的编号",
       "stem": "原样返回题干，不要改动",
-      "answer": "你给出的答案",
-      "analysis": "解析过程"
+      "answer": "答案，严格按题型给出：单选题只写一个选项字母（如 B）；多选题只写选项字母（如 BD 或 B、D）；判断题只写「对」或「错」；填空题各空用分号分隔、同一空的多个可接受写法用「或」分隔；解答题写完整答案。不要写「答案是」「故选」等前后缀，也不要在答案里附加解释文字",
+      "analysis": "解析过程，Markdown 格式"
     }
   ]
 }`
@@ -276,6 +283,9 @@ const defaultExtractTemplate = `你是一位资深的中小学与大学学科教
 const defaultSolveTemplate = `你是一位资深的中小学与大学学科教研员，擅长把试卷、讲义、教案等材料整理成结构化的题库数据。
 
 任务：为下面给出的每一道题补写答案与解析。题干必须原样返回，不要改写、不要增删题号。
+题目的**题型已由系统给定**（可能标在材料开头），不要自行判断或更改题型。
+材料里若列出了选项，那些选项与题干同属一道题，**必须结合选项作答**；
+选择题的答案只写选项字母，不要复述选项内容。
 
 数学公式必须使用 LaTeX：行内用 $...$，独立成行用 $$...$$。
 例如：函数 $f(x) = \frac{1}{2}x^2$ 在 $x=1$ 处的导数为 $f'(1)$。
@@ -622,6 +632,12 @@ type PromptOptions struct {
 	// 有答案页时它只需要抄，比自己算快一个数量级。
 	// 仅 ModeExtract 会用到它：另两种模式不碰答案页。
 	AnswerImages int
+	// PageImages 本次随材料提交的**题目页**图片数量（PDF 渲染出来的页图）。
+	//
+	// 与 AnswerImages 必须分开：前者是"卷子长什么样"，要照着它识别题目；
+	// 后者是"答案写在哪"，要转写它。混为一谈时模型会把题目页当答案页照抄，
+	// 于是题库里多出一批"题目 + 原卷答案"的草稿。
+	PageImages int
 }
 
 // lookupTimeout 读模板的超时。
@@ -715,7 +731,32 @@ func BuildUserContent(content string, opt PromptOptions) string {
 	if opt.AnswerImages > 0 && opt.Mode == ModeExtract {
 		b.WriteString(answerImagesHint(opt.AnswerImages))
 	}
+
+	// 页图说明放在答案页之后：它描述的是"材料本体"，
+	// 而答案页说明是"另有 N 张图别当成题目"，后出现的更靠近模型看到图片的那一刻。
+	if opt.PageImages > 0 {
+		b.WriteString(pageImagesHint(opt.PageImages))
+	}
 	return strings.TrimSpace(b.String())
+}
+
+// pageImagesHint 告诉模型这批图是卷面的页面本身。
+//
+// 不说的话风险很具体：模型看到 N 张试卷页却没有别的说明，
+// 可能把它们当成 N 道题的插图逐张描述，也可能只认真读第一张。
+// 把"页码顺序""一张图里有多道题""公式照抄排版"讲清楚，
+// 比事后在草稿里逐条核对便宜得多。
+func pageImagesHint(n int) string {
+	var b strings.Builder
+	b.WriteString("本次材料的原文以 ")
+	b.WriteString(itoa(n))
+	b.WriteString(" 张**页面截图**的形式给出（按页码顺序，卷面即原样，未做文字化处理）。\n")
+	b.WriteString("请按下列规则处理：\n")
+	b.WriteString("1. 逐页阅读，把每一页上的**所有**题目都抽出来，一张图里通常有多道题；\n")
+	b.WriteString("2. 题干、选项里的数字与公式必须与图上完全一致，公式写成 $...$（LaTeX）；\n")
+	b.WriteString("3. 题号、大题标题与题间说明文字用 outline 之外的文字原样带出，便于还原卷面；\n")
+	b.WriteString("4. 图上没有的题目不要编——宁可少抽，也不要凭空生成。\n")
+	return b.String()
 }
 
 // answerImagesHint 告诉模型随附图片该怎么用。

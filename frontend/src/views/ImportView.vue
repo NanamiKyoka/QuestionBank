@@ -400,12 +400,21 @@ const fileIsPDF = computed(() => !!form.file && /\.pdf$/i.test(form.file.name))
 /**
  * PDF + 规则解析是个行不通的组合。
  *
- * PDF 取到的是**排版后的文字**，里面不会有【题目】这类标签，
- * 规则解析器认的恰恰只有标签。与其让它跑一遍再返回 0 道题，
- * 不如在提交前就说清楚。
+ * PDF 现在会渲染成页图交给视觉模型，规则解析器没有图片这条路。与其让它
+ * 跑一遍再失败，不如在提交前就说清楚。
  */
 const pdfNeedsModel = computed(
   () => fileIsPDF.value && form.method === 'template' && tab.value === 'file',
+)
+
+/**
+ * PDF 会走视觉模型，比 .md/.txt 慢不少。
+ *
+ * 提前说一句"慢在哪儿"，免得用户等三分钟后以为卡死了——那次等待是真的，
+ * 但它有明确的理由（逐页读图），说清楚和让它自己猜，结果完全不同。
+ */
+const pdfIsSlow = computed(
+  () => fileIsPDF.value && form.method !== 'template' && tab.value === 'file',
 )
 
 /** 缺东西或选法不成立时说清是哪一样不对，而不是把按钮灰掉让人猜。 */
@@ -415,6 +424,24 @@ const submitHint = computed(() => {
   if (tab.value === 'file') return '请先选择要导入的文件'
   if (tab.value === 'image') return '请先添加图片'
   return '请粘贴题目内容'
+})
+
+/**
+ * 「仅录题」识别成功后是否直接入库。
+ *
+ * 默认开启，因为这个模式的产物就是"还没有答案的题目本身"：
+ * 它不需要像完整抽取那样先逐题核对模型写的答案，而多出来的那一次点击
+ * 恰恰是最容易被漏掉的一步——用户看到"识别成功"就去题库找题，
+ * 结果题库里一道都没有（草稿还停在录题页上）。
+ *
+ * 关掉它就回到原来的两步流程：先核对草稿，再手动入库。
+ */
+const autoCommit = ref(true)
+
+/** 主按钮文案：直接告知这一次点击会产生什么后果。 */
+const submitLabel = computed(() => {
+  if (form.method === 'template') return '开始解析'
+  return form.mode === 'record' && autoCommit.value ? '识别并入库' : '开始识别'
 })
 
 async function extract() {
@@ -437,6 +464,7 @@ async function extract() {
 
   loading.value = true
   commitResult.value = null
+  const auto = form.mode === 'record' && autoCommit.value
   try {
     const result =
       tab.value === 'file' && form.file
@@ -455,13 +483,18 @@ async function extract() {
             mode: form.mode,
             solve_for_content: form.mode === 'solve' ? form.solve_for_content : undefined,
           })
-    acceptResult(result)
+    // 自动入库时要吞掉"识别出 N 道题"这句：它读起来像"完事了"，
+    // 而真正的结果紧接着由入库那一步给出。两句一起弹只会让人以为重复执行了。
+    acceptResult(result, auto)
+    if (auto && drafts.value.length) {
+      await doCommit(true)
+    }
   } finally {
     loading.value = false
   }
 }
 
-function acceptResult(result: ImportExtractResponse) {
+function acceptResult(result: ImportExtractResponse, quiet = false) {
   drafts.value = result.drafts ?? []
   // 默认全选：绝大多数情况下用户是想全部入库的，逐题勾选是负担。
   selected.value = new Set(drafts.value.map((_, i) => i))
@@ -489,7 +522,7 @@ function acceptResult(result: ImportExtractResponse) {
     )
     return
   }
-  ElMessage.success(`识别出 ${result.total} 道题`)
+  if (!quiet) ElMessage.success(`识别出 ${result.total} 道题`)
 }
 
 // ---- 草稿编辑 ----
@@ -585,7 +618,19 @@ function onModeChange(value: ImportMode) {
 
 // ---- 入库 ----
 
-async function commit() {
+/** 模板里绑的入口。不接参数：`@click="commit"` 会把事件对象传进来。 */
+function commit() {
+  void doCommit(false)
+}
+
+/**
+ * 确认入库。
+ *
+ * `auto` 表示这是"仅录题识别成功后自动入库"那一步，界面上的措辞要跟着变：
+ * 用户在自动流程里没有点过任何按钮，成功提示必须自己说清
+ * "题现在在哪、下一步去哪儿"，否则"已入库 8 道题"这行字出现得毫无上下文。
+ */
+async function doCommit(auto: boolean) {
   if (!subject.currentId) return
   if (selectedDrafts.value.length === 0) {
     ElMessage.warning('请至少选择一道题')
@@ -652,7 +697,15 @@ async function commit() {
       selected.value = new Set(remaining.map((_, i) => i))
       ElMessage.warning(`入库 ${result.created_count} 道，${result.failed_count} 道未通过，已保留待修改`)
     } else {
-      ElMessage.success(`已入库 ${result.created_count} 道题`)
+      // "仅录题"的默认路径下用户没有点过任何按钮，这一句要把话说完整：
+      // 题进去了、答案还是空的、去哪儿补。
+      if (auto) {
+        ElMessage.success(
+          `已录入题库 ${result.created_count} 道题（答案待补充）。可在题库里补写，或选中它们让 AI 解题。`,
+        )
+      } else {
+        ElMessage.success(`已入库 ${result.created_count} 道题`)
+      }
       drafts.value = []
       selected.value = new Set()
     }
@@ -829,6 +882,19 @@ function goToPaper(paperId: number) {
         <template #title>{{ structuredTagWarning }}</template>
       </el-alert>
 
+      <!-- 仅录题的收尾方式。必须在点「开始识别」之前就能选：
+           识别完才出现这个开关的话，"识别后自动入库"对本次已经晚了。 -->
+      <div v-if="form.mode === 'record'" class="mt-3 rounded border border-gray-200 bg-gray-50 p-2">
+        <el-checkbox v-model="autoCommit" :disabled="loading">
+          识别成功后 <b>直接入库</b>
+        </el-checkbox>
+        <div class="mt-1 text-xs text-gray-400">
+          勾选后不必再点一次「确认入库」：识别出来的题目直接进题库（状态由「入库设置」决定），
+          待补充的答案在题库里补写，或者在那里对选中的题让 AI 解题。
+          关闭它则回到"先核对草稿、再入库"的两步流程。
+        </div>
+      </div>
+
       <div class="mt-3 flex flex-wrap items-center gap-2">
         <el-button
           type="primary"
@@ -837,10 +903,12 @@ function goToPaper(paperId: number) {
           @click="extract"
         >
           <el-icon class="mr-1"><MagicStick /></el-icon>
-          {{ form.method === 'template' ? '开始解析' : '开始识别' }}
+          {{ submitLabel }}
         </el-button>
         <span v-if="loading" class="text-xs text-gray-400">
-          正在解析，大文件可能需要几分钟，请不要关闭页面。
+          {{ pdfIsSlow
+            ? 'PDF 正在逐页渲染并交给模型识别，通常要几分钟，请不要关闭页面。'
+            : '正在解析，大文件可能需要几分钟，请不要关闭页面。' }}
         </span>
         <span v-else-if="submitHint" class="text-xs text-gray-400">{{ submitHint }}</span>
       </div>

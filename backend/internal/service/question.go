@@ -221,6 +221,8 @@ func (s *QuestionService) buildDetail(ctx context.Context, user *model.User, q *
 	}
 
 	brief := schema.NewQuestionBrief(q, tags[q.ID], kps[q.ID], len(children))
+	// 详情自带 Stem，brief 里的那份是给列表用的，重复一份只是白白撑大响应体。
+	brief.StemDoc = nil
 
 	return &schema.QuestionDetail{
 		QuestionBrief:   brief,

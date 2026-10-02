@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -19,11 +20,20 @@ import (
 	"github.com/NanamiKyoka/questionmind/internal/visionprep"
 )
 
-// extractTimeout 单次抽取的超时。
+// extractTimeout 单次抽取的总预算。
 //
-// 比普通对话宽松得多：一份几十道题的试卷，模型要逐题输出结构化 JSON，
-// 耗时通常在 30 秒到两分钟。给 3 分钟是为了避免"刚跑到一半就被掐断"。
-const extractTimeout = 3 * time.Minute
+// 这个预算是**实测**出来的，不是估的。2026 上海数学卷（3 页、21 道题、
+// 仅录题模式、stealth/space-bunny-alpha）切 4 块并发跑，墙钟 336 秒。
+// 原来的 3 分钟会在 180 秒处把 3 块一起掐掉，只剩 1 块的结果——
+// 用户看到的是"识别成功 4 道题"，而卷子其实有 21 道，缺的 17 道没有任何提示。
+//
+// 注意它是**整次抽取**的预算，4 块并发共用，所以单块的实际可用时间只有它的
+// 一部分。这也是为什么这里必须给得比"一块要多久"宽：按单块耗时设置上限，
+// 并发几块就必然有几块在最后时刻被砍掉。
+//
+// 仍然保留一个上限：模型卡住时请求不能无限挂着，而超时的结果必须如实报告
+// （缺失的段落会进 warnings），而不是假装整卷都读到了。
+const extractTimeout = 20 * time.Minute
 
 // ImportService 智能录题用例。
 type ImportService struct {
@@ -118,10 +128,15 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	if mode == importing.ModeSolve {
 		content = strings.TrimSpace(req.SolveForContent)
 	}
-	if content == "" && len(req.Images) == 0 {
+	// 页图（PDF 渲染出的题目页）与答案页一样都要求视觉模型，
+	// 所以"有没有图"这件事要把两者都算进去。
+	if content == "" && len(req.Images) == 0 && len(req.PageImages) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidParam, "请提供待识别的文本或图片")
 	}
 	if err := validateImages(req.Images); err != nil {
+		return nil, err
+	}
+	if err := validateImages(req.PageImages); err != nil {
 		return nil, err
 	}
 
@@ -135,9 +150,9 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		return nil, apperr.New(apperr.CodeInvalidParam, "不支持的抽取方式").
 			WithDetail("method=%s，可选 ai（调用模型）或 template（规则解析）", req.Method)
 	}
-	if method == importing.MethodTemplate && len(req.Images) > 0 {
+	if method == importing.MethodTemplate && (len(req.Images) > 0 || len(req.PageImages) > 0) {
 		return nil, apperr.New(apperr.CodeInvalidParam,
-			"规则解析只处理文本，请改用 ai 方式提交图片")
+			"规则解析只处理文本，请改用 ai 方式提交图片或 PDF")
 	}
 
 	// 解析当前配置的模型。带图时必须用视觉模型：
@@ -146,7 +161,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	var resolved *ResolvedModel
 	if method == importing.MethodAI {
 		modelType := model.AIModelText
-		if len(req.Images) > 0 {
+		if len(req.Images) > 0 || len(req.PageImages) > 0 {
 			modelType = model.AIModelVision
 		}
 		r, err := s.aiConfig.Resolve(ctx, modelType)
@@ -184,8 +199,11 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		SubjectName:             subject.Name,
 		ExistingKnowledgePoints: kpNames,
 		ExistingTags:            tagNames,
-		// 有图片就说明它们是答案页，让模型转写而不是解题。
+		// 只有用户上传的 Images 才是答案页。PDF 渲染出的页图是题目本身，
+		// 混进这个计数会让提示词去"转写"题面，于是题目连同原答案一起被抽走。
 		AnswerImages: len(req.Images),
+		// 页图是题目页：告诉模型这是什么，否则它可能把 N 张图当成 N 道题。
+		PageImages: len(req.PageImages),
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, extractTimeout)
@@ -231,7 +249,9 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		drafts, outline, docWarnings = importing.ParseTemplateFull(content, task.OriginalFilename)
 		modelLabel = "规则解析（未调用模型）"
 	} else {
-		extracted, chunkWarnings, err := s.extractWithModel(callCtx, resolved, content, req.Images, promptOpts)
+		// 页图与答案页分开传：前者按页切批，后者对整份卷子都要带。
+		extracted, chunkWarnings, err := s.extractWithModel(
+			callCtx, resolved, content, req.PageImages, req.Images, promptOpts)
 		elapsed := time.Since(started)
 
 		// 抽取失败也要留痕：用户会问"为什么没结果"。
@@ -251,28 +271,25 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		outline = importing.OutlineForDrafts(len(drafts))
 		task.TotalCount = len(drafts)
 		task.MarkCompleted()
-		if err := s.saveTaskState(ctx, task); err != nil {
-			return nil, err
-		}
-		// 任务里存 elapsed 不合适，这里只用于响应。
-		warnings := 0
-		for i := range drafts {
-			if len(drafts[i].Warnings) > 0 {
-				warnings++
-			}
-		}
-		return &schema.ExtractResponse{
+		res := &schema.ExtractResponse{
 			TaskID:       task.ID,
 			Drafts:       drafts,
 			Total:        len(drafts),
-			WarningCount: warnings,
+			WarningCount: countDraftWarnings(drafts),
 			Model:        modelLabel,
 			Method:       string(method),
 			SourceFiles:  sourceFiles,
 			Outline:      outline,
 			Warnings:     chunkWarnings,
-			ElapsedMs:    elapsed.Milliseconds(),
-		}, nil
+			// 任务里存 elapsed 不合适，这里只用于响应。
+			ElapsedMs: elapsed.Milliseconds(),
+		}
+		// 草稿必须落库再返回：只放在响应里的话，用户刷新一次页面
+		// 就等于把这几分钟等出来的题全丢了（见 saveExtractionResult）。
+		if err := s.saveExtractionResult(ctx, task, res); err != nil {
+			return nil, err
+		}
+		return res, nil
 	}
 
 	// ---- 规则解析的收尾 ----
@@ -306,29 +323,34 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	task.TotalCount = len(drafts)
 	task.SavedCount = 0 // 还没入库
 	task.MarkCompleted()
-	if err := s.saveTaskState(ctx, task); err != nil {
-		return nil, err
-	}
 
-	warnings := 0
-	for i := range drafts {
-		if len(drafts[i].Warnings) > 0 {
-			warnings++
-		}
-	}
-
-	return &schema.ExtractResponse{
+	res := &schema.ExtractResponse{
 		TaskID:       task.ID,
 		Drafts:       drafts,
 		Total:        len(drafts),
-		WarningCount: warnings,
+		WarningCount: countDraftWarnings(drafts),
 		Model:        modelLabel,
 		Method:       string(method),
 		SourceFiles:  sourceFiles,
 		Outline:      outline,
 		Warnings:     docWarnings,
 		ElapsedMs:    time.Since(started).Milliseconds(),
-	}, nil
+	}
+	if err := s.saveExtractionResult(ctx, task, res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// countDraftWarnings 统计带提示的草稿数，两条抽取路径共用一套口径。
+func countDraftWarnings(drafts []importing.Draft) int {
+	n := 0
+	for i := range drafts {
+		if len(drafts[i].Warnings) > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // Upload 从上传的文档文件中抽取题目。
@@ -359,7 +381,7 @@ func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID 
 		return nil, err
 	}
 
-	res, err := importing.Ingest(data, name, s.imageSaver())
+	res, err := importing.Ingest(ctx, data, name, s.imageSaver())
 	if err != nil {
 		return nil, apperr.New(apperr.CodeInvalidParam, humanizeIngestError(err)).WithCause(err)
 	}
@@ -367,6 +389,27 @@ func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID 
 	source := res.Files
 	if len(source) == 0 {
 		source = []string{name}
+	}
+
+	// PDF 被渲染成页图时没有 Docs：内容在图里，由视觉模型去读。
+	// 这时不能再走下面那段"把多份文档拼成一段文本"的逻辑——
+	// res.Docs 是空的，取 [0] 会直接 panic。
+	if len(res.PageImages) > 0 {
+		resp, err := s.Extract(ctx, user, subjectID, &schema.ExtractRequest{
+			PageImages: res.PageImages,
+			Images:     answerImages,
+			Method:     method,
+			Mode:       mode,
+			Filename:   sourceLabel(name, len(source)),
+		})
+		if err != nil {
+			return nil, err
+		}
+		resp.SourceFiles = source
+		if len(res.Warnings) > 0 {
+			resp.Warnings = append(resp.Warnings, res.Warnings...)
+		}
+		return resp, nil
 	}
 
 	// 多份文档必须逐份解析：文末答案区是按题号回填的，两份都用 1/2/3 编号时，
@@ -1185,6 +1228,24 @@ func (s *ImportService) removeTaskFile(task *model.ImportTask) {
 	}
 }
 
+// saveExtractionResult 收尾：把整份抽取结果（含草稿）连同状态一起写进任务记录。
+//
+// 为什么非存不可：抽取要跑几十秒到几分钟，而结果此前**只存在于那一个
+// HTTP 响应里**。浏览器刷新、误点返回、关掉标签页，用户等出来的几十道题
+// 就再没有任何副本——任务行上只剩一个 total_count，导入历史里点
+// 「审核草稿」得到的是"该任务没有保存草稿"。于是"识别成功"与
+// "什么题目都没有录入"可以同时成立，而且用户完全看不出问题出在哪一步。
+//
+// 排队任务（worker）一直这么存，这里补上同步路径，两条路的结果形状一致。
+func (s *ImportService) saveExtractionResult(ctx context.Context, task *model.ImportTask, res *schema.ExtractResponse) error {
+	raw, err := model.JSONOf(res)
+	if err != nil {
+		return apperr.ErrInternal.WithCause(err)
+	}
+	task.Result = raw
+	return s.saveTaskState(ctx, task)
+}
+
 // saveTaskState 把任务的状态机字段与计数字段写回数据库。
 //
 // 集中在一处是为了避免"改了状态机却漏写某个字段"——
@@ -1201,6 +1262,9 @@ func (s *ImportService) saveTaskState(ctx context.Context, task *model.ImportTas
 //
 // 用 map 而不是 Save(struct)：GORM 的结构体更新会跳过零值，
 // 于是"重试时清空 error_msg / finished_at"会被静默丢掉。
+//
+// result 也在这里：抽取的草稿与入库的逐条失败原因都存进它，
+// 而这两样正是导入历史与"重新审核"要读的东西（见 saveExtractionResult）。
 func taskStateFields(t *model.ImportTask) map[string]any {
 	return map[string]any{
 		"status":       t.Status,
@@ -1211,6 +1275,7 @@ func taskStateFields(t *model.ImportTask) map[string]any {
 		"total_count":  t.TotalCount,
 		"saved_count":  t.SavedCount,
 		"failed_count": t.FailedCount,
+		"result":       t.Result,
 	}
 }
 
@@ -1221,49 +1286,77 @@ func importStatusLabel(s model.ImportTaskStatus) string {
 
 // ---- 模型抽取 ----
 
-// extractWithModel 调模型抽题；长文档会切成多块并发处理。
+// pagesPerCall 一次调用最多送几页图。
 //
-// 为什么切块：一次调用处理整份卷子，耗时几乎全在**输出**上——
-// 模型要为每道题写出结构化的答案与解析（实测约 1370 输出 token/题）。
-// 模型的输出速率是固定的，于是"整份一次调用"的墙钟时间等于
-// 那份输出需要的时间，既压不下去，还容易撞上供应商的超时上限：
-// 实测整份 6600 字节的卷子一次调用跑到 300 秒就被上游以 500 掐掉。
+// 这个数字来自实测：2026 全国 1 卷（3 页 21 题）在**完整抽取**（带答案与解析）
+// 下要约 5 万输出 token，而 32K 上限装不下——finish_reason=length 且 JSON 残缺，
+// 一道题都读不出来。每页约 1.7 万 token，于是"一次一页"最稳，两页就已经贴边。
 //
-// 切成若干块并发之后，总输出量不变，但每次调用都能在上限内跑完。
-// 返回值里的 warnings 用于如实告诉用户"哪几段没抽出来"——
-// 静默少几道题比明确报出来糟糕得多：用户会以为整卷都进来了。
+// 取 1 而不是 2：宁可多一次往返，也不要让"刚好差一点"变成整批报废。
+// 页面少的卷子（1~2 页）仍然只发一次调用，不受影响。
+//
+// 它只是起点而不是保证——题目密度无法预知，所以真正兜底的是
+// callPages 里"截断就拆半重试"。
+const pagesPerCall = 1
+
+// extractWithModel 调模型抽题。
+//
+// 文本与页图走**两条不同的切分策略**，因为它们的瓶颈不是一回事：
+//
+//   - 文本按题数切（见 importing.SplitForExtraction）：一次调用的耗时几乎全在
+//     输出上，而输出量由题数决定。
+//   - 页图按页切：页与页是天然边界，一页就是一道完整的题组，
+//     不像文本那样要担心把一道题劈成两半。
+//
+// 页图路径之前是**完全不切**的（"带图不切块"），那在只有一两页答案页时是对的；
+// 但 PDF 渲染出的页图可能有几十页，一次全发必然撞上输出上限——
+// 而输出被截断时 JSON 是残缺的，整份卷子的题一道都读不出来。
+// 这是比"少几道题"严重得多的失败。
 func (s *ImportService) extractWithModel(
 	ctx context.Context,
 	resolved *ResolvedModel,
 	content string,
-	images []string,
+	pageImages, answerImages []string,
 	opts importing.PromptOptions,
 ) ([]ai.ExtractedQuestion, []string, error) {
 	// 图片必须先变成模型**真正拿得到**的形态再发出去。
 	// 上传接口给的是 /media/xxx.jpg 这种本服务自己的相对路径，
 	// 远程模型没有任何办法去访问它——原样发过去等于没发。
-	dataURLs, imgWarnings, err := s.materializeImages(images)
+	pageData, pageWarn, err := s.materializeImages(pageImages)
 	if err != nil {
 		return nil, nil, err
 	}
+	answerData, answerWarn, err := s.materializeImages(answerImages)
+	if err != nil {
+		return nil, nil, err
+	}
+	imgWarnings := append(append([]string(nil), pageWarn...), answerWarn...)
 
-	call := func(text string) ([]ai.ExtractedQuestion, error) {
+	// 每次调用都带上答案页：它是对**整份卷子**的一次性说明，
+	// 只给其中某几次调用等于告诉模型"这一段没有答案"。
+	call := func(text string, imgs []string, pageCount, answerCount int) ([]ai.ExtractedQuestion, error) {
+		opts := opts
+		opts.PageImages = pageCount
+		opts.AnswerImages = answerCount
 		return resolved.Provider.ExtractQuestions(ctx, ai.ExtractRequest{
 			Model:  resolved.ModelName,
 			Prompt: importing.BuildSystemPrompt(opts),
 			// 提示词已经写进系统消息，schema 字段留着是空的。
 			Content:   importing.BuildUserContent(text, opts),
-			Images:    dataURLs,
+			Images:    imgs,
 			MaxTokens: resolved.MaxTokens,
 		})
 	}
 
-	// 带图时**不切块**：答案图片是对整份卷子的一次性说明，
-	// 切成几块分别配图只会让模型在每一块里都对着无关的页面猜。
-	// 于是图越多输入越大，代价落在 prefill 上——而 prefill 比输出快得多。
+	// ---- 页图路径：按页分批 ----
+	if len(pageData) > 0 {
+		return s.extractPageBatches(ctx, call, pageData, answerData, pagesPerCall, len(answerData), imgWarnings)
+	}
+
+	// ---- 文本路径：按题数切块 ----
 	chunks := importing.SplitForExtraction(content, 0)
-	if len(dataURLs) > 0 || len(chunks) <= 1 {
-		out, err := call(content)
+	if len(chunks) <= 1 {
+		out, err := call(content, answerData, 0, len(answerData))
 		return out, imgWarnings, err
 	}
 
@@ -1283,7 +1376,7 @@ func (s *ImportService) extractWithModel(
 				return
 			}
 			defer func() { <-sem }()
-			results[i], errs[i] = call(chunks[i].Text)
+			results[i], errs[i] = call(chunks[i].Text, answerData, 0, len(answerData))
 		}(i)
 	}
 	wg.Wait()
@@ -1314,6 +1407,169 @@ func (s *ImportService) extractWithModel(
 		merged = append(merged, reidentify(len(merged), results[i])...)
 	}
 	return merged, warnings, nil
+}
+
+// pageCall 一次页图调用的签名。
+type pageCall func(text string, imgs []string, pageCount, answerCount int) ([]ai.ExtractedQuestion, error)
+
+// extractPageBatches 把页图按页分批并发抽取，截断时自动对半拆。
+//
+// perCall 是一次送几页；生产上用 pagesPerCall。做成参数而不是读常量，
+// 是因为"3 页会超限、拆成 1+2 就能过"这类行为只有把批大小调大才测得出来——
+// 按生产值（1）跑，批次永远是单页，"会不会拆"这条分支根本走不到。
+//
+// 为什么并发而不是顺序：每批都要等模型读完那几页图（几十秒到几分钟），
+// 顺序跑十页就是十倍等待。而这些调用彼此独立，没有任何共享状态。
+//
+// 为什么还要"截断时对半拆"：perCall 是按常见卷子定的经验值，
+// 而题目密度是没法预知的——一份全是压轴大题的两页纸，两页一批照样会超。
+// 与其猜一个更小的数让每次都多跑几轮，不如超了就地退让：拆成两半重跑，
+// 直到能装下为止。拆到单页还装不下，说明单页内容就超过上限，如实报告。
+func (s *ImportService) extractPageBatches(
+	ctx context.Context,
+	call pageCall,
+	pageData, answerData []string,
+	perCall, answerCount int,
+	warnings []string,
+) ([]ai.ExtractedQuestion, []string, error) {
+	if perCall <= 0 {
+		perCall = 1
+	}
+	batches := chunkStrings(pageData, perCall)
+
+	results := make([][]ai.ExtractedQuestion, len(batches))
+	errs := make([]error, len(batches))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, importing.ExtractionConcurrency)
+
+	for i := range batches {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+			defer func() { <-sem }()
+			results[i], errs[i] = s.callPages(ctx, call, batches[i], answerData, answerCount, 0)
+		}(i)
+	}
+	wg.Wait()
+
+	var merged []ai.ExtractedQuestion
+	for i := range batches {
+		if errs[i] != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"第 %d 页组（共 %d 组）识别失败，该部分题目缺失：%s（%s）",
+				i+1, len(batches), pageRangeLabel(i, perCall), humanizeAIError(errs[i])))
+			slog.Warn("PDF 页组抽取失败", "batch", i, "error", errs[i])
+			continue
+		}
+		merged = append(merged, reidentify(len(merged), results[i])...)
+	}
+	if len(merged) == 0 {
+		return nil, nil, apperr.New(apperr.CodeAIUnavailable,
+			"这份 PDF 里的题目一道都没能识别出来").WithDetail("%s", strings.Join(warnings, "；"))
+	}
+	return merged, warnings, nil
+}
+
+// callPages 用一批页图调用模型，装不下就逐步细分。
+//
+// 两级细分，对应两种"装不下"：
+//  1. **多页一批装不下** → 拆成两半，各发一次（页是天然边界）。
+//  2. **单页就装不下** → 把这一页的图横向切成两条再发。
+//     实测 2026 全国 1 卷第 1 页，11 道题带解析就要 3 万多 token，
+//     32K 装不下——此时按页拆已经无能为力，只能拆页面本身。
+//
+// 深度有上限：拆到 maxSliceDepth 层仍然装不下，就如实报错。
+// 再切下去每段只剩几行字，模型既认不出题也写不出解析，
+// 那种结果比明确失败更糟——它看起来像成功了。
+func (s *ImportService) callPages(
+	ctx context.Context,
+	call pageCall,
+	pages, answerData []string,
+	answerCount int,
+	depth int,
+) ([]ai.ExtractedQuestion, error) {
+	imgs := make([]string, 0, len(pages)+len(answerData))
+	imgs = append(imgs, pages...)
+	imgs = append(imgs, answerData...)
+
+	out, err := call("", imgs, len(pages), answerCount)
+	if err == nil {
+		return out, nil
+	}
+	if !errors.Is(err, ai.ErrTruncated) || depth >= maxSliceDepth {
+		return nil, err
+	}
+
+	// 还能按页拆就先按页拆——比切图更保守，不会动到版面。
+	if len(pages) > 1 {
+		half := len(pages) / 2
+		slog.Info("页图批次输出被截断，拆页重试",
+			"pages", len(pages), "depth", depth, "left", half, "right", len(pages)-half)
+		lhs, lerr := s.callPages(ctx, call, pages[:half], answerData, answerCount, depth)
+		rhs, rerr := s.callPages(ctx, call, pages[half:], answerData, answerCount, depth)
+		return mergePartial(lhs, lerr, rhs, rerr)
+	}
+
+	// 只剩一页了：把这一页的图切成两条。
+	parts, serr := visionprep.SplitVertical(pages[0], 2)
+	if serr != nil || len(parts) < 2 {
+		// 切不动（图片过小或不是 data URL）：如实把截断报出去。
+		return nil, err
+	}
+	slog.Info("单页输出被截断，切图重试", "depth", depth, "parts", len(parts))
+
+	lhs, lerr := s.callPages(ctx, call, parts[:1], answerData, answerCount, depth+1)
+	rhs, rerr := s.callPages(ctx, call, parts[1:], answerData, answerCount, depth+1)
+	return mergePartial(lhs, lerr, rhs, rerr)
+}
+
+// maxSliceDepth 切图重试的层数上限。
+//
+// 2 层的意思是：整页 → 两半 → 每半再两半，最多把一页拆成 4 条。
+// 再多就切到认不出题了，而"看起来成功、题目却是碎的"是最难发现的一类坏结果。
+const maxSliceDepth = 2
+
+// mergePartial 合并两半的结果：一半失败时保留另一半。
+//
+// 全都失败才返回错误；只要有一半成功，就带着告警往下走——
+// 部分成功远好过整份重来，用户还能看见缺了哪部分。
+func mergePartial(lhs []ai.ExtractedQuestion, lerr error, rhs []ai.ExtractedQuestion, rerr error) ([]ai.ExtractedQuestion, error) {
+	switch {
+	case lerr != nil && rerr != nil:
+		return nil, lerr
+	case lerr != nil:
+		slog.Warn("细分后有一半失败", "error", lerr)
+		return rhs, nil
+	case rerr != nil:
+		slog.Warn("细分后有一半失败", "error", rerr)
+		return lhs, nil
+	}
+	return append(lhs, rhs...), nil
+}
+
+// chunkStrings 把切片按固定大小分批，保留顺序。
+func chunkStrings(in []string, size int) [][]string {
+	if size <= 0 || len(in) <= size {
+		return [][]string{in}
+	}
+	out := make([][]string, 0, (len(in)+size-1)/size)
+	for i := 0; i < len(in); i += size {
+		end := min(i+size, len(in))
+		out = append(out, in[i:end])
+	}
+	return out
+}
+
+// pageRangeLabel 给人看的页码范围，例如 "第 1~2 页"。
+func pageRangeLabel(index, perCall int) string {
+	from := index*perCall + 1
+	return fmt.Sprintf("第 %d~%d 页", from, from+perCall-1)
 }
 
 // materializeImages 把图片引用换成模型能真正拿到的东西。
@@ -1429,7 +1685,15 @@ func reidentify(offset int, block []ai.ExtractedQuestion) []ai.ExtractedQuestion
 	return out
 }
 
-// validateImages 校验图片是数据 URL 或 http(s) 地址。
+// validateImages 校验图片引用是模型能拿到的形态。
+//
+// 接受三类：data URL、http(s) 绝对地址、以及**本服务自己的媒体地址**
+// （/media/…）。第三类以前被这里挡掉了，可 materializeImages 明确是按它
+// 读回文件再内联的——两处对同一份输入给出相反判断，于是"存了图再交给模型"
+// 这条路根本走不通。PDF 渲染出的页图正是这种地址。
+//
+// 放开它不构成越权：读回时走 storage.Read，那里有媒体目录边界检查与
+// 绝对路径兜底（见 storage.Local.Read），传入 "../../etc/passwd" 会被挡下。
 func validateImages(images []string) error {
 	for i, img := range images {
 		s := strings.TrimSpace(img)
@@ -1439,10 +1703,11 @@ func validateImages(images []string) error {
 		}
 		ok := strings.HasPrefix(s, "data:image/") ||
 			strings.HasPrefix(s, "http://") ||
-			strings.HasPrefix(s, "https://")
+			strings.HasPrefix(s, "https://") ||
+			strings.HasPrefix(s, "/")
 		if !ok {
 			return apperr.New(apperr.CodeInvalidParam,
-				"图片必须是 data URL 或 http(s) 地址").WithDetail("第 %d 张", i+1)
+				"图片必须是 data URL、http(s) 地址或本站媒体地址").WithDetail("第 %d 张", i+1)
 		}
 		// 数据 URL 的大小上限：单张约 10MB（base64 后约 13MB）。
 		if len(s) > 14<<20 {

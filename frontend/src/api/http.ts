@@ -74,6 +74,16 @@ export const http: AxiosInstance = axios.create({
   timeout: 120_000, // 智能录题与 AI 对话耗时较长
 })
 
+/**
+ * 单次模型调用的超时。
+ *
+ * 服务端对一次解题给的预算是 5 分钟（service.solveTimeout），
+ * 客户端必须比它更宽：反过来设的话，浏览器先断开、服务端仍在跑，
+ * 用户看到"请求超时"，而答案其实已经写进题库——同一个动作，
+ * 界面上说失败、数据上说成功，是最难排查的一类不一致。
+ */
+export const AI_TIMEOUT: AxiosRequestConfig = { timeout: 330_000 }
+
 http.interceptors.request.use((config) => {
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`

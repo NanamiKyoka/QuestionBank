@@ -17,6 +17,7 @@ import {
   type ModuleContent,
 } from '@/api/paper'
 import type { QuestionBrief } from '@/api/types'
+import RichContent from '@/components/RichContent.vue'
 import CompositionNumberingPanel from '@/components/CompositionNumberingPanel.vue'
 import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
 import CompositionAiChangesBar from '@/components/CompositionAiChangesBar.vue'
@@ -1105,7 +1106,11 @@ function isUsed(row: QuestionBrief): boolean {
           >
             <div class="flex items-start gap-1">
               <el-tag v-if="isUsed(row)" size="small" type="info" effect="plain">已入卷</el-tag>
-              <span class="stem-clamp flex-1">{{ row.stem_text || '（无题干）' }}</span>
+              <RichContent
+                :doc="row.stem_doc"
+                compact
+                class="stem-clamp-1 flex-1"
+              />
             </div>
           </div>
 
@@ -1266,7 +1271,7 @@ function isUsed(row: QuestionBrief): boolean {
         </el-table-column>
         <el-table-column label="题干" min-width="320">
           <template #default="{ row }">
-            <div class="stem-clamp text-sm">{{ row.stem_text || '（无题干）' }}</div>
+            <RichContent :doc="row.stem_doc" compact class="stem-clamp text-sm" />
             <div class="mt-0.5 flex gap-1">
               <el-tag v-if="isUsed(row)" size="small" type="info" effect="plain">已入卷</el-tag>
               <el-tag size="small" effect="plain">{{ row.question_type_label }}</el-tag>
@@ -1374,13 +1379,6 @@ function isUsed(row: QuestionBrief): boolean {
 </template>
 
 <style scoped>
-.stem-clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
 :deep(.picked-row) {
   background-color: var(--el-color-primary-light-9);
 }

@@ -31,6 +31,7 @@ type Deps struct {
 	KnowledgePoints *service.KnowledgePointService
 	Tags            *service.TagService
 	Questions       *service.QuestionService
+	Solve           *service.SolveService
 	Users           *service.UserService
 	Papers          *service.PaperService
 	Exports         *service.ExportService
@@ -237,6 +238,7 @@ func registerTagRoutes(g *gin.RouterGroup, d Deps) {
 
 func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewQuestionHandler(d.Questions)
+	solve := handler.NewSolveHandler(d.Solve)
 
 	// 列表、新建、统计挂在学科下（统计路径更具体，需先注册）。
 	g.GET("/subjects/:subject_id/questions/stats", middleware.RequireAuth(), h.Stats)
@@ -257,6 +259,8 @@ func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
 		q.GET("/:id/review-logs", h.ReviewLogs)
 		q.POST("/:id/archive", h.Archive)
 		q.POST("/:id/unarchive", h.Unarchive)
+		// AI 解题：为这道题补写答案与解析（「仅录题」的后半段）。
+		q.POST("/:id/solve", solve.Solve)
 	}
 }
 

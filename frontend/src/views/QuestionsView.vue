@@ -241,6 +241,138 @@ async function onSaved(saved: QuestionDetail) {
   }
 }
 
+// ---- AI 解题 ----
+
+/**
+ * 解题进度。
+ *
+ * 逐题循环是刻意的（见后端 schema.SolveRequest）：每道题各自落库，
+ * 中途关页只丢没做到的那几道。代价是 N 次往返，所以进度必须可见——
+ * 一个转了三分钟却不知道走到哪儿的圈，用户只会以为系统死了。
+ */
+const solving = reactive({
+  active: false,
+  total: 0,
+  done: 0,
+  /** 纯文本回退（题干为空时用 #id 顶上）。 */
+  current: '',
+  /** 当前题的富文本题干，进度条上渲染它而不是 LaTeX 源码。 */
+  currentDoc: null as unknown,
+})
+
+/** 本次解题的结果清单，用于如实报告"哪几道没成"。 */
+const solveReport = ref<
+  { id: number; stem: string; doc: unknown; status: string; message: string }[]
+>([])
+
+/** 逐题调用；单题与批量共用同一条路径，行为不会两样。 */
+async function runSolve(rows: QuestionBrief[], overwrite: boolean) {
+  solving.active = true
+  solving.total = rows.length
+  solving.done = 0
+  solving.current = ''
+  try {
+    for (const row of rows) {
+      solving.current = row.stem_text || `#${row.id}`
+      solving.currentDoc = row.stem_doc ?? null
+      try {
+        const res = await questionApi.solve(row.id, overwrite)
+        solveReport.value.push({
+          id: row.id,
+          stem: row.stem_text || `#${row.id}`,
+          doc: row.stem_doc,
+          status: res.status,
+          message: res.message || (res.answered_text ? `答案：${res.answered_text}` : ''),
+        })
+      } catch (err) {
+        // 服务端返回的错误（没配模型、没权限）已经由 http 层弹过提示，
+        // 这里只把它记进清单，让循环能继续走完剩下的题。
+        solveReport.value.push({
+          id: row.id,
+          stem: row.stem_text || `#${row.id}`,
+          doc: row.stem_doc,
+          status: 'failed',
+          message: err instanceof Error ? err.message : '请求失败',
+        })
+      } finally {
+        solving.done += 1
+      }
+    }
+  } finally {
+    solving.active = false
+    solving.current = ''
+    solving.currentDoc = null
+  }
+}
+
+/**
+ * AI 解题（单题入口与批量入口都走这里）。
+ *
+ * 两遍走法：先按"不覆盖"跑一遍，把已有答案的题目原样保下来；
+ * 服务端如实回报有哪些被跳过，再由用户决定要不要覆盖。
+ * 直接默认覆盖的话，一次误点就能把人工核对过的答案换成模型输出，
+ * 而这件事在界面上是不可见的。
+ */
+async function solveQuestions(targets: QuestionBrief[]) {
+  if (!targets.length || solving.active) return
+  solveReport.value = []
+  await runSolve(targets, false)
+
+  const skipped = solveReport.value.filter((r) => r.status === 'skipped')
+  if (skipped.length) {
+    try {
+      await ElMessageBox.confirm(
+        `其中 ${skipped.length} 道已经有答案，未被改动。要用 AI 给出的答案覆盖它们吗？`,
+        '已有答案的题目',
+        { type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '保持原样' },
+      )
+    } catch {
+      // 选择"保持原样"：跳过就是结果，不必再问一次。
+      await finishSolve()
+      return
+    }
+    const ids = new Set(skipped.map((r) => r.id))
+    solveReport.value = solveReport.value.filter((r) => !ids.has(r.id))
+    await runSolve(
+      targets.filter((t) => ids.has(t.id)),
+      true,
+    )
+  }
+  await finishSolve()
+}
+
+/** 收尾：刷新列表、同步打开着的详情，并把结果说清楚。 */
+async function finishSolve() {
+  const solved = solveReport.value.filter((r) => r.status === 'solved').length
+  const failed = solveReport.value.filter((r) => r.status === 'failed')
+  const kept = solveReport.value.filter((r) => r.status === 'skipped').length
+
+  await load()
+  if (detail.value && solveReport.value.some((r) => r.id === detail.value?.id)) {
+    await openDetail(detail.value.id)
+  }
+
+  if (!solveReport.value.length) return
+  const parts = [`AI 解题完成：${solved} 道已写入`]
+  if (kept) parts.push(`${kept} 道保持原答案`)
+  if (failed.length) parts.push(`${failed.length} 道未成功`)
+  if (failed.length) {
+    ElMessage.warning(parts.join('，') + '，详见下方清单')
+  } else {
+    ElMessage.success(parts.join('，'))
+  }
+}
+
+/** 列表按钮的解题入口：每次只解当前这一行。 */
+function solveRow(row: QuestionBrief) {
+  void solveQuestions([row])
+}
+
+/** 批量入口：解选中的那一批（多选）。 */
+function solveSelected() {
+  void solveQuestions([...selection.value])
+}
+
 async function removeOne(row: QuestionBrief) {
   try {
     await ElMessageBox.confirm(`确定删除这道题吗？删除后可在回收站中恢复。`, '删除确认', {
@@ -651,6 +783,9 @@ function pad(n: number): string {
       <div v-if="selection.length" class="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
         <span class="text-sm text-gray-500">已选 {{ selection.length }} 项</span>
         <template v-if="canEdit">
+          <el-button size="small" type="primary" plain :loading="solving.active" @click="solveSelected">
+            AI 解题（{{ selection.length }} 道）
+          </el-button>
           <el-button size="small" @click="batchReview('submit')">批量提交审核</el-button>
           <el-button size="small" @click="batchSource">修改来源</el-button>
         </template>
@@ -661,6 +796,70 @@ function pad(n: number): string {
         <el-button v-if="canEdit" size="small" type="danger" plain @click="removeSelected">
           批量删除
         </el-button>
+      </div>
+    </el-card>
+
+    <!-- AI 解题：进度与结果 -->
+    <el-card v-if="solving.active || solveReport.length" shadow="never" class="mb-3">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-medium">AI 解题</span>
+          <el-tag v-if="solving.active" size="small" type="primary" effect="plain">
+            {{ solving.done }}/{{ solving.total }}
+          </el-tag>
+          <el-button
+            v-if="!solving.active"
+            text
+            size="small"
+            class="ml-auto"
+            @click="solveReport = []"
+          >
+            关闭
+          </el-button>
+        </div>
+      </template>
+
+      <div v-if="solving.active" class="text-xs text-gray-500">
+        <el-progress
+          :percentage="solving.total ? Math.round((solving.done / solving.total) * 100) : 0"
+          :stroke-width="10"
+        />
+        <div class="mt-1">
+          正在解题：
+          <RichContent
+            v-if="solving.currentDoc"
+            :doc="solving.currentDoc"
+            compact
+            class="stem-clamp-1 inline"
+          />
+          <span v-else>{{ solving.current || '准备中' }}</span>
+          。每道题各自落库，可以中途离开。
+        </div>
+      </div>
+
+      <div v-else class="text-xs">
+        <div class="mb-1 text-gray-500">
+          已写入 {{ solveReport.filter((r) => r.status === 'solved').length }} 道；
+          保持原答案 {{ solveReport.filter((r) => r.status === 'skipped').length }} 道；
+          未成功 {{ solveReport.filter((r) => r.status === 'failed').length }} 道。
+        </div>
+        <div
+          v-for="item in solveReport.filter((r) => r.status !== 'solved')"
+          :key="item.id"
+          class="mt-1 flex gap-2"
+        >
+          <el-tag size="small" :type="item.status === 'skipped' ? 'info' : 'danger'">
+            {{ item.status === 'skipped' ? '保持原答案' : '未成功' }}
+          </el-tag>
+          <RichContent
+            v-if="item.doc"
+            :doc="item.doc"
+            compact
+            class="stem-clamp-1 text-gray-500"
+          />
+          <span v-else class="text-gray-500">{{ item.stem }}</span>
+          <span class="text-gray-400">{{ item.message }}</span>
+        </div>
       </div>
     </el-card>
 
@@ -676,11 +875,16 @@ function pad(n: number): string {
         <el-table-column label="题干" min-width="360">
           <template #default="{ row }">
             <div class="cursor-pointer" @click="openDetail(row.id)">
-              <div class="stem-clamp text-sm">
-                <!-- 列表项只有纯文本投影（QuestionBrief 刻意不返回富文本），
-                     公式在列表里显示为 LaTeX 源码，详情抽屉才做排版渲染。 -->
-                <span v-if="row.stem_text">{{ row.stem_text }}</span>
-                <span v-else class="text-gray-400">（无题干）</span>
+              <!-- 渲染富文本而不是 stem_text：后者是给检索用的纯文本投影，
+                   公式会被摊平成 LaTeX 源码（\boldsymbol{a} 直接显示出来）。 -->
+              <RichContent
+                v-if="row.stem_doc"
+                :doc="row.stem_doc"
+                compact
+                class="stem-clamp text-sm"
+              />
+              <div v-else class="stem-clamp text-sm text-gray-400">
+                {{ row.stem_text || '（无题干）' }}
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-1">
                 <el-tag v-if="row.parent_id" size="small" type="warning" effect="plain">子题</el-tag>
@@ -741,7 +945,7 @@ function pad(n: number): string {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="270" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button text size="small" @click="openDetail(row.id)">查看</el-button>
 
@@ -750,6 +954,17 @@ function pad(n: number): string {
                    界面此前把按钮锁在 draft 上，是在替服务端撒一个它没撒的谎。
                    改动的后果（试卷提示题目已改动 + 审核记录）在弹窗里说明。 -->
               <el-button text size="small" @click="openEdit(row)">编辑</el-button>
+              <!-- 「仅录题」的另一半：为这道题补写答案与解析。
+                   已有答案的题不会被无声覆盖，服务端会回报"跳过"再问一次。 -->
+              <el-button
+                text
+                size="small"
+                type="primary"
+                :disabled="solving.active"
+                @click="solveRow(row)"
+              >
+                AI 解题
+              </el-button>
               <el-button text size="small" @click="openAddChild(row)">小问</el-button>
               <el-button
                 v-if="row.status === 'draft'"
@@ -833,7 +1048,11 @@ function pad(n: number): string {
                 @click="jumpTo(child.id)"
               >
                 <el-tag size="small" :type="statusTag(child.status)">{{ child.status_label }}</el-tag>
-                <span class="flex-1 truncate">{{ child.stem_text || '（无题干）' }}</span>
+                <RichContent
+                  :doc="child.stem_doc"
+                  compact
+                  class="stem-clamp-1 flex-1 text-sm"
+                />
               </div>
             </div>
             <el-button

@@ -3,6 +3,7 @@ package importing
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/NanamiKyoka/questionmind/internal/pdfium"
 	"github.com/NanamiKyoka/questionmind/internal/pdftext"
 )
 
@@ -47,6 +49,16 @@ type IngestResult struct {
 	Files []string
 	// Warnings 摄取过程中的提示（如跳过了不支持的成员）。
 	Warnings []string
+
+	// PageImages 由 PDF 渲染出来的页图地址（已存入媒体库）。
+	//
+	// PDF 与其它格式的根本差别在这里：其它格式取到的是**文字**，
+	// 而 PDF 取到文字就意味着公式被拆散（见 ingestPDF），
+	// 所以 PDF 走的是"渲染成图交给视觉模型"这条路——
+	// 于是它不进 Docs，而是把页图放在这里，由 service 层转交抽取流程。
+	//
+	// 为空表示本次没有页图（即不是 PDF，或 PDF 渲染失败）。
+	PageImages []string
 }
 
 // 摄取上限。都是为了挡住"一个压缩包把服务端打爆"这类输入。
@@ -82,10 +94,11 @@ func UploadSupported(filename string) bool {
 // 界面、错误提示与文档共用同一份，免得三处各写一遍然后慢慢漂移。
 func UploadExtHint() string { return ".md / .txt / .docx / .pdf / .zip" }
 
-// Ingest 把上传内容转成文档文本。
+// Ingest 把上传内容转成文档文本（PDF 则是转成页图）。
 //
 // filename 用于决定格式与在结果里登记来源名。
-func Ingest(data []byte, filename string, images ImageSaver) (*IngestResult, error) {
+// images 用于存下 PDF 渲染出的页图；为 nil 时 PDF 退回文本层。
+func Ingest(ctx context.Context, data []byte, filename string, images ImageSaver) (*IngestResult, error) {
 	if len(data) > MaxDocFileBytes {
 		return nil, fmt.Errorf("文件过大（上限 %d MB）", MaxDocFileBytes>>20)
 	}
@@ -95,7 +108,7 @@ func Ingest(data []byte, filename string, images ImageSaver) (*IngestResult, err
 	case ext == ".zip":
 		return ingestZip(data, filename, images)
 	case ext == ".pdf":
-		return ingestPDF(data, filename)
+		return ingestPDF(ctx, data, filename, images)
 	case ext == ".docx":
 		text, warn, err := DocxToMarkdown(data, images)
 		if err != nil {
@@ -123,24 +136,81 @@ func Ingest(data []byte, filename string, images ImageSaver) (*IngestResult, err
 // "3. 已知 sinα = ，则 cos2α = ．" 夹着孤零零的一行 "1" 和一行 "5"。
 // 不说明来历的话，模型多半会把这些碎片当成正文里多出来的段落，
 // 凭空多出好几道"题"。
+//
+// **仅用于回退路径**（渲染不可用时）。正常情况下 PDF 走渲染成图那条路，
+// 公式不会丢，这个前缀也就用不上了。
 const PDFTextPrefix = "<!-- 来源：PDF 文本层。公式与上下标已按视觉位置拆开，" +
 	"分式的分子分母、根号、上下标可能落在相邻行；" +
 	"请结合上下文还原成 LaTeX，例如 x2 还原为 x^2、竖排的分子分母还原为 \\frac{a}{b}。 -->\n"
 
 // PDFLayoutNote 追加到文档级警告里的版面说明。
+//
+// 只在**文本层回退路径**上出现：走渲染路径时公式是完好的，
+// 再告诉模型"公式被拆开了"反而会让它去修补不存在的缺陷。
 const PDFLayoutNote = "PDF 版面提示：公式与上下标在文本层里是拆开的，" +
 	"分式的分子分母会落在相邻两行；几何图形只保留标注文字、不含线条，" +
 	"请在识别结果里把公式还原为 LaTeX，图形部分留空由人工补图。"
 
-// ingestPDF 从 PDF 的文本层取出题面文字。
+// ingestPDF 把 PDF 渲染成页图，交给视觉模型识别。
 //
-// 刻意**不渲染页面**：渲染要完整实现字体、路径与图像的栅格化，
-// 是另一个数量级的工程，而录题要的是题面文字。文本层加坐标已经
-// 足够让模型还原公式与表格；图形部分如实告诉用户需要补图——
-// 凭空生成一张画不出来却看着像那么回事的图，比说清楚更糟。
-func ingestPDF(data []byte, filename string) (*IngestResult, error) {
+// 为什么不用文本层：那条路对数学公式是**结构性失效**的。公式在 PDF 里
+// 由定位字形排版，文本层只能按视觉顺序取字符，于是 sin(7π/6) 变成
+// "已知集合 A = sin ,cos ,tan" 夹着一行 "7π/6 5π/3 5π/4"。
+// 实测 2026 全国 1 卷：文本层有 463 个字母、377 个数字，抽完只剩个位数——
+// 信息在取字那一步就没了，后面任何提示词都救不回来。
+// 渲染成图则由视觉模型直接看排版结果，同样一份卷子题干里剩 775 个字母。
+//
+// 渲染本身很快（实测 3 页 A4 共 63 ms），慢的是模型读图（数分钟），
+// 但那换来的是能用的题目。
+//
+// 渲染不可用时退回文本层：宁可给一份公式残缺的草稿并明确告知，
+// 也好过直接拒绝——文本对英语卷、语文卷这类公式不密集的材料是够用的。
+func ingestPDF(ctx context.Context, data []byte, filename string, images ImageSaver) (*IngestResult, error) {
+	var warns []string
+
+	pages, renderErr := pdfium.Render(ctx, data)
+	if renderErr == nil && len(pages) > 0 {
+		if images == nil {
+			// 没有存图的地方就渲染了也交不出去。
+			// 这里选择退回文字层而不是报错：降级后至少还有一份草稿，
+			// 而"整份拒绝"对用户没有任何好处——他只是想录题而已。
+			warns = append(warns, "当前部署无法保存页图，本次改用文字层识别")
+		} else {
+			base := strings.TrimSuffix(filename, path.Ext(filename))
+			refs := make([]string, 0, len(pages))
+			for _, p := range pages {
+				url, err := images.Save(p.PNG, fmt.Sprintf("%s-p%02d.png", base, p.Index+1))
+				if err != nil {
+					// 单页存不下就跳过这一页，而不是让整份卷子进不来。
+					warns = append(warns, fmt.Sprintf("第 %d 页图保存失败，已跳过：%v", p.Index+1, err))
+					continue
+				}
+				refs = append(refs, url)
+			}
+			if len(refs) > 0 {
+				warns = append(warns, fmt.Sprintf(
+					"PDF 已渲染为 %d 页图片交给模型识别（公式与几何图形按排版原样保留，比文字层准确得多）", len(refs)))
+				return &IngestResult{
+					PageImages: refs,
+					Files:      []string{filename},
+					Warnings:   warns,
+				}, nil
+			}
+			// 存图全失败了，退回文本层再试一次。
+			warns = append(warns, "页图未能保存，改用文字层识别")
+		}
+	}
+
+	return ingestPDFTextLayer(data, filename, renderErr, warns)
+}
+
+// ingestPDFTextLayer 从 PDF 文本层取题面文字（渲染路径不可用时的回退）。
+func ingestPDFTextLayer(data []byte, filename string, renderErr error, extraWarnings []string) (*IngestResult, error) {
 	res, err := pdftext.Extract(data)
 	if err != nil {
+		if renderErr != nil {
+			return nil, fmt.Errorf("这份 PDF 既渲染不成（%v）也读不出文字层（%v）", renderErr, err)
+		}
 		return nil, err
 	}
 	if !res.HasText() {
@@ -148,8 +218,14 @@ func ingestPDF(data []byte, filename string) (*IngestResult, error) {
 			"这份 PDF 没有可读取的文字层，多半是扫描件或纯图片；请改用「上传图片」逐页截图识别")
 	}
 
-	warnings := append([]string(nil), res.Warnings...)
+	warnings := append([]string(nil), extraWarnings...)
+	warnings = append(warnings, res.Warnings...)
 	warnings = append(warnings, PDFLayoutNote)
+	if renderErr != nil {
+		warnings = append([]string{
+			fmt.Sprintf("页图渲染不可用（%v），本次改用文字层识别：数学公式会大量缺失，识别后请重点核对题干", renderErr),
+		}, warnings...)
+	}
 
 	return &IngestResult{
 		Docs:     []IngestedDoc{{Name: filename, Text: PDFTextPrefix + res.Text}},
@@ -231,7 +307,13 @@ func ingestZip(data []byte, filename string, images ImageSaver) (*IngestResult, 
 				continue
 			}
 		case ".pdf":
-			pdfRes, err := ingestPDF(buf, path.Base(name))
+			// 归档里的 PDF 走文字层，不走渲染。
+			//
+			// 渲染路径产出的是页图，而归档这条链路的产物是"多份文档的文本"，
+			// 两者没法塞进同一个结构；而一个压缩包里塞几十份 PDF 各自渲染
+			// 再逐份调模型，成本与等待都不是用户预期内的。
+			// 归档里带 PDF 时按文字层解析，并在告警里说清楚公式会缺失。
+			pdfRes, err := ingestPDFTextLayer(buf, path.Base(name), nil, nil)
 			if err != nil {
 				warns = append(warns, fmt.Sprintf("无法解析 %s：%v", name, err))
 				continue

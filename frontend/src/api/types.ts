@@ -202,7 +202,16 @@ export interface QuestionBrief {
   status: QuestionStatus
   status_label: string
   visibility: Visibility
+  /** 题干纯文本投影，只用于检索与不需要排版的地方。 */
   stem_text: string
+  /**
+   * 题干富文本，列表用它渲染。
+   *
+   * 列表曾经只显示 `stem_text`，而那是把公式摊平的纯文本：
+   * "已知平面向量 $\boldsymbol{a}$" 在题库里显示成字面的 \boldsymbol{a}。
+   * 详情接口不带这个字段（那里有 stem）。
+   */
+  stem_doc?: RichDoc | null
   tags: TagBrief[]
   knowledge_points: KnowledgePointBrief[]
   child_count: number
@@ -232,6 +241,29 @@ export interface QuestionDetail extends QuestionBrief {
   review_count: number
   children: QuestionBrief[]
   permissions: QuestionPermissions
+}
+
+/**
+ * 题库内 AI 解题的结果。
+ *
+ * 三种 status 都是**成功响应**：逐题循环调用时，一道题答不出来
+ * （模型抽风、空位对不上）不该让后面九道一起做不下去。
+ * 真正的硬错误（没权限、题目不存在、没配模型）才会以 HTTP 错误返回。
+ */
+export interface SolveResult {
+  question_id: number
+  status: 'solved' | 'skipped' | 'failed'
+  message?: string
+  answer: AnswerSpec
+  analysis?: RichDoc | null
+  /** 模型给的解析原文，富文本不便在弹窗里预览时用它。 */
+  analysis_markdown?: string
+  /** 人可读的答案摘要，例如 "B"、"第1空 3；第2空 x=1"。 */
+  answered_text?: string
+  warnings?: string[]
+  /** 写入后的题目详情，用来就地刷新列表行与详情抽屉。 */
+  question?: QuestionDetail
+  model?: string
 }
 
 /**

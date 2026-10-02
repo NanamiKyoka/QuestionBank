@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import type { QuestionBrief, QuestionType } from '@/api/types'
+import type { QuestionBrief, QuestionType, RichDoc } from '@/api/types'
 
 /**
  * 试题篮。
@@ -18,6 +18,12 @@ export interface BasketItem {
   subject_id: number
   /** 题干纯文本预览。 */
   stem_text: string
+  /**
+   * 题干富文本。篮子是给人挑题用的，公式按源码显示（\frac{1}{2}）
+   * 会让整栏都读不下去，所以预览必须能排版。
+   * 老版本存进 localStorage 的条目没有这个字段，按 stem_text 回退。
+   */
+  stem_doc?: RichDoc | null
   question_type: QuestionType
   question_type_label: string
   difficulty: number
@@ -31,6 +37,7 @@ export function toBasketItem(row: QuestionBrief): BasketItem {
     id: row.id,
     subject_id: row.subject_id,
     stem_text: row.stem_text || '',
+    stem_doc: row.stem_doc ?? null,
     question_type: row.question_type,
     question_type_label: row.question_type_label,
     difficulty: row.difficulty,

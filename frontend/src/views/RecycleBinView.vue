@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { questionApi } from '@/api'
 import { paperApi, type PaperBrief, type PaperScope } from '@/api/paper'
 import type { QuestionBrief, QuestionSort, QuestionType } from '@/api/types'
+import RichContent from '@/components/RichContent.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -225,7 +226,13 @@ function formatTime(value: string): string {
           <el-table v-loading="questionLoading" :data="questionRows" row-key="id" class="mt-3">
             <el-table-column label="题干" min-width="320">
               <template #default="{ row }">
-                <div class="text-sm">{{ row.stem_text || '（无题干）' }}</div>
+                <RichContent
+                  v-if="row.stem_doc"
+                  :doc="row.stem_doc"
+                  compact
+                  class="stem-clamp text-sm"
+                />
+                <div v-else class="text-sm text-gray-400">{{ row.stem_text || '（无题干）' }}</div>
                 <div v-if="row.source" class="mt-0.5 truncate text-xs text-gray-400">
                   来源：{{ row.source }}
                 </div>

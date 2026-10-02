@@ -95,7 +95,7 @@ func paperText(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("读取 PDF 失败: %v", err)
 	}
-	res, err := Ingest(raw, "paper.pdf", nil)
+	res, err := Ingest(context.Background(), raw, "paper.pdf", nil)
 	if err != nil {
 		t.Fatalf("摄取失败: %v", err)
 	}

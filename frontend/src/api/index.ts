@@ -1,4 +1,4 @@
-import { get, patch, post, put, del, type PageResult } from './http'
+import { get, patch, post, put, del, AI_TIMEOUT, type PageResult } from './http'
 import type {
   KnowledgePoint,
   LoginResponse,
@@ -12,6 +12,7 @@ import type {
   QuestionUpdatePayload,
   ReviewLog,
   SetupStatus,
+  SolveResult,
   Subject,
   SubjectMember,
   SubjectRole,
@@ -192,6 +193,17 @@ export const questionApi = {
     post<QuestionBatchResult>('/questions/batch-review', { ids, action, comment }),
 
   submit: (id: number) => post<QuestionDetail>(`/questions/${id}/submit`),
+
+  /**
+   * AI 解题：让模型为这道题补写答案与解析。
+   *
+   * 默认不动已有答案（`overwrite: false`）——「仅录题」进来的题目是空的，
+   * 那才是这个入口的主场；覆盖一份人工核对过的答案是另一回事，
+   * 需要调用方显式要求。批量解题由调用方循环调用本接口：
+   * 每道题各自落库，中途中断只丢没做到的那几道。
+   */
+  solve: (id: number, overwrite = false) =>
+    post<SolveResult>(`/questions/${id}/solve`, { overwrite }, AI_TIMEOUT),
   review: (id: number, action: 'approve' | 'reject', comment = '') =>
     post<QuestionDetail>(`/questions/${id}/review`, { action, comment }),
   reviewLogs: (id: number) => get<ReviewLog[]>(`/questions/${id}/review-logs`),

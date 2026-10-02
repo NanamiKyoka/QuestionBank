@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/NanamiKyoka/questionmind/internal/aiagent"
+	"github.com/NanamiKyoka/questionmind/internal/domain"
 	"github.com/NanamiKyoka/questionmind/internal/importing"
 	"github.com/NanamiKyoka/questionmind/internal/model"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
@@ -615,10 +616,10 @@ func questionDetailResult(d *schema.QuestionDetail) aiagent.ToolResult {
 		"type_label":     d.QuestionTypeLabel,
 		"difficulty":     d.Difficulty,
 		"status":         string(d.Status),
-		"stem":           d.StemText,
+		"stem":           markdownFromJSON(d.Stem),
 		"answer":         d.Answer,
 		"stem_richtext":  json.RawMessage(d.Stem),
-		"analysis_text":  plainFromJSON(d.Analysis),
+		"analysis_text":  markdownFromJSON(d.Analysis),
 		"children_count": len(d.Children),
 	}
 	if len(d.Options) > 0 {
@@ -626,7 +627,7 @@ func questionDetailResult(d *schema.QuestionDetail) aiagent.ToolResult {
 		for _, o := range d.Options {
 			opts = append(opts, map[string]string{
 				"label": o.Label,
-				"text":  plainFromJSON(o.Content),
+				"text":  markdownFromJSON(o.Content),
 			})
 		}
 		payload["options"] = opts
@@ -636,7 +637,7 @@ func questionDetailResult(d *schema.QuestionDetail) aiagent.ToolResult {
 		for i := range d.Children {
 			kids = append(kids, map[string]any{
 				"id":   d.Children[i].ID,
-				"stem": truncateRunes(d.Children[i].StemText, 80),
+				"stem": truncateRunes(markdownFromJSON(d.Children[i].StemDoc), 80),
 			})
 		}
 		payload["children"] = kids
@@ -644,39 +645,24 @@ func questionDetailResult(d *schema.QuestionDetail) aiagent.ToolResult {
 	return marshalResult(payload)
 }
 
-// plainFromJSON 从富文本 JSON 中提取纯文本。
-func plainFromJSON(raw model.JSON) string {
+// markdownFromJSON 把富文本还原成带 $ 定界符的 Markdown 文本。
+//
+// 早先这里是一个只认 text 字段的手写递归，于是 inlineMath / blockMath
+// 节点**整段消失**：公式的文字藏在 attrs.latex 里而不是 content 里，
+// 走不到 text 分支。模型看到的是"若 ，则…"——题干残缺、选项变空串，
+// 于是它给出的判断多半是错的，而错误原因却看不出在这里。
+//
+// domain.MarkdownText 是同一份文档树在"喂给模型"这条路径上的既定实现，
+// 公式、空位、表格、图片占位都处理过，直接复用而不是再写一份。
+func markdownFromJSON(raw model.JSON) string {
 	if raw.IsEmpty() {
 		return ""
 	}
-	var sb strings.Builder
-	var walk func(v any)
-	walk = func(v any) {
-		switch node := v.(type) {
-		case map[string]any:
-			if t, ok := node["text"].(string); ok {
-				sb.WriteString(t)
-			}
-			if node["type"] == "blank" {
-				sb.WriteString("______")
-			}
-			if content, ok := node["content"].([]any); ok {
-				for _, c := range content {
-					walk(c)
-				}
-			}
-		case []any:
-			for _, c := range node {
-				walk(c)
-			}
-		}
-	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	var doc domain.RichDoc
+	if err := raw.Into(&doc); err != nil {
 		return ""
 	}
-	walk(decoded)
-	return strings.TrimSpace(sb.String())
+	return domain.MarkdownText(doc)
 }
 
 // marshalResult 把结构序列化为回喂模型的文本。
