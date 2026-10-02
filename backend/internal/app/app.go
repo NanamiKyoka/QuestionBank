@@ -166,26 +166,37 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 	// 顺序反了会得到一堆莫名其妙的 "database is closed"。
 	app.cleanups = append(app.cleanups, importWorker.Stop)
 
+	statsSvc := service.NewStatsService(repos)
+	subjectSvc := service.NewSubjectService(repos)
+	tagSvc := service.NewTagService(repos)
+	paperSvc := service.NewPaperService(repos)
+
 	app.Engine = router.New(router.Deps{
 		Config:          cfg,
 		DB:              gdb,
 		Tokens:          tokens,
 		Auth:            authSvc,
-		Subjects:        service.NewSubjectService(repos),
+		Subjects:        subjectSvc,
 		KnowledgePoints: kpSvc,
-		Tags:            service.NewTagService(repos),
+		Tags:            tagSvc,
 		Questions:       questionSvc,
 		// 题库内 AI 解题：「仅录题」省下来的那部分输出，由这里按题补回来。
 		Solve:    service.NewSolveService(repos, aiConfigSvc, questionSvc),
 		Users:    service.NewUserService(repos),
-		Papers:   service.NewPaperService(repos),
+		Papers:   paperSvc,
 		Exports:  service.NewExportService(repos, mediaStore),
 		AIConfig: aiConfigSvc,
 		Imports:  importSvc,
-		Chat: service.NewChatService(repos, aiConfigSvc, questionSvc,
-			kpSvc,
-			service.NewTagService(repos),
-			service.NewPaperService(repos),
+		Chat: service.NewChatService(repos, aiConfigSvc, service.ChatDeps{
+			Questions:       questionSvc,
+			KnowledgePoints: kpSvc,
+			Tags:            tagSvc,
+			Papers:          paperSvc,
+			Subjects:        subjectSvc,
+			Stats:           statsSvc,
+			Vectors:         vectorSvc,
+			Imports:         importSvc,
+		},
 			aiagent.NewChannel(0),
 			aiagent.Budget{
 				MaxTurns:     cfg.AI.MaxTurns,
@@ -193,7 +204,7 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 				WallClock:    cfg.AI.WallClock,
 			}),
 		Vectors:    vectorSvc,
-		Stats:      service.NewStatsService(repos),
+		Stats:      statsSvc,
 		Activities: activitySvc,
 		Settings:   service.NewSettingsService(repos),
 		// 提示词服务在构造时把自己注册为 importing 的模板来源，

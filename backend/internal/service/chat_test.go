@@ -123,11 +123,14 @@ func newChatFixture(t *testing.T, turns []string) *chatFixture {
 
 func newChatServiceForTest(t *testing.T, repos *Repos, aiSvc *AIConfigService) *ChatService {
 	t.Helper()
-	return NewChatService(repos, aiSvc,
-		NewQuestionService(repos),
-		NewKnowledgePointService(repos),
-		NewTagService(repos),
-		NewPaperService(repos),
+	return NewChatService(repos, aiSvc, ChatDeps{
+		Questions:       NewQuestionService(repos),
+		KnowledgePoints: NewKnowledgePointService(repos),
+		Tags:            NewTagService(repos),
+		Papers:          NewPaperService(repos),
+		Subjects:        NewSubjectService(repos),
+		Stats:           NewStatsService(repos),
+	},
 		aiagent.NewChannel(200*time.Millisecond),
 		aiagent.Budget{MaxTurns: 4, MaxToolCalls: 5, WallClock: 10 * time.Second},
 	)
@@ -418,9 +421,10 @@ func TestChatToolRegistryIsWired(t *testing.T) {
 	fx := newChatFixture(t, []string{textTurn("x")})
 	names := fx.svc.Registry().Names()
 	want := []string{
-		"add_questions_to_paper", "create_paper", "edit_paper", "get_question",
-		"list_knowledge_points", "list_tags", "propose_questions",
-		"read_paper_outline", "search_questions",
+		"add_questions_to_paper", "create_paper", "edit_paper", "get_paper",
+		"get_question", "get_subject_stats", "list_knowledge_points", "list_papers",
+		"list_review_queue", "list_subjects", "list_tags", "propose_questions",
+		"read_paper_outline", "search_questions", "semantic_search_knowledge_points",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("工具数量不符，期望 %d 个，实际 %d 个: %v", len(want), len(names), names)

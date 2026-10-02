@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
 	"github.com/NanamiKyoka/questionmind/internal/model"
@@ -137,6 +138,22 @@ func (c ToolCall) ArgStringSlice(key string) []string {
 		}
 	}
 	return out
+}
+
+// ArgBool 取布尔参数。
+//
+// 缺省为 false：布尔开关的语义天然偏向"不做"，而模型漏写一个可选的
+// dry_run 恰恰是我们希望它落到的分支。
+func (c ToolCall) ArgBool(key string) bool {
+	switch v := c.Arguments[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	case float64:
+		return v != 0
+	}
+	return false
 }
 
 // ToolResult 工具执行结果。

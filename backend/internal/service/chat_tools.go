@@ -17,23 +17,28 @@ import (
 )
 
 // toolDeps 工具实现所需的业务服务。
+//
+// 全部走 service 层，因此**与 HTTP 接口共用同一套鉴权与校验**；
+// 客户端工具只做服务端预处理，真正的执行由前端完成。
 type toolDeps struct {
 	questions       *QuestionService
 	knowledgePoints *KnowledgePointService
 	tags            *TagService
 	papers          *PaperService
+	subjects        *SubjectService
+	stats           *StatsService
+	vectors         *VectorService
+	imports         *ImportService
 }
 
 // buildToolRegistry 注册全部暴露给模型的工具。
-//
-// 服务端工具直接调用 service 层，因此**与 HTTP 接口共用同一套鉴权与校验**；
-// 客户端工具只做服务端预处理，真正的执行由前端完成。
 func buildToolRegistry(deps toolDeps) *aiagent.Registry {
 	r := aiagent.NewRegistry()
 
 	registerQuestionTools(r, deps)
 	registerLibraryTools(r, deps)
 	registerPaperTools(r, deps)
+	registerReadTools(r, deps)
 
 	return r
 }
@@ -43,31 +48,52 @@ func buildToolRegistry(deps toolDeps) *aiagent.Registry {
 func registerQuestionTools(r *aiagent.Registry, deps toolDeps) {
 	r.MustRegister(&aiagent.Tool{
 		Name: "search_questions",
-		Description: "按关键词、题型、难度等条件检索题库中的题目。返回题目 id、题型、难度与题干摘要。" +
-			"当用户想找题、想了解题库里有什么时使用。",
+		Description: "按关键词、题型、难度、状态、知识点或标签检索题库中的题目。返回题目 id、题型、难度与题干摘要。" +
+			"当用户想找题、想了解题库里有什么，或要整理前先摸清某一类的现状时使用。",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"keyword":       map[string]any{"type": "string", "description": "题干关键词"},
 				"question_type": map[string]any{"type": "string", "enum": []string{"single_choice", "multiple_choice", "fill_blank", "true_false", "essay"}},
 				"difficulty":    map[string]any{"type": "integer", "minimum": 1, "maximum": 5},
-				"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "description": "最多返回几道题，默认 8"},
+				"status": map[string]any{
+					"type": "string", "enum": []string{"draft", "pending", "published", "archived"},
+					"description": "按状态筛选。省略则不限状态。",
+				},
+				"knowledge_point_ids": map[string]any{
+					"type": "array", "items": map[string]any{"type": "integer"},
+					"description": "只返回关联了这些知识点的题目，id 取自 list_knowledge_points",
+				},
+				"include_sub": map[string]any{
+					"type":        "boolean",
+					"description": "是否包含子知识点下的题目，默认 true",
+				},
+				"source":       map[string]any{"type": "string", "description": "来源模糊匹配，可省略"},
+				"only_deleted": map[string]any{"type": "boolean", "description": "查回收站里的已删除题目"},
+				"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": 30, "description": "最多返回几道题，默认 8"},
+				"offset":       map[string]any{"type": "integer", "minimum": 0, "description": "翻页用，默认 0"},
 			},
 		},
 		Executor: aiagent.ExecutorServer,
-		Scenes:   []aiagent.Scene{aiagent.SceneQuestionLibrary, aiagent.SceneCompositionEditor, aiagent.SceneImportReview},
+		Scenes:   readScenes,
 		Handler: func(ctx context.Context, call aiagent.ToolCall) (aiagent.ToolResult, error) {
-			limit := call.ArgInt("limit")
-			if limit <= 0 || limit > 20 {
-				limit = 8
+			limit := clampArgInt(call.ArgInt("limit"), 1, 30, 8)
+			offset := call.ArgInt("offset")
+			if offset < 0 {
+				offset = 0
 			}
 
 			briefs, total, err := deps.questions.List(ctx, call.User, call.SubjectID, ListQuery{
-				Keyword:    call.ArgString("keyword"),
-				Type:       model.QuestionType(call.ArgString("question_type")),
-				Difficulty: call.ArgInt("difficulty"),
-				RootOnly:   true,
-			}, limit, 0)
+				Keyword:           call.ArgString("keyword"),
+				Type:              model.QuestionType(call.ArgString("question_type")),
+				Difficulty:        call.ArgInt("difficulty"),
+				Status:            model.QuestionStatus(call.ArgString("status")),
+				KnowledgePointIDs: call.ArgUintSlice("knowledge_point_ids"),
+				IncludeSub:        call.ArgBool("include_sub"),
+				Source:            call.ArgString("source"),
+				OnlyDeleted:       call.ArgBool("only_deleted"),
+				RootOnly:          true,
+			}, limit, offset)
 			if err != nil {
 				return aiagent.ToolResult{}, err
 			}
@@ -79,7 +105,7 @@ func registerQuestionTools(r *aiagent.Registry, deps toolDeps) {
 				}, nil
 			}
 
-			return questionListResult(briefs, total), nil
+			return questionListResult(briefs, total, offset), nil
 		},
 	})
 
@@ -572,7 +598,7 @@ func readNodeID(op map[string]any, key string, at int) (string, error) {
 // 刻意不把富文本、选项、答案都塞进去：一次检索可能返回 8 道题，
 // 全套内容会占用大量上下文，而且模型在"挑题"阶段并不需要这些细节。
 // 需要细节时它应该再调 get_question。
-func questionListResult(briefs []schema.QuestionBrief, total int64) aiagent.ToolResult {
+func questionListResult(briefs []schema.QuestionBrief, total int64, offset int) aiagent.ToolResult {
 	type item struct {
 		ID     uint     `json:"id"`
 		Type   string   `json:"type"`
@@ -602,10 +628,17 @@ func questionListResult(briefs []schema.QuestionBrief, total int64) aiagent.Tool
 		}
 		items = append(items, it)
 	}
+
+	hints := []string{"题干为摘要。需要完整内容时请用 get_question。"}
+	// 翻页提示要给出**下一个** offset 而不是"还有更多"：
+	// 模型据此就能自己走到第二页，不必为同一批条件反复试不同的 offset。
+	if next := offset + len(briefs); int64(next) < total {
+		hints = append([]string{fmt.Sprintf("还有更多结果：本次从第 %d 条开始，请用 offset=%d 继续取。", offset+1, next)}, hints...)
+	}
 	return marshalResult(map[string]any{
 		"total": total,
 		"items": items,
-		"hint":  "题干为摘要。需要完整内容时请用 get_question。",
+		"hint":  strings.Join(hints, " "),
 	})
 }
 

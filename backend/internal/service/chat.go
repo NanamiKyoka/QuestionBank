@@ -31,14 +31,26 @@ type ChatService struct {
 	store    *repository.AgentRunRepo
 }
 
+// ChatDeps 聊天与 Agent 工具运行所需的业务服务。
+//
+// 用结构体而不是一串位置参数：工具集在扩充，每加一个能力就要给构造函数
+// 多添一个参数，位置参数迟早会错位，而错位在这里只是"某个工具拿到 nil"。
+type ChatDeps struct {
+	Questions       *QuestionService
+	KnowledgePoints *KnowledgePointService
+	Tags            *TagService
+	Papers          *PaperService
+	Subjects        *SubjectService
+	Stats           *StatsService
+	Vectors         *VectorService
+	Imports         *ImportService
+}
+
 // NewChatService 构造。
 func NewChatService(
 	repos *Repos,
 	aiConfig *AIConfigService,
-	questions *QuestionService,
-	knowledgePoints *KnowledgePointService,
-	tags *TagService,
-	papers *PaperService,
+	deps ChatDeps,
 	channel *aiagent.Channel,
 	budget aiagent.Budget,
 ) *ChatService {
@@ -49,10 +61,14 @@ func NewChatService(
 		budget:   budget.Normalize(),
 		store:    repository.NewAgentRunRepo(repos.Tx.DB()),
 		registry: buildToolRegistry(toolDeps{
-			questions:       questions,
-			knowledgePoints: knowledgePoints,
-			tags:            tags,
-			papers:          papers,
+			questions:       deps.Questions,
+			knowledgePoints: deps.KnowledgePoints,
+			tags:            deps.Tags,
+			papers:          deps.Papers,
+			subjects:        deps.Subjects,
+			stats:           deps.Stats,
+			vectors:         deps.Vectors,
+			imports:         deps.Imports,
 		}),
 	}
 }
