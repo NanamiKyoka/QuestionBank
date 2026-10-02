@@ -211,10 +211,12 @@ func TestPreviewQuestionEditsIsAClientTool(t *testing.T) {
 	if tool.AvailableIn(aiagent.SceneCompositionEditor) {
 		t.Fatal("组卷场景不应暴露题目改动工具：那里用户改的是试卷")
 	}
-	for _, scene := range []aiagent.Scene{aiagent.SceneQuestionLibrary, aiagent.SceneImportReview} {
-		if !tool.AvailableIn(scene) {
-			t.Fatalf("场景 %s 应可用", scene)
-		}
+	// 审核场景背后没有注册处理器的页面组件，放出去只会让模型撞一句"未实现"。
+	if tool.AvailableIn(aiagent.SceneImportReview) {
+		t.Fatal("审核场景没有对应的前端组件，不该暴露客户端工具")
+	}
+	if !tool.AvailableIn(aiagent.SceneQuestionLibrary) {
+		t.Fatal("题库场景应可用")
 	}
 	if !strings.Contains(tool.Description, "应用") {
 		t.Fatal("描述应告诉模型改动需要用户点应用确认")

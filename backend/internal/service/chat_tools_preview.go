@@ -12,13 +12,12 @@ import (
 
 // questionPreviewScenes 题目改动确认通道的可见场景。
 //
-// 与组卷的三个客户端工具不同，这里在**题库**与**录题审核**两处都可用：
-// 两个场景的用户都在处理题目本身，而"改完先看一眼"的需求与他在哪个
-// 页面无关。客户端工具必须在这些页面都注册了处理器才会被调用，
-// 少注册一个的表现是模型收到一句"当前页面没有实现该工具"。
+// 只有题库页面：preview_question_edits 是客户端工具，而客户端处理器
+// 随页面组件挂载——组卷三个客户端工具的场景集合因此必须与它们所在
+// 的组件一一对应。审核场景是聊天页里手选的一个标签，背后没有对应的
+// 页面组件，把工具放出去只会让模型收到一句"当前页面没有实现该工具"。
 var questionPreviewScenes = []aiagent.Scene{
 	aiagent.SceneQuestionLibrary,
-	aiagent.SceneImportReview,
 }
 
 // maxQuestionEdits 单次 preview_question_edits 的操作数上限。
