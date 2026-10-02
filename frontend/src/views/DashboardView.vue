@@ -182,8 +182,8 @@ function formatNumber(n: number): string {
 
       <el-row :gutter="12">
         <!-- 建题趋势 -->
-        <el-col :xs="24" :md="14">
-          <el-card shadow="never" class="mb-3">
+        <el-col :xs="24" :md="14" class="flex">
+          <el-card shadow="never" class="mb-3 flex w-full flex-col">
             <template #header>
               <div class="flex items-center justify-between">
                 <span class="text-sm font-medium">近 30 天建题趋势</span>
@@ -193,18 +193,20 @@ function formatNumber(n: number): string {
               </div>
             </template>
 
-            <div class="flex h-32 items-end gap-[3px]">
-              <div
-                v-for="point in trend"
-                :key="point.day"
-                class="group relative flex-1 rounded-t bg-accent/80 transition-colors hover:bg-accent"
-                :style="{ height: `${Math.max(point.total / maxTrend * 100, point.total ? 4 : 1)}%` }"
-                :title="`${point.day}：${point.total} 道`"
-              />
-            </div>
-            <div class="mt-2 flex justify-between text-xs text-ink-subtle">
-              <span>{{ trend[0]?.day }}</span>
-              <span>{{ trend[trend.length - 1]?.day }}</span>
+            <div class="flex flex-1 flex-col">
+              <div class="flex min-h-32 flex-1 items-end gap-[3px]">
+                <div
+                  v-for="point in trend"
+                  :key="point.day"
+                  class="group relative flex-1 rounded-t bg-accent/80 transition-colors hover:bg-accent"
+                  :style="{ height: `${Math.max(point.total / maxTrend * 100, point.total ? 4 : 1)}%` }"
+                  :title="`${point.day}：${point.total} 道`"
+                />
+              </div>
+              <div class="mt-2 flex justify-between text-xs text-ink-subtle">
+                <span>{{ trend[0]?.day }}</span>
+                <span>{{ trend[trend.length - 1]?.day }}</span>
+              </div>
             </div>
           </el-card>
         </el-col>
@@ -278,8 +280,8 @@ function formatNumber(n: number): string {
         </el-col>
 
         <!-- 最近试卷 -->
-        <el-col :xs="24" :md="8">
-          <el-card shadow="never" class="mb-3">
+        <el-col :xs="24" :md="8" class="flex">
+          <el-card shadow="never" class="mb-3 flex w-full flex-col">
             <template #header><span class="text-sm font-medium">最近试卷</span></template>
             <div v-if="!stats?.recent_papers.length" class="py-4 text-center text-xs text-ink-subtle">
               还没有试卷

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { activityApi, type ActivityLog, type ActivityLogQuery } from '@/api/activity'
 import { userApi } from '@/api'
@@ -7,6 +7,7 @@ import type { User } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
+import FilterBar from '@/components/ui/FilterBar.vue'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -163,6 +164,16 @@ function reset() {
   void search()
 }
 
+const hasActiveFilter = computed(
+  () =>
+    !!query.keyword.trim() ||
+    query.user_id !== null ||
+    !!query.action.trim() ||
+    !!query.resource.trim() ||
+    query.success !== '' ||
+    !!query.range,
+)
+
 /** 当前筛选条件对应的路由 query（空值不写进 URL）。 */
 function routeQuery(): Record<string, string> {
   const q: Record<string, string> = {}
@@ -270,77 +281,76 @@ function formatTime(value: string): string {
 
     <el-card shadow="never">
       <template #header>
-        <div class="flex flex-wrap items-center gap-2">
-          <el-input
-            v-model="query.keyword"
-            placeholder="用户名或请求路径"
-            clearable
-            class="w-56"
-            @keyup.enter="search"
-            @clear="search"
-          />
-          <el-select
-            v-model="query.user_id"
-            placeholder="全部用户"
-            clearable
-            filterable
-            class="w-44"
-            @change="search"
-          >
-            <el-option
-              v-for="u in users"
-              :key="u.id"
-              :label="u.nickname || u.username"
-              :value="u.id"
+        <FilterBar
+          v-model="query.keyword"
+          placeholder="用户名或请求路径"
+          :dirty="hasActiveFilter"
+          @search="search"
+          @reset="reset"
+        >
+          <template #filters>
+            <el-select
+              v-model="query.user_id"
+              placeholder="全部用户"
+              clearable
+              filterable
+              class="w-44"
+              @change="search"
+            >
+              <el-option
+                v-for="u in users"
+                :key="u.id"
+                :label="u.nickname || u.username"
+                :value="u.id"
+              />
+            </el-select>
+            <el-select
+              v-model="query.action"
+              placeholder="动作"
+              clearable
+              filterable
+              allow-create
+              default-first-option
+              class="w-52"
+              @change="search"
+            >
+              <el-option v-for="a in actionCandidates" :key="a" :label="a" :value="a" />
+            </el-select>
+            <el-select
+              v-model="query.resource"
+              placeholder="资源"
+              clearable
+              filterable
+              allow-create
+              default-first-option
+              class="w-40"
+              @change="search"
+            >
+              <el-option v-for="r in resourceCandidates" :key="r" :label="r" :value="r" />
+            </el-select>
+            <el-select
+              v-model="query.success"
+              placeholder="结果"
+              clearable
+              class="w-28"
+              @change="search"
+            >
+              <el-option label="全部" value="" />
+              <el-option label="成功" value="true" />
+              <el-option label="失败" value="false" />
+            </el-select>
+            <el-date-picker
+              v-model="query.range"
+              type="datetimerange"
+              value-format="x"
+              start-placeholder="开始时间"
+              end-placeholder="结束时间"
+              range-separator="至"
+              class="!w-96"
+              @change="search"
             />
-          </el-select>
-          <el-select
-            v-model="query.action"
-            placeholder="动作"
-            clearable
-            filterable
-            allow-create
-            default-first-option
-            class="w-52"
-            @change="search"
-          >
-            <el-option v-for="a in actionCandidates" :key="a" :label="a" :value="a" />
-          </el-select>
-          <el-select
-            v-model="query.resource"
-            placeholder="资源"
-            clearable
-            filterable
-            allow-create
-            default-first-option
-            class="w-40"
-            @change="search"
-          >
-            <el-option v-for="r in resourceCandidates" :key="r" :label="r" :value="r" />
-          </el-select>
-          <el-select
-            v-model="query.success"
-            placeholder="结果"
-            clearable
-            class="w-28"
-            @change="search"
-          >
-            <el-option label="全部" value="" />
-            <el-option label="成功" value="true" />
-            <el-option label="失败" value="false" />
-          </el-select>
-          <el-date-picker
-            v-model="query.range"
-            type="datetimerange"
-            value-format="x"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
-            range-separator="至"
-            class="!w-96"
-          />
-          <el-button type="primary" @click="search">查询</el-button>
-          <el-button @click="reset">重置</el-button>
-        </div>
+          </template>
+        </FilterBar>
       </template>
 
       <EmptyState

@@ -395,6 +395,13 @@ function solveSelected() {
   void solveQuestions([...selection.value])
 }
 
+function onRowCommand(command: string, row: QuestionBrief) {
+  if (command === 'add-child') openAddChild(row)
+  else if (command === 'reject') void review(row, 'reject')
+  else if (command === 'toggle-archive') void toggleArchive(row)
+  else if (command === 'delete') void removeOne(row)
+}
+
 async function removeOne(row: QuestionBrief) {
   try {
     await ElMessageBox.confirm(`确定删除这道题吗？删除后可在回收站中恢复。`, '删除确认', {
@@ -1020,29 +1027,31 @@ function pad(n: number): string {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="操作" width="270" fixed="right">
           <template #default="{ row }">
-            <el-button text size="small" @click="openDetail(row.id)">查看</el-button>
+            <div class="flex items-center gap-1 whitespace-nowrap">
+              <el-button text size="small" @click="openDetail(row.id)">查看</el-button>
 
-            <template v-if="canEdit">
-              <!-- 不按状态收窄：服务端对已发布/待审的题同样允许编辑，
-                   界面此前把按钮锁在 draft 上，是在替服务端撒一个它没撒的谎。
-                   改动的后果（试卷提示题目已改动 + 审核记录）在弹窗里说明。 -->
-              <el-button text size="small" @click="openEdit(row)">编辑</el-button>
-              <!-- 「仅录题」的另一半：为这道题补写答案与解析。
-                   已有答案的题不会被无声覆盖，服务端会回报"跳过"再问一次。 -->
+              <template v-if="canEdit">
+                <!-- 不按状态收窄：服务端对已发布/待审的题同样允许编辑，
+                     界面此前把按钮锁在 draft 上，是在替服务端撒一个它没撒的谎。
+                     改动的后果（试卷提示题目已改动 + 审核记录）在弹窗里说明。 -->
+                <el-button text size="small" @click="openEdit(row)">编辑</el-button>
+                <!-- 「仅录题」的另一半：为这道题补写答案与解析。
+                     已有答案的题不会被无声覆盖，服务端会回报"跳过"再问一次。 -->
+                <el-button
+                  text
+                  size="small"
+                  type="primary"
+                  :disabled="solving.active"
+                  @click="solveRow(row)"
+                >
+                  解题
+                </el-button>
+              </template>
+
               <el-button
-                text
-                size="small"
-                type="primary"
-                :disabled="solving.active"
-                @click="solveRow(row)"
-              >
-                AI 解题
-              </el-button>
-              <el-button text size="small" @click="openAddChild(row)">小问</el-button>
-              <el-button
-                v-if="row.status === 'draft'"
+                v-if="canEdit && row.status === 'draft'"
                 text
                 size="small"
                 type="primary"
@@ -1050,26 +1059,45 @@ function pad(n: number): string {
               >
                 提交审核
               </el-button>
-            </template>
+              <el-button
+                v-else-if="canReview && row.status === 'pending'"
+                text
+                size="small"
+                type="success"
+                @click="review(row, 'approve')"
+              >
+                通过
+              </el-button>
 
-            <template v-if="canReview && row.status === 'pending'">
-              <el-button text size="small" type="success" @click="review(row, 'approve')">通过</el-button>
-              <el-button text size="small" type="danger" @click="review(row, 'reject')">驳回</el-button>
-            </template>
-
-            <el-button
-              v-if="canReview && (row.status === 'published' || row.status === 'archived')"
-              text
-              size="small"
-              type="warning"
-              @click="toggleArchive(row)"
-            >
-              {{ row.status === 'archived' ? '取消归档' : '归档' }}
-            </el-button>
-
-            <el-button v-if="canEdit" text size="small" type="danger" @click="removeOne(row)">
-              删除
-            </el-button>
+              <el-dropdown
+                v-if="canEdit || canReview"
+                @command="(c: string) => onRowCommand(c, row)"
+              >
+                <el-button text size="small" aria-label="更多操作">
+                  <el-icon><MoreFilled /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="canEdit" command="add-child">添加小问</el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canReview && row.status === 'pending'"
+                      command="reject"
+                    >
+                      <span class="text-danger-text">驳回</span>
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="canReview && (row.status === 'published' || row.status === 'archived')"
+                      command="toggle-archive"
+                    >
+                      {{ row.status === 'archived' ? '取消归档' : '归档' }}
+                    </el-dropdown-item>
+                    <el-dropdown-item v-if="canEdit" command="delete" divided>
+                      <span class="text-danger-text">删除</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
 

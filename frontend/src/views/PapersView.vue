@@ -62,11 +62,11 @@ async function load() {
   try {
     const [list, tree] = await Promise.all([
       paperApi.list(subject.currentId, query),
-      paperApi.folderTree(subject.currentId).catch(() => []),
+      paperApi.folderTree(subject.currentId).catch(() => [] as PaperFolder[]),
     ])
     rows.value = list.list ?? []
     total.value = list.total ?? 0
-    folders.value = tree
+    folders.value = tree ?? []
   } catch {
     rows.value = []
     total.value = 0
@@ -510,28 +510,36 @@ function formatTime(value: string): string {
             </template>
           </el-table-column>
 
-          <el-table-column label="操作" width="230" fixed="right">
+          <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button
-                text
-                size="small"
-                @click="router.push({ name: 'paper-editor', params: { id: row.id } })"
-              >
-                编辑
-              </el-button>
-              <el-button text size="small" @click="duplicate(row)">复制</el-button>
-              <el-dropdown trigger="click" @command="(f: 'docx' | 'latex') => exportPaper(row, f)">
-                <el-button text size="small">导出</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="docx">导出 Word</el-dropdown-item>
-                    <el-dropdown-item command="latex">导出 LaTeX 压缩包</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-              <el-button v-if="row.status === 'draft'" text size="small" type="danger" @click="removePaper(row)">
-                删除
-              </el-button>
+              <div class="flex items-center gap-1 whitespace-nowrap">
+                <el-button
+                  text
+                  size="small"
+                  @click="router.push({ name: 'paper-editor', params: { id: row.id } })"
+                >
+                  编辑
+                </el-button>
+                <el-button text size="small" @click="duplicate(row)">复制</el-button>
+                <el-dropdown trigger="click" @command="(f: 'docx' | 'latex') => exportPaper(row, f)">
+                  <el-button text size="small">导出</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="docx">导出 Word</el-dropdown-item>
+                      <el-dropdown-item command="latex">导出 LaTeX 压缩包</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button
+                  v-if="row.status === 'draft'"
+                  text
+                  size="small"
+                  type="danger"
+                  @click="removePaper(row)"
+                >
+                  删除
+                </el-button>
+              </div>
             </template>
           </el-table-column>
 
