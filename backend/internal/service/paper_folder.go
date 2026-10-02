@@ -97,7 +97,10 @@ func (s *PaperService) FolderTree(ctx context.Context, user *model.User, subject
 // buildFolderTree 把扁平目录列表组装成树。
 func buildFolderTree(items []schema.FolderResponse) []schema.FolderResponse {
 	children := make(map[uint][]schema.FolderResponse, len(items))
-	var roots []schema.FolderResponse
+	// 显式分配而不是留 nil：nil slice 会序列化成 JSON null，
+	// 前端拿到 null 之后 for...of 直接抛 "list is not iterable"。
+	// 空目录树是首次进入试卷页的常态，不是异常。
+	roots := make([]schema.FolderResponse, 0, len(items))
 
 	for _, it := range items {
 		if it.ParentID == nil {
