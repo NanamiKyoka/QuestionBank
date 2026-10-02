@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { ApiError } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
+import AuthShell from '@/components/ui/AuthShell.vue'
+import ThemeToggle from '@/components/ui/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -41,50 +43,40 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div class="flex h-full items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50">
-    <el-card class="w-[400px] shadow-lg" shadow="never">
-      <div class="mb-6 text-center">
-        <div
-          class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-lg font-bold text-white"
-        >
-          QM
-        </div>
-        <h1 class="text-xl font-semibold">QuestionMind</h1>
-        <p class="mt-1 text-sm text-gray-500">AI 原生题库与组卷系统</p>
-      </div>
+  <AuthShell title="QuestionMind" subtitle="AI 原生题库与组卷系统">
+    <template #corner><ThemeToggle /></template>
 
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
-        <el-form-item label="用户名" prop="username">
-          <el-input
-            v-model="form.username"
-            placeholder="请输入用户名"
-            size="large"
-            autofocus
-            @keyup.enter="onSubmit"
-          />
-        </el-form-item>
-
-        <el-form-item label="密码" prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="请输入密码"
-            size="large"
-            show-password
-            @keyup.enter="onSubmit"
-          />
-        </el-form-item>
-
-        <el-button
-          type="primary"
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
+      <el-form-item label="用户名" prop="username">
+        <el-input
+          v-model="form.username"
+          placeholder="请输入用户名"
           size="large"
-          class="mt-2 w-full"
-          :loading="loading"
-          @click="onSubmit"
-        >
-          登录
-        </el-button>
-      </el-form>
-    </el-card>
-  </div>
+          autofocus
+          @keyup.enter="onSubmit"
+        />
+      </el-form-item>
+
+      <el-form-item label="密码" prop="password">
+        <el-input
+          v-model="form.password"
+          type="password"
+          placeholder="请输入密码"
+          size="large"
+          show-password
+          @keyup.enter="onSubmit"
+        />
+      </el-form-item>
+
+      <el-button
+        type="primary"
+        size="large"
+        class="mt-2 w-full"
+        :loading="loading"
+        @click="onSubmit"
+      >
+        登录
+      </el-button>
+    </el-form>
+  </AuthShell>
 </template>

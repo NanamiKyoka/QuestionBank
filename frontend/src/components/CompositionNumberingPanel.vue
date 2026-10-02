@@ -82,13 +82,13 @@ function onMode(value: string | number | boolean | undefined) {
         <el-icon class="mr-1"><MagicStick /></el-icon>自动填充题号
       </el-button>
 
-      <p class="text-xs text-gray-400">
+      <p class="text-xs text-ink-subtle">
         一次性操作：会整体覆盖
         <span class="font-medium">{{ props.questionCount }}</span>
         道题的题号，之后仍可逐题手改。
       </p>
     </div>
-    <p v-else class="mt-1 text-xs text-gray-400">
+    <p v-else class="mt-1 text-xs text-ink-subtle">
       开启后每道题前显示题号，导出与打印都会带上。
     </p>
   </div>

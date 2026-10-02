@@ -462,7 +462,7 @@ async function onSubmit() {
             :value="q.id"
           />
         </el-select>
-        <div class="w-full text-xs text-gray-400">
+        <div class="w-full text-xs text-ink-subtle">
           母题/小问（材料题）结构：母题放共用材料，小问挂在它下面。清空即可解除挂载。
         </div>
       </el-form-item>
@@ -564,7 +564,7 @@ async function onSubmit() {
               </el-button>
             </div>
             <el-button text type="primary" @click="addBlank">+ 添加空位</el-button>
-            <div class="text-xs text-gray-400">
+            <div class="text-xs text-ink-subtle">
               提示：题干里用工具栏的「填空位」按钮插入空位，数量需与答案个数一致。
             </div>
           </div>

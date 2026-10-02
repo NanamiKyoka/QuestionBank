@@ -5,6 +5,7 @@ import CompositionTargetPicker from '@/components/CompositionTargetPicker.vue'
 import RichContent from '@/components/RichContent.vue'
 import { useBasketStore, type BasketItem } from '@/stores/basket'
 import { useSubjectStore } from '@/stores/subject'
+import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import type { AppendQuestionsResult } from '@/api/paper'
 
 /**
@@ -78,7 +79,7 @@ async function clearAll() {
 <template>
   <el-drawer v-model="open" title="试题篮" size="420px">
     <div class="mb-3 flex items-center justify-between">
-      <span class="text-xs text-gray-400">
+      <span class="text-xs text-ink-subtle">
         共 {{ basket.count }} 道 · 暂存在本地浏览器，刷新不丢
       </span>
       <el-button
@@ -96,10 +97,10 @@ async function clearAll() {
 
     <div v-else>
       <div v-for="[sid, list] in basket.groupedBySubject" :key="sid" class="mb-5 last:mb-0">
-        <div class="sticky top-0 z-10 flex items-center justify-between bg-white py-2">
+        <div class="sticky top-0 z-10 flex items-center justify-between bg-surface py-2">
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium">{{ subjectName(sid) }}</span>
-            <span class="text-xs text-gray-400">{{ list.length }} 题</span>
+            <span class="text-xs text-ink-subtle">{{ list.length }} 题</span>
           </div>
           <div class="flex items-center gap-1">
             <el-button size="small" type="primary" plain @click="openPickerFor(sid, list)">
@@ -112,12 +113,12 @@ async function clearAll() {
         <div
           v-for="item in list"
           :key="item.id"
-          class="group mb-1 flex items-start gap-2 rounded border border-gray-200 p-2"
+          class="group mb-1 flex items-start gap-2 rounded border border-hairline p-2"
         >
           <div class="min-w-0 flex-1">
-            <div class="mb-0.5 flex items-center gap-1.5 text-xs text-gray-400">
+            <div class="mb-0.5 flex items-center gap-1.5 text-xs text-ink-subtle">
               <el-tag size="small" effect="plain">{{ item.question_type_label }}</el-tag>
-              <span>{{ '★'.repeat(item.difficulty) }}</span>
+              <DifficultyStars :level="item.difficulty" />
             </div>
             <RichContent v-if="item.stem_doc" :doc="item.stem_doc" compact class="stem-clamp text-sm" />
             <div v-else class="stem-clamp text-sm">{{ item.stem_text || '（无题干文本）' }}</div>

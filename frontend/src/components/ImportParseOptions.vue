@@ -48,8 +48,8 @@ const modeHint: Record<ImportMode, string> = {
         class="cursor-pointer rounded-lg border-2 p-3 transition-colors"
         :class="
           method === 'ai'
-            ? 'border-blue-400 bg-blue-50/50'
-            : 'border-gray-200 bg-white hover:border-gray-300'
+            ? 'border-accent bg-accent-soft/50'
+            : 'border-hairline bg-surface hover:border-hairline-strong'
         "
         @click="!disabled && emit('update:method', 'ai')"
         @keydown.enter.prevent="!disabled && emit('update:method', 'ai')"
@@ -58,11 +58,11 @@ const modeHint: Record<ImportMode, string> = {
         <div class="flex items-center gap-2 text-sm font-medium">
           <span
             class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border"
-            :class="method === 'ai' ? 'border-blue-500 bg-blue-500' : 'border-gray-300'"
+            :class="method === 'ai' ? 'border-accent bg-accent' : 'border-hairline-strong'"
           />
           模型识别
         </div>
-        <div class="mt-1 pl-6 text-xs text-gray-500">
+        <div class="mt-1 pl-6 text-xs text-ink-muted">
           自动识别各种排版与截图，不要求固定格式。逐题消耗模型额度，耗时随题量增长。
         </div>
       </div>
@@ -74,8 +74,8 @@ const modeHint: Record<ImportMode, string> = {
         class="cursor-pointer rounded-lg border-2 p-3 transition-colors"
         :class="
           method === 'template'
-            ? 'border-blue-400 bg-blue-50/50'
-            : 'border-gray-200 bg-white hover:border-gray-300'
+            ? 'border-accent bg-accent-soft/50'
+            : 'border-hairline bg-surface hover:border-hairline-strong'
         "
         @click="!disabled && emit('update:method', 'template')"
         @keydown.enter.prevent="!disabled && emit('update:method', 'template')"
@@ -84,12 +84,12 @@ const modeHint: Record<ImportMode, string> = {
         <div class="flex items-center gap-2 text-sm font-medium">
           <span
             class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border"
-            :class="method === 'template' ? 'border-blue-500 bg-blue-500' : 'border-gray-300'"
+            :class="method === 'template' ? 'border-accent bg-accent' : 'border-hairline-strong'"
           />
           规则解析
         </div>
-        <div class="mt-1 pl-6 text-xs text-gray-500">
-          按标签逐字解析，<span class="text-green-700">不调用任何模型</span>：没配置 AI
+        <div class="mt-1 pl-6 text-xs text-ink-muted">
+          按标签逐字解析，<span class="text-success-text">不调用任何模型</span>：没配置 AI
           也能录题，零成本且结果可复现。仅认下面的标签格式。
         </div>
       </div>
@@ -108,7 +108,7 @@ const modeHint: Record<ImportMode, string> = {
           <el-tag size="small" class="ml-1">【解析】</el-tag>
           <el-tag size="small" class="ml-1">【答案区】</el-tag>
         </div>
-        <div class="text-gray-500">
+        <div class="text-ink-muted">
           没有【题目】标签时解析结果会是空的。规则解析不读图片、也不解题——这两种情况请切回模型识别。
         </div>
       </div>
@@ -126,7 +126,7 @@ const modeHint: Record<ImportMode, string> = {
         <el-radio-button value="record">仅录题</el-radio-button>
         <el-radio-button value="solve">只求解</el-radio-button>
       </el-radio-group>
-      <div class="mt-1 text-xs text-gray-400">
+      <div class="mt-1 text-xs text-ink-subtle">
         {{ method === 'template' ? '「只求解」需要模型补答案，规则解析下不可用。' : modeHint[mode] }}
       </div>
     </div>

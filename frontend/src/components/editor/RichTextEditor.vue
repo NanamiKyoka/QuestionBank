@@ -153,10 +153,10 @@ defineExpose({
 </script>
 
 <template>
-  <div class="rounded border border-gray-300 bg-white">
+  <div class="rounded border border-hairline-strong bg-surface">
     <div
       v-if="editor"
-      class="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1"
+      class="flex flex-wrap items-center gap-0.5 border-b border-hairline bg-surface-sunken px-2 py-1"
     >
       <el-button-group>
         <el-button

@@ -34,6 +34,7 @@ import {
 import { abandonInflightClientTools, answerClientToolFrame } from '@/composables/useAiClientTools'
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
+import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -1017,7 +1018,7 @@ function isUsed(row: QuestionBrief): boolean {
             </el-tag>
             <el-tag v-if="dirty" size="small" type="warning">未保存</el-tag>
           </div>
-          <div class="text-xs text-gray-400">
+          <div class="text-xs text-ink-subtle">
             共 {{ questionCount }} 题 · 修订 r{{ revision }}
             <template v-if="scoringEnabled">
               · 总分 {{ displayTotalScore }}<template v-if="dirty">（未保存）</template>
@@ -1101,7 +1102,7 @@ function isUsed(row: QuestionBrief): boolean {
             v-for="row in pickerRows"
             :key="row.id"
             class="mb-1 cursor-pointer rounded border p-2 text-xs transition-colors"
-            :class="isPicked(row) ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'"
+            :class="isPicked(row) ? 'border-accent bg-accent-soft' : 'border-hairline hover:bg-surface-sunken'"
             @click="togglePick(row)"
           >
             <div class="flex items-start gap-1">
@@ -1208,11 +1209,11 @@ function isUsed(row: QuestionBrief): boolean {
     <!-- 版本 -->
     <el-drawer v-model="versionsVisible" title="版本历史" size="520px">
       <el-empty v-if="versions.length === 0" description="还没有定稿版本" />
-      <div v-for="version in versions" :key="version.id" class="mb-2 rounded border border-gray-200 p-3">
+      <div v-for="version in versions" :key="version.id" class="mb-2 rounded border border-hairline p-3">
         <div class="flex items-center justify-between">
           <div>
             <span class="font-medium">v{{ version.version_no }}</span>
-            <span class="ml-2 text-xs text-gray-400">{{ version.question_count }} 题</span>
+            <span class="ml-2 text-xs text-ink-subtle">{{ version.question_count }} 题</span>
           </div>
           <el-dropdown @command="(f: 'docx' | 'latex') => exportPaper(f, version.version_no)">
             <el-button text size="small">导出</el-button>
@@ -1227,8 +1228,8 @@ function isUsed(row: QuestionBrief): boolean {
             查看
           </el-button>
         </div>
-        <div v-if="version.note" class="mt-1 text-xs text-gray-500">{{ version.note }}</div>
-        <div class="mt-1 text-xs text-gray-400">{{ new Date(version.created_at).toLocaleString('zh-CN') }}</div>
+        <div v-if="version.note" class="mt-1 text-xs text-ink-muted">{{ version.note }}</div>
+        <div class="mt-1 text-xs text-ink-subtle">{{ new Date(version.created_at).toLocaleString('zh-CN') }}</div>
       </div>
     </el-drawer>
 
@@ -1280,13 +1281,13 @@ function isUsed(row: QuestionBrief): boolean {
         </el-table-column>
         <el-table-column label="难度" width="100">
           <template #default="{ row }">
-            <span class="text-amber-500">{{ '★'.repeat(row.difficulty) }}</span>
+            <DifficultyStars :level="row.difficulty" />
           </template>
         </el-table-column>
       </el-table>
 
       <div class="mt-2 flex items-center justify-between">
-        <span class="text-xs text-gray-400">已选 {{ pickerSelected.length }} 道</span>
+        <span class="text-xs text-ink-subtle">已选 {{ pickerSelected.length }} 道</span>
         <el-button v-if="pickerHasMore" text size="small" @click="loadMorePicker">加载更多</el-button>
       </div>
 
@@ -1313,7 +1314,7 @@ function isUsed(row: QuestionBrief): boolean {
       <div class="flex h-full flex-col">
         <div ref="chatScroll" class="flex-1 space-y-3 overflow-y-auto pr-1">
           <el-empty v-if="chatBubbles.length === 0" description="让助手帮你排这份卷子" :image-size="48">
-            <div class="space-y-1 text-left text-xs text-gray-500">
+            <div class="space-y-1 text-left text-xs text-ink-muted">
               <div>· 这份卷子现在什么结构？</div>
               <div>· 找 3 道二次函数的题加进来</div>
               <div>· 在每道大题前加一行「（本大题 12 分）」</div>
@@ -1328,18 +1329,18 @@ function isUsed(row: QuestionBrief): boolean {
           >
             <div
               class="max-w-[85%] rounded-lg px-3 py-2"
-              :class="bubble.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100'"
+              :class="bubble.role === 'user' ? 'bg-accent text-white' : 'bg-surface-sunken'"
             >
               <div v-if="bubble.tools.length" class="mb-1.5 space-y-1">
                 <div
                   v-for="(tool, ti) in bubble.tools"
                   :key="ti"
-                  class="flex items-center gap-1 rounded bg-white/70 px-2 py-1 text-xs text-gray-600"
+                  class="flex items-center gap-1 rounded bg-surface/70 px-2 py-1 text-xs text-ink-regular"
                 >
                   <el-icon v-if="tool.running" class="is-loading"><Loading /></el-icon>
                   <el-icon v-else><Select /></el-icon>
                   <span>{{ tool.name }}</span>
-                  <span v-if="tool.output" class="truncate text-gray-400">{{ tool.output }}</span>
+                  <span v-if="tool.output" class="truncate text-ink-subtle">{{ tool.output }}</span>
                 </div>
               </div>
 
@@ -1347,17 +1348,17 @@ function isUsed(row: QuestionBrief): boolean {
                 {{ bubble.content }}
               </div>
 
-              <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-gray-400">
+              <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-ink-subtle">
                 <el-icon class="is-loading"><Loading /></el-icon>
                 思考中…
               </div>
 
-              <div v-if="bubble.error" class="mt-1 text-xs text-red-500">{{ bubble.error }}</div>
+              <div v-if="bubble.error" class="mt-1 text-xs text-danger-text">{{ bubble.error }}</div>
             </div>
           </div>
         </div>
 
-        <div class="mt-3 border-t border-gray-200 pt-3">
+        <div class="mt-3 border-t border-hairline pt-3">
           <el-input
             v-model="chatInput"
             type="textarea"
@@ -1370,7 +1371,7 @@ function isUsed(row: QuestionBrief): boolean {
           <div class="mt-2 flex items-center gap-2">
             <el-button v-if="chatSending" type="danger" plain @click="stopChat">停止生成</el-button>
             <el-button v-else type="primary" :disabled="!chatInput.trim()" @click="sendChat">发送</el-button>
-            <span class="text-xs text-gray-400">改动会先预览，等你点「应用」。</span>
+            <span class="text-xs text-ink-subtle">改动会先预览，等你点「应用」。</span>
           </div>
         </div>
       </div>

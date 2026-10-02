@@ -178,7 +178,7 @@ async function reindex(force: boolean) {
         <el-table-column prop="description" label="说明" min-width="200" show-overflow-tooltip />
         <el-table-column label="题目数" width="90">
           <template #default="{ row }">
-            <span class="text-gray-500">{{ row.question_count }}</span>
+            <span class="text-ink-muted">{{ row.question_count }}</span>
           </template>
         </el-table-column>
         <el-table-column v-if="canManage" label="操作" width="200" fixed="right">

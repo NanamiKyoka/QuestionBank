@@ -39,5 +39,27 @@ onMounted(() => {
 </script>
 
 <template>
-  <RouterView />
+  <div>
+    <a href="#main-content" class="skip-link">跳到主要内容</a>
+    <RouterView />
+  </div>
 </template>
+
+<style scoped>
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 8px;
+  z-index: 2000;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: var(--qm-accent);
+  color: #fff;
+  font-size: 13px;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+</style>

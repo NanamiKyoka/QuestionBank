@@ -417,7 +417,7 @@ watch(active, syncSelection, { immediate: true })
         </div>
       </template>
 
-      <div class="mt-1 text-xs text-gray-400">
+      <div class="mt-1 text-xs text-ink-subtle">
         三个下拉可以选同一个模型——多数模型既能对话也能识图，勾两项能力即可。
       </div>
 
@@ -447,7 +447,7 @@ watch(active, syncSelection, { immediate: true })
                 :value="model.id"
               />
             </el-select>
-            <div class="mt-1 text-xs text-gray-400">{{ item.hint }}</div>
+            <div class="mt-1 text-xs text-ink-subtle">{{ item.hint }}</div>
           </div>
         </el-col>
       </el-row>
@@ -468,7 +468,7 @@ watch(active, syncSelection, { immediate: true })
         <el-button type="primary" @click="openCreateProvider">添加第一个供应商</el-button>
       </el-empty>
 
-      <div v-for="provider in providers" :key="provider.id" class="mb-3 rounded border border-gray-200 p-3">
+      <div v-for="provider in providers" :key="provider.id" class="mb-3 rounded border border-hairline p-3">
         <div class="flex flex-wrap items-center gap-2">
           <span class="font-medium">{{ provider.name }}</span>
           <el-tag size="small" type="primary">
@@ -489,13 +489,13 @@ watch(active, syncSelection, { immediate: true })
           </div>
         </div>
 
-        <div v-if="provider.base_url" class="mt-1 text-xs text-gray-400">{{ provider.base_url }}</div>
+        <div v-if="provider.base_url" class="mt-1 text-xs text-ink-subtle">{{ provider.base_url }}</div>
 
         <div v-if="provider.models.length" class="mt-2 space-y-1">
           <div
             v-for="model in provider.models"
             :key="model.id"
-            class="flex items-center gap-2 rounded bg-gray-50 px-2 py-1 text-sm"
+            class="flex items-center gap-2 rounded bg-surface-sunken px-2 py-1 text-sm"
           >
             <el-tag
               v-for="cap in model.capabilities"
@@ -506,7 +506,7 @@ watch(active, syncSelection, { immediate: true })
               {{ typeLabel(cap) }}
             </el-tag>
             <span>{{ model.name }}</span>
-            <span v-if="model.display_name" class="text-xs text-gray-400">{{ model.display_name }}</span>
+            <span v-if="model.display_name" class="text-xs text-ink-subtle">{{ model.display_name }}</span>
             <el-tag v-if="model.in_use" size="small" type="success" effect="plain">
               {{ inUseLabel(model) }}
             </el-tag>
@@ -517,7 +517,7 @@ watch(active, syncSelection, { immediate: true })
             </div>
           </div>
         </div>
-        <div v-else class="mt-2 text-xs text-gray-400">还没有添加模型</div>
+        <div v-else class="mt-2 text-xs text-ink-subtle">还没有添加模型</div>
       </div>
     </el-card>
 
@@ -551,14 +551,14 @@ watch(active, syncSelection, { immediate: true })
               {{ interfaceTypeLabel(type) }}
             </el-radio>
           </el-radio-group>
-          <div class="mt-1 text-xs text-gray-400">
+          <div class="mt-1 text-xs text-ink-subtle">
             可选协议由后端下发，只有它真正支持的才会出现在这里。
           </div>
         </el-form-item>
 
         <el-form-item label="Base URL">
           <el-input v-model="providerForm.base_url" placeholder="https://api.deepseek.com/v1" />
-          <div class="mt-1 text-xs text-gray-400">
+          <div class="mt-1 text-xs text-ink-subtle">
             一般以 /v1 结尾。留空则使用官方默认地址。
           </div>
         </el-form-item>
@@ -578,7 +578,7 @@ watch(active, syncSelection, { immediate: true })
               show-password
               placeholder="粘贴新的 API Key"
             />
-            <div class="mt-1 text-xs text-gray-400">
+            <div class="mt-1 text-xs text-ink-subtle">
               密钥经 AES-256-GCM 加密后存储，界面与日志中都不会出现明文。
             </div>
           </div>
@@ -609,7 +609,7 @@ watch(active, syncSelection, { immediate: true })
         </el-form-item>
         <el-form-item label="模型名" required>
           <el-input v-model="modelForm.name" placeholder="如：deepseek-chat" maxlength="128" />
-          <div class="mt-1 text-xs text-gray-400">必须是服务商文档里的准确名称。</div>
+          <div class="mt-1 text-xs text-ink-subtle">必须是服务商文档里的准确名称。</div>
         </el-form-item>
         <el-form-item label="显示名">
           <el-input v-model="modelForm.display_name" placeholder="选填，如：DeepSeek 对话" />
@@ -620,17 +620,17 @@ watch(active, syncSelection, { immediate: true })
               {{ MODEL_TYPE_LABELS[cap] }}
             </el-checkbox>
           </el-checkbox-group>
-          <div class="mt-1 text-xs text-gray-400">
+          <div class="mt-1 text-xs text-ink-subtle">
             多选。现在多数模型既能对话又能识图，勾两项就够，不必录两遍。
           </div>
         </el-form-item>
         <el-form-item label="最大输出">
           <el-input-number v-model="modelForm.max_tokens" :min="1" :max="2000000" :step="1024" />
-          <span class="ml-2 text-xs text-gray-400">tokens</span>
+          <span class="ml-2 text-xs text-ink-subtle">tokens</span>
         </el-form-item>
         <el-form-item label="上下文窗口">
           <el-input-number v-model="modelForm.context_window" :min="0" :max="20000000" :step="4096" />
-          <span class="ml-2 text-xs text-gray-400">0 表示未知</span>
+          <span class="ml-2 text-xs text-ink-subtle">0 表示未知</span>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="modelForm.is_active" />

@@ -135,8 +135,8 @@ async function createAndAdd() {
 
 <template>
   <el-dialog v-model="open" :title="title" width="560px" :close-on-click-modal="false">
-    <div class="mb-2 text-sm text-gray-500">
-      将 <span class="font-medium text-gray-700">{{ questionIds.length }}</span> 道题追加到所选试卷末尾
+    <div class="mb-2 text-sm text-ink-muted">
+      将 <span class="font-medium text-ink">{{ questionIds.length }}</span> 道题追加到所选试卷末尾
     </div>
 
     <el-input v-model="keyword" placeholder="搜索试卷标题" clearable class="mb-2">
@@ -148,7 +148,7 @@ async function createAndAdd() {
         v-for="paper in filtered"
         :key="paper.id"
         class="mb-1 cursor-pointer rounded border p-2 transition-colors"
-        :class="selected?.id === paper.id ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'"
+        :class="selected?.id === paper.id ? 'border-accent bg-accent-soft' : 'border-hairline hover:bg-surface-sunken'"
         @click="selected = paper"
       >
         <div class="flex items-center gap-2">
@@ -166,8 +166,8 @@ async function createAndAdd() {
       />
     </div>
 
-    <div class="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3">
-      <span class="shrink-0 text-xs text-gray-400">没有合适的？</span>
+    <div class="mt-3 flex items-center gap-2 border-t border-hairline pt-3">
+      <span class="shrink-0 text-xs text-ink-subtle">没有合适的？</span>
       <el-input
         v-model="newTitle"
         size="small"

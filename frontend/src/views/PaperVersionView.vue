@@ -251,7 +251,7 @@ function itemNumberOf(item: SnapshotNode): string {
             <el-tag v-if="version" size="small" effect="plain">v{{ version.version_no }}</el-tag>
             <el-tag v-if="version" size="small" type="info">只读</el-tag>
           </div>
-          <div v-if="version" class="text-xs text-gray-400">
+          <div v-if="version" class="text-xs text-ink-subtle">
             定稿于 {{ formatTime(version.created_at) }} · 定稿人 #{{ version.created_by }}
             <template v-if="snapshot"> · 源修订 r{{ snapshot.source_revision }}</template>
           </div>
@@ -283,14 +283,14 @@ function itemNumberOf(item: SnapshotNode): string {
       </el-alert>
 
       <el-card v-if="version?.note" shadow="never">
-        <span class="text-xs text-gray-400">版本说明：</span>{{ version.note }}
+        <span class="text-xs text-ink-subtle">版本说明：</span>{{ version.note }}
       </el-card>
 
       <el-card shadow="never">
         <div class="mx-auto max-w-3xl py-4">
           <!-- 试卷标题：与导出器一致，标题始终输出 -->
           <h1 class="text-center text-xl font-bold">{{ snapshot.title }}</h1>
-          <p v-if="snapshot.scoring_enabled && snapshot.total_score > 0" class="mt-1 text-center text-sm text-gray-500">
+          <p v-if="snapshot.scoring_enabled && snapshot.total_score > 0" class="mt-1 text-center text-sm text-ink-muted">
             （满分 {{ snapshot.total_score }} 分）
           </p>
 
@@ -315,18 +315,18 @@ function itemNumberOf(item: SnapshotNode): string {
               </div>
 
               <!-- 分页符 -->
-              <div v-else-if="node.node_type === 'page_break'" class="flex items-center gap-2 text-xs text-gray-300">
-                <div class="h-px flex-1 bg-dashed bg-gray-300" />分页符
-                <div class="h-px flex-1 bg-gray-300" />
+              <div v-else-if="node.node_type === 'page_break'" class="flex items-center gap-2 text-xs text-ink-subtle/60">
+                <div class="h-px flex-1 border-t border-dashed border-hairline-strong" />分页符
+                <div class="h-px flex-1 bg-hairline-strong" />
               </div>
 
               <!-- 答题区 -->
-              <div v-else-if="node.node_type === 'answer_space'" class="rounded border border-dashed border-gray-300 px-2 py-1">
+              <div v-else-if="node.node_type === 'answer_space'" class="rounded border border-dashed border-hairline-strong px-2 py-1">
                 <template v-if="isLined(node)">
                   <div
                     v-for="line in answerLines(node)"
                     :key="line"
-                    class="h-6 border-b border-dashed border-gray-300"
+                    class="h-6 border-b border-dashed border-hairline-strong"
                   />
                 </template>
                 <div v-else :style="{ height: `${answerLines(node) * 24}px` }" />
@@ -337,7 +337,7 @@ function itemNumberOf(item: SnapshotNode): string {
                 <div class="flex items-baseline gap-1 text-sm font-semibold">
                   <template v-if="snapshot.numbering_enabled">{{ numberLabel(node) }}．</template>
                   <template v-if="snapshot.scoring_enabled && scoreOf(node) !== null">
-                    <span class="font-normal text-gray-500">（{{ scoreOf(node) }} 分）</span>
+                    <span class="font-normal text-ink-muted">（{{ scoreOf(node) }} 分）</span>
                   </template>
                 </div>
 
@@ -367,7 +367,7 @@ function itemNumberOf(item: SnapshotNode): string {
                     <RichContent :doc="questionOf(node)?.summary" :compact="true" />
                   </div>
                 </template>
-                <div v-else class="text-sm text-gray-400">（题目内容在定稿时未能读取）</div>
+                <div v-else class="text-sm text-ink-subtle">（题目内容在定稿时未能读取）</div>
 
                 <!-- scope=before：解析紧跟本题 -->
                 <div v-for="item in anchoredItems.get(node.id) ?? []" :key="item.id" class="mt-1 text-sm">

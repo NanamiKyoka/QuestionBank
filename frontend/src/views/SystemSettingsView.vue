@@ -150,7 +150,7 @@ function displayValue(item: SystemSettingItem): string {
       <div
         v-for="item in editableItems"
         :key="item.key"
-        class="border-b border-gray-100 py-3 last:border-b-0"
+        class="border-b border-hairline py-3 last:border-b-0"
       >
         <div class="flex flex-wrap items-center gap-3">
           <div class="min-w-48 flex-1">
@@ -159,7 +159,7 @@ function displayValue(item: SystemSettingItem): string {
               <el-tag size="small" type="success" effect="plain">生效中</el-tag>
               <el-tag v-if="!item.saved" size="small" type="info" effect="plain">使用默认值</el-tag>
             </div>
-            <div class="mt-0.5 text-xs text-gray-400">
+            <div class="mt-0.5 text-xs text-ink-subtle">
               {{ item.description }} · <code>{{ item.key }}</code>
             </div>
           </div>
@@ -196,7 +196,7 @@ function displayValue(item: SystemSettingItem): string {
           </div>
         </div>
 
-        <div class="mt-1 text-xs text-gray-400">
+        <div class="mt-1 text-xs text-ink-subtle">
           最后修改：{{ formatTime(item.updated_at) }}
         </div>
         <el-alert
@@ -218,7 +218,7 @@ function displayValue(item: SystemSettingItem): string {
             placement="top"
             content="这些键要么由别的设置页管理，要么当前没有任何代码读取。列出来是为了让「表里有这一行、界面上却没有」这种事不再发生。"
           >
-            <el-icon class="text-gray-400"><QuestionFilled /></el-icon>
+            <el-icon class="text-ink-subtle"><QuestionFilled /></el-icon>
           </el-tooltip>
         </div>
       </template>
@@ -241,12 +241,12 @@ function displayValue(item: SystemSettingItem): string {
         </el-table-column>
         <el-table-column label="说明" min-width="320">
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ row.note }}</span>
+            <span class="text-xs text-ink-muted">{{ row.note }}</span>
           </template>
         </el-table-column>
         <el-table-column label="最后修改" width="180">
           <template #default="{ row }">
-            <span class="text-xs text-gray-400">{{ formatTime(row.updated_at) }}</span>
+            <span class="text-xs text-ink-subtle">{{ formatTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
       </el-table>

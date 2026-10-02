@@ -5,6 +5,9 @@ import { tagApi } from '@/api'
 import type { Tag, TagCategory } from '@/api/types'
 import { useSubjectStore } from '@/stores/subject'
 
+/** 未指定颜色时的兜底，跟随主题走而不是钉死一个十六进制值。 */
+const DEFAULT_TAG_COLOR = 'var(--qm-accent)'
+
 const subject = useSubjectStore()
 
 const loading = ref(false)
@@ -14,17 +17,20 @@ const activeCategory = ref<number | 'all' | 'none'>('all')
 
 const tagDialog = ref(false)
 const editingTagId = ref<number | null>(null)
-const tagForm = reactive({ name: '', color: '#409EFF', category_id: null as number | null })
+const tagForm = reactive({ name: '', color: DEFAULT_TAG_COLOR, category_id: null as number | null })
 
 const categoryDialog = ref(false)
 const categoryName = ref('')
 
 const canManage = computed(() => subject.can('manage_subject'))
 
-/** 预设色板：让标签颜色整体协调，而不是每个都手调十六进制值。 */
+/**
+ * 预设色板。每个色值作为 el-tag 的文字色出现，
+ * 因此全部按「在白底上 ≥4.5:1」挑选，明暗主题下都不至于糊成一片。
+ */
 const palette = [
-  '#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399',
-  '#8E44AD', '#16A085', '#D35400', '#2C3E50', '#C0392B',
+  '#1d4ed8', '#0f766e', '#15803d', '#4d7c0f', '#b45309',
+  '#c2410c', '#b91c1c', '#a21caf', '#475569',
 ]
 
 onMounted(load)
@@ -54,7 +60,7 @@ const filtered = computed(() => {
 function openCreateTag() {
   editingTagId.value = null
   tagForm.name = ''
-  tagForm.color = palette[tags.value.length % palette.length] ?? '#409EFF'
+  tagForm.color = palette[tags.value.length % palette.length] ?? DEFAULT_TAG_COLOR
   tagForm.category_id =
     typeof activeCategory.value === 'number' ? activeCategory.value : null
   tagDialog.value = true
@@ -63,7 +69,7 @@ function openCreateTag() {
 function openEditTag(tag: Tag) {
   editingTagId.value = tag.id
   tagForm.name = tag.name
-  tagForm.color = tag.color || '#409EFF'
+  tagForm.color = tag.color || DEFAULT_TAG_COLOR
   tagForm.category_id = tag.category_id
   tagDialog.value = true
 }
@@ -156,25 +162,25 @@ async function removeCategory(category: TagCategory) {
 
       <div
         class="cursor-pointer rounded px-2 py-1.5 text-sm"
-        :class="activeCategory === 'all' ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
+        :class="activeCategory === 'all' ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="activeCategory = 'all'"
       >
         全部标签
-        <span class="float-right text-xs text-gray-400">{{ tags.length }}</span>
+        <span class="float-right text-xs text-ink-subtle">{{ tags.length }}</span>
       </div>
 
       <div
         v-for="category in categories"
         :key="category.id"
         class="group flex cursor-pointer items-center rounded px-2 py-1.5 text-sm"
-        :class="activeCategory === category.id ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
+        :class="activeCategory === category.id ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="activeCategory = category.id"
       >
         <span class="flex-1 truncate">{{ category.name }}</span>
-        <span class="text-xs text-gray-400">{{ category.tag_count }}</span>
+        <span class="text-xs text-ink-subtle">{{ category.tag_count }}</span>
         <el-icon
           v-if="canManage"
-          class="ml-1 hidden text-red-400 group-hover:block"
+          class="ml-1 hidden text-danger-text group-hover:block"
           @click.stop="removeCategory(category)"
         >
           <Delete />
@@ -183,11 +189,11 @@ async function removeCategory(category: TagCategory) {
 
       <div
         class="cursor-pointer rounded px-2 py-1.5 text-sm"
-        :class="activeCategory === 'none' ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
+        :class="activeCategory === 'none' ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="activeCategory = 'none'"
       >
         未分类
-        <span class="float-right text-xs text-gray-400">
+        <span class="float-right text-xs text-ink-subtle">
           {{ tags.filter((t) => !t.category_id).length }}
         </span>
       </div>
@@ -208,16 +214,16 @@ async function removeCategory(category: TagCategory) {
         <div
           v-for="tag in filtered"
           :key="tag.id"
-          class="group flex items-center gap-2 rounded-full border border-gray-200 py-1 pl-3 pr-2"
+          class="group flex items-center gap-2 rounded-full border border-hairline py-1 pl-3 pr-2"
         >
-          <span class="h-2.5 w-2.5 rounded-full" :style="{ backgroundColor: tag.color || '#909399' }" />
+          <span class="h-2.5 w-2.5 rounded-full" :style="{ backgroundColor: tag.color || 'var(--qm-ink-subtle)' }" />
           <span class="text-sm">{{ tag.name }}</span>
-          <span class="text-xs text-gray-400">{{ tag.question_count }}</span>
+          <span class="text-xs text-ink-subtle">{{ tag.question_count }}</span>
           <template v-if="canManage">
-            <el-icon class="cursor-pointer text-gray-400 hover:text-blue-500" @click="openEditTag(tag)">
+            <el-icon class="cursor-pointer text-ink-subtle hover:text-accent-text" @click="openEditTag(tag)">
               <Edit />
             </el-icon>
-            <el-icon class="cursor-pointer text-gray-400 hover:text-red-500" @click="removeTag(tag)">
+            <el-icon class="cursor-pointer text-ink-subtle hover:text-danger-text" @click="removeTag(tag)">
               <Close />
             </el-icon>
           </template>
@@ -254,7 +260,7 @@ async function removeCategory(category: TagCategory) {
               class="h-6 w-6 cursor-pointer rounded border-2"
               :style="{
                 backgroundColor: color,
-                borderColor: tagForm.color === color ? '#303133' : 'transparent',
+                borderColor: tagForm.color === color ? 'var(--qm-ink)' : 'transparent',
               }"
               @click="tagForm.color = color"
             />

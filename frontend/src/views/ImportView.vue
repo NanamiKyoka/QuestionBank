@@ -759,9 +759,9 @@ function goToPaper(paperId: number) {
 
           <!-- 答案页。放在文件页而不是图片页，是因为它的意义完全依附于文档：
                有试卷才有对应它的答案。 -->
-          <div class="mt-3 rounded border border-dashed border-gray-200 p-3">
+          <div class="mt-3 rounded border border-dashed border-hairline p-3">
             <div class="mb-2 flex flex-wrap items-center gap-2">
-              <span class="text-sm text-gray-600">
+              <span class="text-sm text-ink-regular">
                 {{ form.mode === 'record' ? '答案页（仅录题模式下不读取）' : '答案页（选填，可加快识别）' }}
               </span>
               <el-tag size="small" type="info" effect="plain">
@@ -770,7 +770,7 @@ function goToPaper(paperId: number) {
             </div>
 
             <template v-if="form.mode === 'record'">
-              <div class="text-xs text-gray-400">
+              <div class="text-xs text-ink-subtle">
                 「仅录题」不读答案页：题目之外的答案与解析由老师事后填写，
                 随本次请求提交时也会被忽略。要让模型转写答案页，请切回「完整抽取」。
               </div>
@@ -779,9 +779,9 @@ function goToPaper(paperId: number) {
             <template v-else>
               <div v-if="form.answerImages.length" class="mb-2 flex flex-wrap gap-2">
                 <div v-for="(img, index) in form.answerImages" :key="img" class="relative">
-                  <img :src="img" class="h-16 w-16 rounded border border-gray-200 object-cover" />
+                  <img :src="img" class="h-16 w-16 rounded border border-hairline object-cover" />
                   <el-icon
-                    class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-red-500 text-white"
+                    class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-danger text-white"
                     @click="removeAnswerImage(index)"
                   >
                     <Close />
@@ -790,7 +790,7 @@ function goToPaper(paperId: number) {
               </div>
 
               <label
-                class="inline-flex cursor-pointer items-center gap-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:border-blue-400"
+                class="inline-flex cursor-pointer items-center gap-1 rounded border border-hairline-strong px-2 py-1 text-xs text-ink-muted hover:border-accent"
               >
                 <input
                   type="file"
@@ -804,7 +804,7 @@ function goToPaper(paperId: number) {
                 添加答案页图片
               </label>
 
-              <div class="mt-2 text-xs text-gray-400">
+              <div class="mt-2 text-xs text-ink-subtle">
                 试卷本身通常不带答案。没有答案页时模型要把每道解答题自己算一遍；
                 附上答案页后它可以改为<b>转写</b>，输出量因此下降。
                 但模型还要先"读图"，这部分时间由模型速度决定——
@@ -823,15 +823,15 @@ function goToPaper(paperId: number) {
             placeholder="直接粘贴试卷内容。支持 Markdown、编号列表、选项与答案混排，公式可写 LaTeX（$x^2$ 或 \[...\]）。"
             maxlength="200000"
           />
-          <div class="mt-1 text-right text-xs text-gray-400">{{ form.content.length }} / 200000</div>
+          <div class="mt-1 text-right text-xs text-ink-subtle">{{ form.content.length }} / 200000</div>
         </el-tab-pane>
 
         <el-tab-pane label="上传图片" name="image">
           <div class="mb-2 flex flex-wrap gap-2">
             <div v-for="(img, index) in form.images" :key="img" class="relative">
-              <img :src="img" class="h-24 w-24 rounded border border-gray-200 object-cover" />
+              <img :src="img" class="h-24 w-24 rounded border border-hairline object-cover" />
               <el-icon
-                class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-red-500 text-white"
+                class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-danger text-white"
                 @click="removeImage(index)"
               >
                 <Close />
@@ -839,7 +839,7 @@ function goToPaper(paperId: number) {
             </div>
 
             <label
-              class="flex h-24 w-24 cursor-pointer flex-col items-center justify-center rounded border border-dashed border-gray-300 text-xs text-gray-400 hover:border-blue-400"
+              class="flex h-24 w-24 cursor-pointer flex-col items-center justify-center rounded border border-dashed border-hairline-strong text-xs text-ink-subtle hover:border-accent"
             >
               <input type="file" accept="image/*" multiple class="hidden" @change="onPickImages" />
               <el-icon v-if="!uploading" :size="20"><Plus /></el-icon>
@@ -847,7 +847,7 @@ function goToPaper(paperId: number) {
               <span class="mt-1">{{ uploading ? '上传中' : '添加图片' }}</span>
             </label>
           </div>
-          <div class="text-xs text-gray-400">
+          <div class="text-xs text-ink-subtle">
             适用于拍照或扫描的试卷，也可以在「上传文件」区直接 Ctrl+V 粘贴截图。需要配置视觉模型，否则请改用文本模式。
           </div>
         </el-tab-pane>
@@ -863,7 +863,7 @@ function goToPaper(paperId: number) {
       </el-form-item>
 
       <el-divider content-position="left">
-        <span class="text-xs text-gray-400">解析设置</span>
+        <span class="text-xs text-ink-subtle">解析设置</span>
       </el-divider>
 
       <ImportParseOptions
@@ -884,11 +884,11 @@ function goToPaper(paperId: number) {
 
       <!-- 仅录题的收尾方式。必须在点「开始识别」之前就能选：
            识别完才出现这个开关的话，"识别后自动入库"对本次已经晚了。 -->
-      <div v-if="form.mode === 'record'" class="mt-3 rounded border border-gray-200 bg-gray-50 p-2">
+      <div v-if="form.mode === 'record'" class="mt-3 rounded border border-hairline bg-surface-sunken p-2">
         <el-checkbox v-model="autoCommit" :disabled="loading">
           识别成功后 <b>直接入库</b>
         </el-checkbox>
-        <div class="mt-1 text-xs text-gray-400">
+        <div class="mt-1 text-xs text-ink-subtle">
           勾选后不必再点一次「确认入库」：识别出来的题目直接进题库（状态由「入库设置」决定），
           待补充的答案在题库里补写，或者在那里对选中的题让 AI 解题。
           关闭它则回到"先核对草稿、再入库"的两步流程。
@@ -905,12 +905,12 @@ function goToPaper(paperId: number) {
           <el-icon class="mr-1"><MagicStick /></el-icon>
           {{ submitLabel }}
         </el-button>
-        <span v-if="loading" class="text-xs text-gray-400">
+        <span v-if="loading" class="text-xs text-ink-subtle">
           {{ pdfIsSlow
             ? 'PDF 正在逐页渲染并交给模型识别，通常要几分钟，请不要关闭页面。'
             : '正在解析，大文件可能需要几分钟，请不要关闭页面。' }}
         </span>
-        <span v-else-if="submitHint" class="text-xs text-gray-400">{{ submitHint }}</span>
+        <span v-else-if="submitHint" class="text-xs text-ink-subtle">{{ submitHint }}</span>
       </div>
     </el-card>
 
@@ -934,7 +934,7 @@ function goToPaper(paperId: number) {
       </template>
 
       <!-- 本次抽取的如实记录：走没走模型、覆盖了哪几个文件 -->
-      <div v-if="runMeta" class="mb-3 rounded border border-gray-200 bg-gray-50 p-2 text-xs">
+      <div v-if="runMeta" class="mb-3 rounded border border-hairline bg-surface-sunken p-2 text-xs">
         <div class="flex flex-wrap items-center gap-2">
           <el-tag v-if="ranTemplate" size="small" type="warning">
             <el-icon class="mr-1"><Cpu /></el-icon>
@@ -944,20 +944,20 @@ function goToPaper(paperId: number) {
             <el-icon class="mr-1"><MagicStick /></el-icon>
             模型识别
           </el-tag>
-          <span v-if="ranTemplate" class="text-gray-500">
+          <span v-if="ranTemplate" class="text-ink-muted">
             本次由确定性规则解析器完成，<b>没有调用任何模型</b>。结果只认标签格式，请重点核对题型与答案。
           </span>
-          <span v-if="runMeta.model" class="text-gray-500">模型 {{ runMeta.model }}</span>
+          <span v-if="runMeta.model" class="text-ink-muted">模型 {{ runMeta.model }}</span>
           <el-tag v-if="runMeta.mode === 'record'" size="small" type="warning" effect="plain">
             仅录题 · 未求解
           </el-tag>
-          <span class="text-gray-400">耗时 {{ runMeta.elapsed_ms }}ms · 任务 #{{ runMeta.task_id }}</span>
+          <span class="text-ink-subtle">耗时 {{ runMeta.elapsed_ms }}ms · 任务 #{{ runMeta.task_id }}</span>
           <el-tag v-if="!runMeta.methodReported" size="small" type="info" effect="plain">
             服务端未回报实际路径
           </el-tag>
         </div>
         <div v-if="sourceFiles.length" class="mt-1 flex flex-wrap items-center gap-2">
-          <span class="text-gray-500">来源文件：</span>
+          <span class="text-ink-muted">来源文件：</span>
           <el-tag
             v-for="file in sourceFiles"
             :key="file"
@@ -971,7 +971,7 @@ function goToPaper(paperId: number) {
           </el-tag>
           <el-button v-if="fileFilter" text size="small" @click="fileFilter = ''">显示全部</el-button>
         </div>
-        <div v-if="fileFilter" class="mt-1 text-gray-400">
+        <div v-if="fileFilter" class="mt-1 text-ink-subtle">
           筛选只影响展示，勾选与入库范围不变。
         </div>
       </div>
@@ -1008,7 +1008,7 @@ function goToPaper(paperId: number) {
             <el-radio value="pending">待审核</el-radio>
             <el-radio v-if="subject.can('review_question')" value="published">直接发布</el-radio>
           </el-radio-group>
-          <div class="mt-1 text-xs text-gray-400">建议先入库为草稿，逐题确认后再提交审核。</div>
+          <div class="mt-1 text-xs text-ink-subtle">建议先入库为草稿，逐题确认后再提交审核。</div>
         </el-col>
 
         <el-col :xs="24" :md="8">
@@ -1042,7 +1042,7 @@ function goToPaper(paperId: number) {
         >
           确认入库（{{ selectedDrafts.length }} 道）
         </el-button>
-        <span class="text-xs text-gray-400">只写入你勾选的题目。未匹配到的知识点名不会自动创建。</span>
+        <span class="text-xs text-ink-subtle">只写入你勾选的题目。未匹配到的知识点名不会自动创建。</span>
       </div>
 
       <el-alert
@@ -1055,11 +1055,11 @@ function goToPaper(paperId: number) {
       />
 
       <!-- 整卷导入 -->
-      <div class="mt-3 border-t border-gray-100 pt-3">
+      <div class="mt-3 border-t border-hairline pt-3">
         <el-checkbox v-model="wholePaperEnabled">
           同时把这份卷子还原成可编辑的试卷
         </el-checkbox>
-        <div class="mt-1 text-xs text-gray-400">
+        <div class="mt-1 text-xs text-ink-subtle">
           保留大题标题与题间说明。建卷失败不影响题目入库。
         </div>
         <el-input
@@ -1109,7 +1109,7 @@ function goToPaper(paperId: number) {
         <el-table-column prop="error" label="失败原因" min-width="240" />
       </el-table>
 
-      <div v-if="commitResult.unresolved_names?.length" class="mt-2 text-xs text-gray-500">
+      <div v-if="commitResult.unresolved_names?.length" class="mt-2 text-xs text-ink-muted">
         未匹配到的名称：{{ commitResult.unresolved_names.join('、') }}
       </div>
     </el-card>

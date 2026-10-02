@@ -5,6 +5,7 @@ import { questionApi } from '@/api'
 import { paperApi, type PaperBrief, type PaperScope } from '@/api/paper'
 import type { QuestionBrief, QuestionSort, QuestionType } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
+import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -218,7 +219,7 @@ function formatTime(value: string): string {
 
             <el-button @click="searchQuestions">搜索</el-button>
 
-            <span v-if="!subject.currentId" class="ml-auto text-xs text-gray-400">
+            <span v-if="!subject.currentId" class="ml-auto text-xs text-ink-subtle">
               请先在右上角选择学科
             </span>
           </div>
@@ -232,8 +233,8 @@ function formatTime(value: string): string {
                   compact
                   class="stem-clamp text-sm"
                 />
-                <div v-else class="text-sm text-gray-400">{{ row.stem_text || '（无题干）' }}</div>
-                <div v-if="row.source" class="mt-0.5 truncate text-xs text-gray-400">
+                <div v-else class="text-sm text-ink-subtle">{{ row.stem_text || '（无题干）' }}</div>
+                <div v-if="row.source" class="mt-0.5 truncate text-xs text-ink-subtle">
                   来源：{{ row.source }}
                 </div>
               </template>
@@ -249,7 +250,7 @@ function formatTime(value: string): string {
 
             <el-table-column label="难度" width="80">
               <template #default="{ row }">
-                <span class="text-amber-500">{{ '★'.repeat(row.difficulty) }}</span>
+                <DifficultyStars :level="row.difficulty" />
               </template>
             </el-table-column>
 
@@ -261,7 +262,7 @@ function formatTime(value: string): string {
 
             <el-table-column label="删除时间" width="140">
               <template #default="{ row }">
-                <span class="text-xs text-gray-500">{{ formatTime(row.updated_at) }}</span>
+                <span class="text-xs text-ink-muted">{{ formatTime(row.updated_at) }}</span>
               </template>
             </el-table-column>
 
@@ -276,7 +277,7 @@ function formatTime(value: string): string {
                 >
                   恢复
                 </el-button>
-                <span v-else class="text-xs text-gray-400">无权限</span>
+                <span v-else class="text-xs text-ink-subtle">无权限</span>
               </template>
             </el-table-column>
 
@@ -327,7 +328,7 @@ function formatTime(value: string): string {
 
             <el-button @click="searchPapers">搜索</el-button>
 
-            <span v-if="!subject.currentId" class="ml-auto text-xs text-gray-400">
+            <span v-if="!subject.currentId" class="ml-auto text-xs text-ink-subtle">
               请先在右上角选择学科
             </span>
           </div>
@@ -337,7 +338,7 @@ function formatTime(value: string): string {
               <template #default="{ row }">
                 <span class="text-sm">{{ row.title }}</span>
                 <el-tag v-if="row.scope === 'shared'" size="small" class="ml-2" type="info">共享</el-tag>
-                <div v-if="row.description" class="mt-0.5 truncate text-xs text-gray-400">
+                <div v-if="row.description" class="mt-0.5 truncate text-xs text-ink-subtle">
                   {{ row.description }}
                 </div>
               </template>
@@ -345,7 +346,7 @@ function formatTime(value: string): string {
 
             <el-table-column label="题目数" width="90">
               <template #default="{ row }">
-                <span class="text-gray-600">{{ row.question_count }}</span>
+                <span class="text-ink-regular">{{ row.question_count }}</span>
               </template>
             </el-table-column>
 
@@ -357,13 +358,13 @@ function formatTime(value: string): string {
 
             <el-table-column label="修订" width="70">
               <template #default="{ row }">
-                <span class="text-xs text-gray-400">r{{ row.revision }}</span>
+                <span class="text-xs text-ink-subtle">r{{ row.revision }}</span>
               </template>
             </el-table-column>
 
             <el-table-column label="删除时间" width="140">
               <template #default="{ row }">
-                <span class="text-xs text-gray-500">{{ formatTime(row.updated_at) }}</span>
+                <span class="text-xs text-ink-muted">{{ formatTime(row.updated_at) }}</span>
               </template>
             </el-table-column>
 
@@ -378,7 +379,7 @@ function formatTime(value: string): string {
                 >
                   恢复
                 </el-button>
-                <span v-else class="text-xs text-gray-400">无权限</span>
+                <span v-else class="text-xs text-ink-subtle">无权限</span>
               </template>
             </el-table-column>
 

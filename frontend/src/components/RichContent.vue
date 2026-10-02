@@ -107,14 +107,14 @@ function renderNode(node: Node): string {
     case 'tableHeader':
     case 'tableCell': {
       const tag = node.type === 'tableHeader' ? 'th' : 'td'
-      const extra = tag === 'th' ? 'font-semibold bg-gray-50' : ''
-      return `<${tag} class="border border-gray-300 px-2 py-1 align-top ${extra}">${renderNodes(
+      const extra = tag === 'th' ? 'font-semibold bg-surface-sunken' : ''
+      return `<${tag} class="border border-hairline-strong px-2 py-1 align-top ${extra}">${renderNodes(
         node.content ?? [],
       )}</${tag}>`
     }
 
     case 'codeBlock':
-      return `<pre class="my-2 overflow-x-auto rounded bg-gray-100 p-2 text-xs"><code>${escapeHtml(
+      return `<pre class="my-2 overflow-x-auto rounded bg-surface-sunken p-2 text-xs"><code>${escapeHtml(
         plainText(node),
       )}</code></pre>`
 
@@ -144,7 +144,7 @@ function applyMarks(text: string, marks?: Node['marks']): string {
         out = `<s>${out}</s>`
         break
       case 'code':
-        out = `<code class="rounded bg-gray-100 px-1 py-0.5 text-xs">${out}</code>`
+        out = `<code class="rounded bg-surface-sunken px-1 py-0.5 text-xs">${out}</code>`
         break
       case 'superscript':
         out = `<sup>${out}</sup>`
@@ -156,7 +156,7 @@ function applyMarks(text: string, marks?: Node['marks']): string {
         const href = String(mark.attrs?.href ?? '')
         // 只允许 http(s)：javascript: 之类的伪协议在 v-html 里是 XSS 入口。
         if (/^https?:\/\//i.test(href)) {
-          out = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline">${out}</a>`
+          out = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="text-accent-text underline">${out}</a>`
         }
         break
       }

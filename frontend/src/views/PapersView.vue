@@ -365,7 +365,7 @@ function formatTime(value: string): string {
 
       <div
         class="cursor-pointer rounded px-2 py-1.5 text-sm"
-        :class="query.folder_id === null ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
+        :class="query.folder_id === null ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="pickFolder(null)"
       >
         全部试卷
@@ -375,13 +375,13 @@ function formatTime(value: string): string {
         v-for="item in flatFolders"
         :key="item.folder.id"
         class="group flex cursor-pointer items-center rounded px-2 py-1.5 text-sm"
-        :class="query.folder_id === item.folder.id ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
+        :class="query.folder_id === item.folder.id ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         :style="{ paddingLeft: `${8 + item.depth * 12}px` }"
         @click="pickFolder(item.folder.id)"
       >
-        <el-icon class="mr-1 text-gray-400"><Folder /></el-icon>
+        <el-icon class="mr-1 text-ink-subtle"><Folder /></el-icon>
         <span class="flex-1 truncate">{{ item.folder.name }}</span>
-        <span class="text-xs text-gray-400">{{ item.folder.paper_count }}</span>
+        <span class="text-xs text-ink-subtle">{{ item.folder.paper_count }}</span>
         <!-- 包一层 span 阻止冒泡：点菜单不该顺手把侧栏筛选也切过去。
              el-dropdown 自己的监听在触发元素上，外层拦冒泡不影响它展开。 -->
         <span v-if="canEdit" class="ml-1" @click.stop>
@@ -458,7 +458,7 @@ function formatTime(value: string): string {
                 {{ row.title }}
               </el-link>
               <el-tag v-if="row.scope === 'shared'" size="small" class="ml-2" type="info">共享</el-tag>
-              <div v-if="row.description" class="mt-0.5 truncate text-xs text-gray-400">
+              <div v-if="row.description" class="mt-0.5 truncate text-xs text-ink-subtle">
                 {{ row.description }}
               </div>
             </template>
@@ -466,13 +466,13 @@ function formatTime(value: string): string {
 
           <el-table-column label="题目数" width="90">
             <template #default="{ row }">
-              <span class="text-gray-600">{{ row.question_count }}</span>
+              <span class="text-ink-regular">{{ row.question_count }}</span>
             </template>
           </el-table-column>
 
           <el-table-column label="总分" width="80">
             <template #default="{ row }">
-              <span class="text-gray-600">{{ row.scoring_enabled ? row.total_score : '—' }}</span>
+              <span class="text-ink-regular">{{ row.scoring_enabled ? row.total_score : '—' }}</span>
             </template>
           </el-table-column>
 
@@ -493,13 +493,13 @@ function formatTime(value: string): string {
 
           <el-table-column label="修订" width="70">
             <template #default="{ row }">
-              <span class="text-xs text-gray-400">r{{ row.revision }}</span>
+              <span class="text-xs text-ink-subtle">r{{ row.revision }}</span>
             </template>
           </el-table-column>
 
           <el-table-column label="更新于" width="130">
             <template #default="{ row }">
-              <span class="text-xs text-gray-500">{{ formatTime(row.updated_at) }}</span>
+              <span class="text-xs text-ink-muted">{{ formatTime(row.updated_at) }}</span>
             </template>
           </el-table-column>
 
@@ -593,7 +593,7 @@ function formatTime(value: string): string {
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="folderParentId" label="上级">
-          <span class="text-sm text-gray-500">
+          <span class="text-sm text-ink-muted">
             将建在「{{ findFolder(folderParentId)?.name ?? '未知目录' }}」下
           </span>
         </el-form-item>
@@ -606,7 +606,7 @@ function formatTime(value: string): string {
 
     <!-- 移动目录 -->
     <el-dialog v-model="moveVisible" title="移动目录" width="400px">
-      <div v-if="folderTarget" class="text-sm text-gray-500">
+      <div v-if="folderTarget" class="text-sm text-ink-muted">
         把「{{ folderTarget.name }}」移动到：
       </div>
       <el-select v-model="moveParentId" class="mt-2 w-full" placeholder="根目录">
@@ -618,7 +618,7 @@ function formatTime(value: string): string {
           :value="item.folder.id"
         />
       </el-select>
-      <p class="mt-2 text-xs text-gray-400">
+      <p class="mt-2 text-xs text-ink-subtle">
         只能移到同一空间（个人 / 共享）下的其它目录；目录里的试卷会跟着一起搬走。
       </p>
       <template #footer>

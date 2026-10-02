@@ -5,6 +5,8 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { systemApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { markSetupComplete } from '@/router'
+import AuthShell from '@/components/ui/AuthShell.vue'
+import ThemeToggle from '@/components/ui/ThemeToggle.vue'
 
 /**
  * 首次运行向导。
@@ -78,49 +80,42 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div class="flex h-full items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50">
-    <el-card class="w-[480px] shadow-lg" shadow="never">
-      <div class="mb-6 text-center">
-        <h1 class="text-xl font-semibold">初始化 QuestionMind</h1>
-        <p class="mt-1 text-sm text-gray-500">
-          创建第一个管理员账号。完成后即可登录使用。
-        </p>
-      </div>
+  <AuthShell title="初始化 QuestionMind" subtitle="创建第一个管理员账号。完成后即可登录使用。">
+    <template #corner><ThemeToggle /></template>
 
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
-        <el-form-item label="管理员用户名" prop="username">
-          <el-input v-model="form.username" placeholder="字母或数字，如 admin" />
-        </el-form-item>
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+      <el-form-item label="管理员用户名" prop="username">
+        <el-input v-model="form.username" placeholder="字母或数字，如 admin" />
+      </el-form-item>
 
-        <el-form-item label="显示名称">
-          <el-input v-model="form.nickname" placeholder="选填，默认为用户名" />
-        </el-form-item>
+      <el-form-item label="显示名称">
+        <el-input v-model="form.nickname" placeholder="选填，默认为用户名" />
+      </el-form-item>
 
-        <el-form-item label="密码" prop="password">
-          <el-input v-model="form.password" type="password" show-password placeholder="至少 8 位" />
-        </el-form-item>
+      <el-form-item label="密码" prop="password">
+        <el-input v-model="form.password" type="password" show-password placeholder="至少 8 位" />
+      </el-form-item>
 
-        <el-form-item label="确认密码" prop="confirm">
-          <el-input v-model="form.confirm" type="password" show-password />
-        </el-form-item>
+      <el-form-item label="确认密码" prop="confirm">
+        <el-input v-model="form.confirm" type="password" show-password />
+      </el-form-item>
 
-        <el-form-item label="默认学科">
-          <el-input v-model="form.first_subject_name" placeholder="选填，如「数学」" />
-          <div class="mt-1 text-xs text-gray-400">
-            填写后会自动创建该学科，并把管理员设为学科负责人。
-          </div>
-        </el-form-item>
+      <el-form-item label="默认学科">
+        <el-input v-model="form.first_subject_name" placeholder="选填，如「数学」" />
+        <div class="mt-1 text-xs text-ink-subtle">
+          填写后会自动创建该学科，并把管理员设为学科负责人。
+        </div>
+      </el-form-item>
 
-        <el-button
-          type="primary"
-          size="large"
-          class="mt-2 w-full"
-          :loading="loading"
-          @click="onSubmit"
-        >
-          完成初始化
-        </el-button>
-      </el-form>
-    </el-card>
-  </div>
+      <el-button
+        type="primary"
+        size="large"
+        class="mt-2 w-full"
+        :loading="loading"
+        @click="onSubmit"
+      >
+        完成初始化
+      </el-button>
+    </el-form>
+  </AuthShell>
 </template>

@@ -31,12 +31,12 @@ const OP_LABELS: Record<QuestionEditLine['op'], string> = {
 </script>
 
 <template>
-  <div class="rounded border border-purple-300 bg-purple-50 px-3 py-2 text-sm">
+  <div class="rounded border border-accent-border bg-accent-soft px-3 py-2 text-sm">
     <div class="flex flex-wrap items-center gap-2">
-      <el-icon class="text-purple-500"><MagicStick /></el-icon>
+      <el-icon class="text-accent-text"><MagicStick /></el-icon>
       <div class="flex min-w-0 flex-1 flex-col">
         <span class="font-medium">助手改动了 {{ lines.length }} 道题，尚未应用</span>
-        <span class="truncate text-xs text-gray-500">{{ summary }}</span>
+        <span class="truncate text-xs text-ink-muted">{{ summary }}</span>
       </div>
       <el-button text size="small" @click="expanded = !expanded">
         {{ expanded ? '收起' : '查看改动' }}
@@ -47,7 +47,7 @@ const OP_LABELS: Record<QuestionEditLine['op'], string> = {
       </el-button>
     </div>
 
-    <ul v-if="expanded" class="mt-2 max-h-64 space-y-1 overflow-y-auto border-t border-purple-200 pt-2">
+    <ul v-if="expanded" class="mt-2 max-h-64 space-y-1 overflow-y-auto border-t border-accent-border pt-2">
       <li
         v-for="line in lines"
         :key="line.key"
@@ -62,11 +62,11 @@ const OP_LABELS: Record<QuestionEditLine['op'], string> = {
           {{ OP_LABELS[line.op] }}
         </el-tag>
         <div class="min-w-0 flex-1">
-          <div class="text-xs text-gray-700">{{ line.stem }}</div>
+          <div class="text-xs text-ink">{{ line.stem }}</div>
           <div
             v-for="(label, i) in line.labels"
             :key="i"
-            class="break-words text-xs text-gray-500"
+            class="break-words text-xs text-ink-muted"
           >
             {{ label }}
           </div>
@@ -75,7 +75,7 @@ const OP_LABELS: Record<QuestionEditLine['op'], string> = {
       </li>
     </ul>
 
-    <div class="mt-1 text-xs text-gray-400">
+    <div class="mt-1 text-xs text-ink-subtle">
       应用后会立刻写进题库；改动题干会让引用了这些题的试卷提示「题目已更新」。
     </div>
   </div>

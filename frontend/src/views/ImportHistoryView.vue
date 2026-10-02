@@ -255,8 +255,8 @@ function countText(row: ImportTask): string {
     <!-- 队列概览 -->
     <div v-if="queue" class="flex flex-wrap gap-2">
       <el-card v-for="tile in STAT_TILES" :key="tile.key" shadow="never" class="!w-40 flex-1">
-        <div class="text-xs text-gray-400">{{ tile.label }}</div>
-        <div class="mt-1 text-2xl font-medium" :class="statValue(tile) > 0 ? 'text-gray-800' : 'text-gray-300'">
+        <div class="text-xs text-ink-subtle">{{ tile.label }}</div>
+        <div class="mt-1 text-2xl font-medium" :class="statValue(tile) > 0 ? 'text-ink' : 'text-ink-subtle/60'">
           {{ statValue(tile) }}
         </div>
       </el-card>
@@ -285,14 +285,14 @@ function countText(row: ImportTask): string {
         <el-button @click="search">刷新</el-button>
         <el-button type="primary" plain @click="goImport">去录题</el-button>
 
-        <span v-if="!subject.currentId" class="ml-auto text-xs text-gray-400">请先在右上角选择学科</span>
+        <span v-if="!subject.currentId" class="ml-auto text-xs text-ink-subtle">请先在右上角选择学科</span>
       </div>
 
       <el-table v-loading="loading" :data="rows" row-key="id" class="mt-3">
         <el-table-column label="导入内容" min-width="220">
           <template #default="{ row }">
             <div class="text-sm">{{ row.original_filename || '（未命名）' }}</div>
-            <div class="mt-0.5 text-xs text-gray-400">
+            <div class="mt-0.5 text-xs text-ink-subtle">
               {{ countText(row) }}
               <span v-if="row.attempt > 0"> · 第 {{ row.attempt }} 次尝试</span>
             </div>
@@ -307,20 +307,20 @@ function countText(row: ImportTask): string {
 
         <el-table-column label="失败原因" min-width="200">
           <template #default="{ row }">
-            <span v-if="row.error_message" class="text-xs text-red-500">{{ row.error_message }}</span>
-            <span v-else class="text-xs text-gray-300">—</span>
+            <span v-if="row.error_message" class="text-xs text-danger-text">{{ row.error_message }}</span>
+            <span v-else class="text-xs text-ink-subtle/60">—</span>
           </template>
         </el-table-column>
 
         <el-table-column label="创建时间" width="140">
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ formatTime(row.created_at) }}</span>
+            <span class="text-xs text-ink-muted">{{ formatTime(row.created_at) }}</span>
           </template>
         </el-table-column>
 
         <el-table-column label="结束时间" width="140">
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ formatTime(row.finished_at) }}</span>
+            <span class="text-xs text-ink-muted">{{ formatTime(row.finished_at) }}</span>
           </template>
         </el-table-column>
 
@@ -353,7 +353,7 @@ function countText(row: ImportTask): string {
               </el-button>
               <el-button text size="small" type="danger" @click="removeTask(row)">删除</el-button>
             </template>
-            <span v-else class="text-xs text-gray-400">无操作权限</span>
+            <span v-else class="text-xs text-ink-subtle">无操作权限</span>
           </template>
         </el-table-column>
 

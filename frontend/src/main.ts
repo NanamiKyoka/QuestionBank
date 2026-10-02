@@ -10,8 +10,12 @@ import './styles/main.css'
 
 import App from './App.vue'
 import { router } from './router'
+import { applyInitialTheme } from './stores/theme'
 
 const app = createApp(App)
+
+// 主题要在首屏渲染前落到 <html> 上，否则会闪一下浅色。
+applyInitialTheme()
 
 // 图标按需全局注册：Element Plus 的图标组件很多，
 // 逐个 import 到各页面反而更啰嗦，统一注册更省事。

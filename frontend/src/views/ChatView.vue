@@ -276,19 +276,19 @@ function formatTime(value: string): string {
           v-for="session in sessions"
           :key="session.id"
           class="group mb-1 cursor-pointer rounded px-2 py-1.5"
-          :class="currentSessionId === session.id ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50'"
+          :class="currentSessionId === session.id ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
           @click="openSession(session)"
         >
           <div class="flex items-center gap-1">
             <span class="flex-1 truncate text-sm">{{ session.title }}</span>
             <el-icon
-              class="hidden text-gray-400 hover:text-red-500 group-hover:block"
+              class="hidden text-ink-subtle hover:text-danger-text group-hover:block"
               @click.stop="removeSession(session)"
             >
               <Delete />
             </el-icon>
           </div>
-          <div class="text-xs text-gray-400">
+          <div class="text-xs text-ink-subtle">
             {{ session.message_count }} 条 · {{ formatTime(session.updated_at) }}
           </div>
         </div>
@@ -308,10 +308,10 @@ function formatTime(value: string): string {
             <el-option label="组卷场景" value="composition_editor" />
             <el-option label="审核场景" value="import_review" />
           </el-select>
-          <span class="text-xs text-gray-400">场景决定助手能用哪些工具</span>
+          <span class="text-xs text-ink-subtle">场景决定助手能用哪些工具</span>
           <!-- 组卷场景会解锁三个客户端工具，而它们只认"用户正在编辑的那份卷子"。
                与其让模型反复撞墙，不如在这里把话说清楚。 -->
-          <span v-if="scene === 'composition_editor'" class="text-xs text-amber-600">
+          <span v-if="scene === 'composition_editor'" class="text-xs text-warning-text">
             改卷请到组卷编辑器里的「AI 助手」，本页没有编辑器，助手无法改动试卷。
           </span>
         </div>
@@ -322,7 +322,7 @@ function formatTime(value: string): string {
           v-if="bubbles.length === 0"
           description="问我题库里的任何内容，或者让我帮你组卷"
         >
-          <div class="space-y-1 text-left text-xs text-gray-500">
+          <div class="space-y-1 text-left text-xs text-ink-muted">
             <div>· 帮我找 3 道关于函数单调性的题</div>
             <div>· 这份卷子一共几道题？</div>
             <div>· 新建一份「高一月考」试卷</div>
@@ -337,19 +337,19 @@ function formatTime(value: string): string {
         >
           <div
             class="max-w-[80%] rounded-lg px-3 py-2"
-            :class="bubble.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100'"
+            :class="bubble.role === 'user' ? 'bg-accent text-white' : 'bg-surface-sunken'"
           >
             <!-- 工具调用轨迹 -->
             <div v-if="bubble.tools.length" class="mb-1.5 space-y-1">
               <div
                 v-for="(tool, ti) in bubble.tools"
                 :key="ti"
-                class="flex items-center gap-1 rounded bg-white/70 px-2 py-1 text-xs text-gray-600"
+                class="flex items-center gap-1 rounded bg-surface/70 px-2 py-1 text-xs text-ink-regular"
               >
                 <el-icon v-if="tool.running" class="is-loading"><Loading /></el-icon>
                 <el-icon v-else><Select /></el-icon>
                 <span>{{ tool.name }}</span>
-                <span v-if="tool.output" class="truncate text-gray-400">{{ tool.output }}</span>
+                <span v-if="tool.output" class="truncate text-ink-subtle">{{ tool.output }}</span>
               </div>
             </div>
 
@@ -357,17 +357,17 @@ function formatTime(value: string): string {
               {{ bubble.content }}
             </div>
 
-            <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-gray-400">
+            <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-ink-subtle">
               <el-icon class="is-loading"><Loading /></el-icon>
               思考中…
             </div>
 
-            <div v-if="bubble.error" class="mt-1 text-xs text-red-500">{{ bubble.error }}</div>
+            <div v-if="bubble.error" class="mt-1 text-xs text-danger-text">{{ bubble.error }}</div>
           </div>
         </div>
       </div>
 
-      <div class="mt-3 border-t border-gray-200 pt-3">
+      <div class="mt-3 border-t border-hairline pt-3">
         <el-input
           v-model="input"
           type="textarea"
@@ -380,7 +380,7 @@ function formatTime(value: string): string {
         <div class="mt-2 flex items-center gap-2">
           <el-button v-if="sending" type="danger" plain @click="stop">停止生成</el-button>
           <el-button v-else type="primary" :disabled="!input.trim()" @click="send">发送</el-button>
-          <span class="text-xs text-gray-400">
+          <span class="text-xs text-ink-subtle">
             助手会调用工具查询题库；涉及修改的操作会先向你确认。
           </span>
         </div>

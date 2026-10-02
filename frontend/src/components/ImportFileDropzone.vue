@@ -98,8 +98,8 @@ function clear() {
     tabindex="0"
     class="rounded-lg border-2 border-dashed px-6 py-8 text-center transition-colors focus:outline-none"
     :class="[
-      dragging ? 'border-blue-400 bg-blue-50/60' : 'border-gray-300 bg-gray-50/40',
-      disabled ? 'pointer-events-none opacity-60' : 'hover:border-blue-300',
+      dragging ? 'border-accent bg-accent-soft/60' : 'border-hairline-strong bg-surface-sunken/40',
+      disabled ? 'pointer-events-none opacity-60' : 'hover:border-accent-border',
     ]"
     @dragover.prevent="dragging = true"
     @dragleave.prevent="dragging = false"
@@ -117,9 +117,9 @@ function clear() {
 
     <template v-if="modelValue">
       <div class="flex flex-col items-center gap-2">
-        <el-icon :size="32" class="text-blue-500"><Document /></el-icon>
+        <el-icon :size="32" class="text-accent-text"><Document /></el-icon>
         <div class="text-sm font-medium" :title="modelValue.name">{{ modelValue.name }}</div>
-        <div class="text-xs text-gray-400">
+        <div class="text-xs text-ink-subtle">
           {{ sizeLabel(modelValue.size) }} · {{ extensions[0]?.slice(1).toUpperCase() }}
         </div>
         <div class="mt-2 flex gap-2">
@@ -131,21 +131,21 @@ function clear() {
 
     <template v-else>
       <div class="flex flex-col items-center gap-2">
-        <el-icon :size="36" class="text-gray-300"><UploadFilled /></el-icon>
+        <el-icon :size="36" class="text-ink-subtle/60"><UploadFilled /></el-icon>
         <el-button type="primary" plain :disabled="disabled" @click="picker?.click()">
           <el-icon class="mr-1"><FolderOpened /></el-icon>
           选择文件
         </el-button>
-        <div class="text-xs text-gray-500">或把文件拖到这里，也可以直接 Ctrl+V 粘贴截图</div>
-        <div class="mt-1 flex flex-wrap items-center justify-center gap-2 text-xs text-gray-400">
+        <div class="text-xs text-ink-muted">或把文件拖到这里，也可以直接 Ctrl+V 粘贴截图</div>
+        <div class="mt-1 flex flex-wrap items-center justify-center gap-2 text-xs text-ink-subtle">
           <el-tag v-for="ext in extensions" :key="ext" size="small" type="info" effect="plain">
             {{ ext.slice(1).toUpperCase() }}
           </el-tag>
         </div>
-        <div class="text-xs text-gray-400">
+        <div class="text-xs text-ink-subtle">
           {{ formatHint }} 均可；.zip 会一次导入压缩包里的多份文档。
         </div>
-        <div class="text-xs text-gray-400">
+        <div class="text-xs text-ink-subtle">
           .pdf 会先渲染成页图再由模型识别：公式与几何图形按排版原样保留，比读文字层准确得多；
           代价是比 .md/.txt 慢（模型要逐页看图）。扫描件同样适用。
         </div>

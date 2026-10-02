@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ImportDraft, ImportDraftNode } from '@/api/importTask'
+import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import RichContent from '@/components/RichContent.vue'
 
 /**
@@ -82,7 +83,7 @@ function answerText(draft: ImportDraft): string {
   <div
     class="rounded border"
     :class="[
-      checked ? 'border-blue-300 bg-blue-50/40' : 'border-gray-200',
+      checked ? 'border-accent-border bg-accent-soft/40' : 'border-hairline',
       isChild ? 'border-l-4 border-l-indigo-300' : '',
     ]"
   >
@@ -97,7 +98,7 @@ function answerText(draft: ImportDraft): string {
         <div class="mb-1 flex flex-wrap items-center gap-2">
           <span class="text-sm font-medium">{{ isChild ? '小问' : '第' }} {{ index + 1 }} {{ isChild ? '' : '题' }}</span>
           <el-tag size="small">{{ draft.type_label || draft.question_type }}</el-tag>
-          <span class="text-amber-500">{{ '★'.repeat(draft.difficulty || 0) }}</span>
+          <DifficultyStars :level="draft.difficulty || 0" />
           <el-tag v-if="sourceNumber" size="small" type="info" effect="plain">
             原卷第 {{ sourceNumber }} 题
           </el-tag>
@@ -113,7 +114,7 @@ function answerText(draft: ImportDraft): string {
           </el-tag>
         </div>
 
-        <div class="rounded bg-white p-2">
+        <div class="rounded bg-surface p-2">
           <RichContent :doc="draft.stem" />
           <div v-if="draft.options?.length" class="mt-1 space-y-0.5">
             <div v-for="option in draft.options" :key="option.id" class="flex gap-1 text-sm">
@@ -124,10 +125,10 @@ function answerText(draft: ImportDraft): string {
         </div>
 
         <div class="mt-1 text-xs">
-          <span class="text-gray-500">答案：</span>
+          <span class="text-ink-muted">答案：</span>
           <!-- 待补充的答案不着绿色：绿色是"识别到了"的信号，
                涂成一样的颜色，一屏题目就分不出哪些答案还欠着。 -->
-          <span :class="draft.answer?.kind === 'pending' ? 'text-gray-400' : 'text-green-700'">
+          <span :class="draft.answer?.kind === 'pending' ? 'text-ink-subtle' : 'text-success-text'">
             {{ answerText(draft) || '未识别' }}
           </span>
         </div>
@@ -135,7 +136,7 @@ function answerText(draft: ImportDraft): string {
         <!-- 解析预览 -->
         <el-collapse v-if="draft.analysis" class="mt-1">
           <el-collapse-item title="查看解析">
-            <div class="rounded bg-gray-50 p-2 text-sm">
+            <div class="rounded bg-surface-sunken p-2 text-sm">
               <RichContent :doc="draft.analysis" />
             </div>
           </el-collapse-item>
@@ -144,7 +145,7 @@ function answerText(draft: ImportDraft): string {
         <!-- 知识点建议：模型自述与向量检索分开呈现 -->
         <div class="mt-2 flex flex-wrap items-center gap-1 text-xs">
           <template v-if="draft.suggested_knowledge_points?.length">
-            <span class="text-gray-500">知识点候选：</span>
+            <span class="text-ink-muted">知识点候选：</span>
             <el-tag
               v-for="s in draft.suggested_knowledge_points"
               :key="s.knowledge_point_id"
@@ -156,7 +157,7 @@ function answerText(draft: ImportDraft): string {
             </el-tag>
           </template>
           <template v-if="draft.knowledge_points?.length">
-            <span class="ml-2 text-gray-500">模型提及：</span>
+            <span class="ml-2 text-ink-muted">模型提及：</span>
             <el-tag
               v-for="name in draft.knowledge_points"
               :key="name"
@@ -189,7 +190,7 @@ function answerText(draft: ImportDraft): string {
     </div>
 
     <!-- 小问：缩进 + 竖线，让层级一眼可辨 -->
-    <div v-if="children.length" class="border-t border-dashed border-gray-200 px-3 pb-2 pl-5">
+    <div v-if="children.length" class="border-t border-dashed border-hairline px-3 pb-2 pl-5">
       <div class="space-y-2 pt-2">
         <ImportDraftCard
           v-for="child in children"

@@ -170,7 +170,7 @@ function roleLabel(row: User): string {
               <el-avatar :size="28">{{ (row.nickname || row.username).slice(0, 1) }}</el-avatar>
               <div>
                 <div class="text-sm">{{ row.nickname || row.username }}</div>
-                <div class="text-xs text-gray-400">{{ row.username }}</div>
+                <div class="text-xs text-ink-subtle">{{ row.username }}</div>
               </div>
             </div>
           </template>
@@ -200,7 +200,7 @@ function roleLabel(row: User): string {
               <el-button text size="small" @click="resetPassword(row)">重置密码</el-button>
               <el-button text size="small" type="danger" @click="remove(row)">删除</el-button>
             </template>
-            <span v-else class="text-xs text-gray-400">当前账号</span>
+            <span v-else class="text-xs text-ink-subtle">当前账号</span>
           </template>
         </el-table-column>
       </el-table>
@@ -234,7 +234,7 @@ function roleLabel(row: User): string {
         </el-form-item>
 
         <el-divider content-position="left">
-          <span class="text-xs text-gray-400">学科权限（可选）</span>
+          <span class="text-xs text-ink-subtle">学科权限（可选）</span>
         </el-divider>
 
         <el-form-item label="加入学科">
@@ -250,7 +250,7 @@ function roleLabel(row: User): string {
 
         <el-form-item label="全局管理员">
           <el-switch v-model="form.is_superuser" />
-          <span class="ml-2 text-xs text-gray-400">拥有全部学科与系统设置的权限</span>
+          <span class="ml-2 text-xs text-ink-subtle">拥有全部学科与系统设置的权限</span>
         </el-form-item>
       </el-form>
       <template #footer>

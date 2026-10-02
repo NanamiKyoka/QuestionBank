@@ -265,14 +265,14 @@ function insertSubjectToken(key: string, token: string) {
           <el-tag v-if="item.override_count > 0" size="small" type="warning" effect="plain">
             {{ item.override_count }} 个学科有覆盖
           </el-tag>
-          <code class="text-xs text-gray-400">{{ item.key }}</code>
+          <code class="text-xs text-ink-subtle">{{ item.key }}</code>
         </div>
       </template>
 
-      <p class="mb-2 text-xs text-gray-500">{{ item.description }}</p>
+      <p class="mb-2 text-xs text-ink-muted">{{ item.description }}</p>
 
       <div class="mb-2 flex flex-wrap items-center gap-2">
-        <span class="text-xs text-gray-400">可用占位符：</span>
+        <span class="text-xs text-ink-subtle">可用占位符：</span>
         <el-tag
           v-for="p in item.placeholders"
           :key="p.name"
@@ -288,7 +288,7 @@ function insertSubjectToken(key: string, token: string) {
             一行里只要有一个占位符取值为空，整行会被删除——这是做"可选段落"的方式。<br />
             因此必须保留的固定文字不要和可能为空的占位符写在同一行。
           </template>
-          <span class="text-xs text-gray-400 underline decoration-dotted">规则说明</span>
+          <span class="text-xs text-ink-subtle underline decoration-dotted">规则说明</span>
         </el-tooltip>
       </div>
 
@@ -315,7 +315,7 @@ function insertSubjectToken(key: string, token: string) {
         <el-button size="small" @click="globalDrafts[item.key] = item.default">
           填入内置默认
         </el-button>
-        <span v-if="item.template" class="text-xs text-gray-400">
+        <span v-if="item.template" class="text-xs text-ink-subtle">
           最后修改：{{ formatTime(item.template.updated_at) }}
         </span>
       </div>
@@ -343,7 +343,7 @@ function insertSubjectToken(key: string, token: string) {
       </template>
 
       <div class="mb-3 flex items-center gap-3">
-        <span class="text-xs text-gray-400">学科</span>
+        <span class="text-xs text-ink-subtle">学科</span>
         <el-select v-model="currentSubject" class="w-56" placeholder="选择学科">
           <el-option v-for="s in subjects" :key="s.id" :label="s.name" :value="s.id" />
         </el-select>
@@ -355,14 +355,14 @@ function insertSubjectToken(key: string, token: string) {
       <el-empty v-if="!subjectData" description="请选择学科" />
 
       <div v-else class="space-y-3">
-        <p class="text-xs text-gray-500">
+        <p class="text-xs text-ink-muted">
           留空表示该学科使用全局模板。全局模板也没配时使用内置默认。
         </p>
 
         <div
           v-for="item in subjectData.prompts"
           :key="item.key"
-          class="border-b border-gray-100 pb-3 last:border-b-0"
+          class="border-b border-hairline pb-3 last:border-b-0"
         >
           <div class="mb-1 flex flex-wrap items-center gap-2">
             <span class="text-sm">{{ item.name }}</span>
@@ -372,7 +372,7 @@ function insertSubjectToken(key: string, token: string) {
             <el-tag v-if="item.override_id > 0" size="small" type="success" effect="plain">
               已覆盖
             </el-tag>
-            <span v-if="item.override_updated_at" class="text-xs text-gray-400">
+            <span v-if="item.override_updated_at" class="text-xs text-ink-subtle">
               最后修改：{{ formatTime(item.override_updated_at) }}
             </span>
           </div>

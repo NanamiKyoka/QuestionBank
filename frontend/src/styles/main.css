@@ -1,14 +1,234 @@
 /*
  * 样式分层：
- *  1. Tailwind 的主题与工具类（**故意不引入 preflight**）
- *  2. 少量全局基础样式
+ * 1. 语义色 token（:root / html.dark）+ Tailwind 主题映射
+ * 2. Element Plus 变量桥接
+ * 3. 少量全局基础样式
  *
  * 为什么不引入 preflight：它会重置所有元素的 margin/padding/边框，
  * 与 Element Plus 的组件样式正面冲突（按钮、输入框、表格都会走形）。
  * 只取 theme + utilities，两套样式就能和平共处。
+ *
+ * 配色为什么放在这一层：视图里同时存在 Element Plus 的语义色和
+ * Tailwind 原始色板两套取值，同一语义有两个色值。把两边都接到
+ * 同一组 token 上，改色只需改这一处。
  */
 @import 'tailwindcss/theme.css';
 @import 'tailwindcss/utilities.css';
+
+:root {
+  color-scheme: light;
+
+  /* 强调色拆成填充与文字两个角色：暗色下同一个色值无法同时满足
+     白字按钮底色和卡面文字的对比度要求。 */
+  --qm-accent: #1d4ed8;
+  --qm-accent-text: #1d4ed8;
+  --qm-accent-soft: #eff6ff;
+  --qm-accent-border: #bfdbfe;
+
+  --qm-success: #16a34a;
+  --qm-success-text: #15803d;
+  --qm-success-soft: #f0fdf4;
+  --qm-success-border: #bbf7d0;
+
+  --qm-warning: #d97706;
+  --qm-warning-text: #b45309;
+  --qm-warning-soft: #fffbeb;
+  --qm-warning-border: #fde68a;
+
+  --qm-danger: #dc2626;
+  --qm-danger-text: #b91c1c;
+  --qm-danger-soft: #fef2f2;
+  --qm-danger-border: #fecaca;
+
+  --qm-surface: #ffffff;
+  --qm-surface-sunken: #f5f7fa;
+  --qm-border: #e5e7eb;
+  --qm-border-strong: #d1d5db;
+
+  --qm-ink: #111827;
+  --qm-ink-regular: #374151;
+  --qm-ink-muted: #4b5563;
+  --qm-ink-subtle: #6b7280;
+
+  --qm-paper: #ffffff;
+  --qm-paper-border: #e5e7eb;
+  --qm-radius: 6px;
+}
+
+/*
+ * 字体栈。拉丁字形走系统无衬线，中文回落到各平台自带的中文字体。
+ * 之前这里写着 'Inter'，但没有任何地方加载过它，这个声明一直是死的，
+ * 实际生效的只有后面的系统字体。删掉比留着一个不存在的字体诚实。
+ */
+:root {
+  --qm-font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --qm-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+html.dark {
+  color-scheme: dark;
+
+  --qm-accent: #2563eb;
+  --qm-accent-text: #60a5fa;
+  --qm-accent-soft: #172554;
+  --qm-accent-border: #1e3a8a;
+
+  --qm-success: #22c55e;
+  --qm-success-text: #4ade80;
+  --qm-success-soft: #052e16;
+  --qm-success-border: #14532d;
+
+  --qm-warning: #f59e0b;
+  --qm-warning-text: #fbbf24;
+  --qm-warning-soft: #451a03;
+  --qm-warning-border: #78350f;
+
+  --qm-danger: #ef4444;
+  --qm-danger-text: #f87171;
+  --qm-danger-soft: #450a0a;
+  --qm-danger-border: #7f1d1d;
+
+  --qm-surface: #1d1e1f;
+  --qm-surface-sunken: #141414;
+  --qm-border: #363637;
+  --qm-border-strong: #4c4d4f;
+
+  --qm-ink: #e5eaf3;
+  --qm-ink-regular: #cfd3dc;
+  --qm-ink-muted: #9ca3af;
+  --qm-ink-subtle: #8d9095;
+
+  --qm-paper: #1d1e1f;
+  --qm-paper-border: #363637;
+}
+
+/*
+ * Tailwind 主题映射。inline 让工具类直接引用上面的 CSS 变量，
+ * 这样 bg-surface / text-ink-muted 会跟着 html.dark 一起翻面，
+ * 不需要为暗色再写一遍工具类。
+ */
+@theme inline {
+  --color-accent: var(--qm-accent);
+  --color-accent-text: var(--qm-accent-text);
+  --color-accent-soft: var(--qm-accent-soft);
+  --color-accent-border: var(--qm-accent-border);
+
+  --color-success: var(--qm-success);
+  --color-success-text: var(--qm-success-text);
+  --color-success-soft: var(--qm-success-soft);
+  --color-success-border: var(--qm-success-border);
+
+  --color-warning: var(--qm-warning);
+  --color-warning-text: var(--qm-warning-text);
+  --color-warning-soft: var(--qm-warning-soft);
+  --color-warning-border: var(--qm-warning-border);
+
+  --color-danger: var(--qm-danger);
+  --color-danger-text: var(--qm-danger-text);
+  --color-danger-soft: var(--qm-danger-soft);
+  --color-danger-border: var(--qm-danger-border);
+
+  --color-surface: var(--qm-surface);
+  --color-surface-sunken: var(--qm-surface-sunken);
+  --color-hairline: var(--qm-border);
+  --color-hairline-strong: var(--qm-border-strong);
+
+  --color-ink: var(--qm-ink);
+  --color-ink-regular: var(--qm-ink-regular);
+  --color-ink-muted: var(--qm-ink-muted);
+  --color-ink-subtle: var(--qm-ink-subtle);
+
+  --color-paper: var(--qm-paper);
+  --color-paper-border: var(--qm-paper-border);
+
+  --radius-token: var(--qm-radius);
+}
+
+/*
+ * Element Plus 桥接。Element Plus 2.x 的配色全部走 CSS 变量，
+ * 所以不需要引入 SCSS 编译，直接覆盖变量即可。
+ * 选择器同时写 html.dark：暗色主题下 Element Plus 自带的取值
+ * 特异性相同，本文件在样式表更靠后，因此这里的定义胜出。
+ */
+:root,
+html.dark {
+  --el-color-primary: var(--qm-accent);
+  --el-color-primary-light-3: color-mix(in srgb, var(--qm-accent) 80%, #fff);
+  --el-color-primary-light-5: color-mix(in srgb, var(--qm-accent) 50%, #fff);
+  --el-color-primary-light-7: color-mix(in srgb, var(--qm-accent) 30%, #fff);
+  --el-color-primary-light-8: color-mix(in srgb, var(--qm-accent) 20%, #fff);
+  --el-color-primary-light-9: var(--qm-accent-soft);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--qm-accent) 80%, #000);
+
+  --el-color-success: var(--qm-success);
+  --el-color-success-light-3: color-mix(in srgb, var(--qm-success) 80%, #fff);
+  --el-color-success-light-5: color-mix(in srgb, var(--qm-success) 50%, #fff);
+  --el-color-success-light-7: color-mix(in srgb, var(--qm-success) 30%, #fff);
+  --el-color-success-light-8: color-mix(in srgb, var(--qm-success) 20%, #fff);
+  --el-color-success-light-9: var(--qm-success-soft);
+  --el-color-success-dark-2: color-mix(in srgb, var(--qm-success) 80%, #000);
+
+  --el-color-warning: var(--qm-warning);
+  --el-color-warning-light-3: color-mix(in srgb, var(--qm-warning) 80%, #fff);
+  --el-color-warning-light-5: color-mix(in srgb, var(--qm-warning) 50%, #fff);
+  --el-color-warning-light-7: color-mix(in srgb, var(--qm-warning) 30%, #fff);
+  --el-color-warning-light-8: color-mix(in srgb, var(--qm-warning) 20%, #fff);
+  --el-color-warning-light-9: var(--qm-warning-soft);
+  --el-color-warning-dark-2: color-mix(in srgb, var(--qm-warning) 80%, #000);
+
+  --el-color-danger: var(--qm-danger);
+  --el-color-danger-light-3: color-mix(in srgb, var(--qm-danger) 80%, #fff);
+  --el-color-danger-light-5: color-mix(in srgb, var(--qm-danger) 50%, #fff);
+  --el-color-danger-light-7: color-mix(in srgb, var(--qm-danger) 30%, #fff);
+  --el-color-danger-light-8: color-mix(in srgb, var(--qm-danger) 20%, #fff);
+  --el-color-danger-light-9: var(--qm-danger-soft);
+  --el-color-danger-dark-2: color-mix(in srgb, var(--qm-danger) 80%, #000);
+
+  --el-color-error: var(--qm-danger);
+  --el-color-error-light-3: var(--el-color-danger-light-3);
+  --el-color-error-light-5: var(--el-color-danger-light-5);
+  --el-color-error-light-7: var(--el-color-danger-light-7);
+  --el-color-error-light-8: var(--el-color-danger-light-8);
+  --el-color-error-light-9: var(--el-color-danger-soft);
+  --el-color-error-dark-2: var(--el-color-danger-dark-2);
+
+  --el-color-info: var(--qm-ink-subtle);
+  --el-color-info-light-3: color-mix(in srgb, var(--qm-ink-subtle) 80%, #fff);
+  --el-color-info-light-5: color-mix(in srgb, var(--qm-ink-subtle) 50%, #fff);
+  --el-color-info-light-7: color-mix(in srgb, var(--qm-ink-subtle) 30%, #fff);
+  --el-color-info-light-8: color-mix(in srgb, var(--qm-ink-subtle) 20%, #fff);
+  --el-color-info-light-9: var(--qm-surface-sunken);
+  --el-color-info-dark-2: color-mix(in srgb, var(--qm-ink-subtle) 80%, #000);
+
+  --el-bg-color-page: var(--qm-surface-sunken);
+  --el-bg-color: var(--qm-surface);
+  --el-bg-color-overlay: var(--qm-surface);
+  --el-fill-color-blank: var(--qm-surface);
+  --el-fill-color-lighter: var(--qm-surface-sunken);
+  --el-fill-color-light: var(--qm-surface-sunken);
+  --el-fill-color: var(--qm-border);
+  --el-fill-color-dark: var(--qm-border-strong);
+  --el-fill-color-darker: var(--qm-border-strong);
+
+  --el-border-color: var(--qm-border-strong);
+  --el-border-color-light: var(--qm-border);
+  --el-border-color-lighter: var(--qm-border);
+  --el-border-color-extra-light: var(--qm-border);
+  --el-border-color-dark: var(--qm-border-strong);
+  --el-border-color-darker: var(--qm-border-strong);
+
+  --el-text-color-primary: var(--qm-ink);
+  --el-text-color-regular: var(--qm-ink-regular);
+  --el-text-color-secondary: var(--qm-ink-muted);
+  --el-text-color-placeholder: var(--qm-ink-subtle);
+  --el-text-color-disabled: var(--qm-ink-subtle);
+
+  --el-border-radius-base: var(--qm-radius);
+  --el-border-radius-small: 4px;
+  --el-font-size-base: 14px;
+}
 
 html,
 body,
@@ -19,10 +239,29 @@ body,
 
 body {
   font-family:
-    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', sans-serif;
-  background-color: var(--el-bg-color-page);
-  color: var(--el-text-color-primary);
+    var(--qm-font-sans),
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    sans-serif;
+  background-color: var(--qm-surface-sunken);
+  color: var(--qm-ink-regular);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 数字列右对齐时字宽必须固定，否则改一次数据整列都在抖 */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 键盘可见焦点环。鼠标点击不出现，Tab 导航时出现。 */
+:focus-visible {
+  outline: 2px solid var(--qm-accent-text);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* 富文本与题目渲染里的公式统一用 KaTeX 排版 */

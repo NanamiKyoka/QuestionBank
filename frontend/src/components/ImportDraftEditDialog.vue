@@ -378,7 +378,7 @@ function onSubmit() {
           答案稍后补充（由老师在题库里填写）
         </el-checkbox>
 
-        <div v-if="form.answerPending" class="text-xs text-gray-400">
+        <div v-if="form.answerPending" class="text-xs text-ink-subtle">
           保持为空即可保存：入库后这道题显示为「待补充答案」，
           在题库里随时能补上。
         </div>
@@ -417,7 +417,7 @@ function onSubmit() {
               </el-button>
             </div>
             <el-button text type="primary" @click="addBlank">+ 添加空位</el-button>
-            <div class="text-xs text-gray-400">
+            <div class="text-xs text-ink-subtle">
               提示：题干里用工具栏的「填空位」按钮插入空位，数量需与答案个数一致。
             </div>
           </div>

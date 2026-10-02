@@ -47,7 +47,7 @@ function setStyle(next: string) {
   >
     <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-answerspace__controls" contenteditable="false">
-      <span class="text-xs text-gray-400">答题区</span>
+      <span class="text-xs text-ink-subtle">答题区</span>
       <el-input-number
         :model-value="lines"
         :min="ANSWER_MIN_LINES"

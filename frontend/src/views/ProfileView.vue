@@ -201,7 +201,7 @@ function formatTime(value: string | null | undefined): string {
             </el-avatar>
             <div>
               <div class="font-medium">{{ auth.displayName || '未设置昵称' }}</div>
-              <div class="text-xs text-gray-400">@{{ auth.user?.username }}</div>
+              <div class="text-xs text-ink-subtle">@{{ auth.user?.username }}</div>
             </div>
           </div>
 
@@ -214,7 +214,7 @@ function formatTime(value: string | null | undefined): string {
             </el-form-item>
             <el-form-item label="头像地址">
               <el-input v-model="form.avatar" maxlength="255" placeholder="图片 URL，选填" />
-              <div class="mt-1 text-xs text-gray-400">
+              <div class="mt-1 text-xs text-ink-subtle">
                 粘贴一个图片 URL 即可；没有就显示昵称首字。
               </div>
             </el-form-item>
@@ -315,7 +315,7 @@ function formatTime(value: string | null | undefined): string {
           >
             {{ m.subject_name }} · {{ m.role_label }}
           </el-tag>
-          <span v-if="(auth.user?.memberships ?? []).length === 0" class="text-gray-400">
+          <span v-if="(auth.user?.memberships ?? []).length === 0" class="text-ink-subtle">
             尚未加入任何学科
           </span>
         </el-descriptions-item>
@@ -347,7 +347,7 @@ function formatTime(value: string | null | undefined): string {
           保存
         </el-button>
         <el-button size="small" @click="clearLastSubject">清除</el-button>
-        <span class="text-xs text-gray-400">
+        <span class="text-xs text-ink-subtle">
           登录后自动进入这个学科，省去每次在左上角重选。
         </span>
       </div>

@@ -5,6 +5,7 @@ import RichContent from '@/components/RichContent.vue'
 import PaperBlockActions from './PaperBlockActions.vue'
 import { QUESTION_NUMBER_MAX_LENGTH, type PaperQuestionProjection } from '@/api/paper'
 import { answerTextOf } from '@/lib/paperView'
+import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import { paperCanvasStateOf } from './canvasState'
 
 /**
@@ -102,7 +103,7 @@ function setScore(next: number | undefined) {
 
       <span class="qm-canvas-question__meta">
         {{ projection?.question_type_label }}
-        <template v-if="projection?.difficulty"> · {{ '★'.repeat(projection.difficulty) }}</template>
+        <template v-if="projection?.difficulty"> · <DifficultyStars :level="projection.difficulty" /></template>
       </span>
 
       <div v-if="state.scoringEnabled" class="qm-canvas-question__score">
@@ -145,10 +146,10 @@ function setScore(next: number | undefined) {
 <style scoped>
 .qm-canvas-question {
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--el-border-color-lighter);
-  border-left: 4px solid var(--el-color-primary-light-3);
-  border-radius: 4px;
-  background: #fff;
+  border: 1px solid var(--qm-paper-border);
+  border-left: 3px solid var(--qm-accent);
+  border-radius: var(--qm-radius);
+  background: var(--qm-paper);
 }
 .qm-canvas-question__head {
   display: flex;

@@ -349,7 +349,7 @@ function formatTime(value: string): string {
       >
         <el-table-column label="时间" width="160">
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ formatTime(row.created_at) }}</span>
+            <span class="text-xs text-ink-muted">{{ formatTime(row.created_at) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="用户" min-width="140">
@@ -370,7 +370,7 @@ function formatTime(value: string): string {
         <el-table-column label="资源" min-width="160">
           <template #default="{ row }">
             <span class="text-sm">{{ row.resource }}</span>
-            <span v-if="row.resource_id" class="ml-1 text-xs text-gray-400">
+            <span v-if="row.resource_id" class="ml-1 text-xs text-ink-subtle">
               #{{ row.resource_id }}
             </span>
           </template>
@@ -384,17 +384,17 @@ function formatTime(value: string): string {
         </el-table-column>
         <el-table-column label="状态码" width="90" align="center">
           <template #default="{ row }">
-            <span :class="row.success ? '' : 'text-red-500'">{{ row.status_code }}</span>
+            <span :class="row.success ? '' : 'text-danger-text'">{{ row.status_code }}</span>
           </template>
         </el-table-column>
         <el-table-column label="耗时" width="90" align="right">
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ row.duration_ms }}ms</span>
+            <span class="text-xs text-ink-muted">{{ row.duration_ms }}ms</span>
           </template>
         </el-table-column>
         <el-table-column label="IP" width="140">
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ row.ip || '-' }}</span>
+            <span class="text-xs text-ink-muted">{{ row.ip || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="80" fixed="right">
@@ -425,7 +425,7 @@ function formatTime(value: string): string {
           <el-descriptions-item label="时间">{{ formatTime(selected.created_at) }}</el-descriptions-item>
           <el-descriptions-item label="用户">
             {{ selected.username || '（已删除）' }}
-            <span v-if="selected.user_id" class="text-xs text-gray-400">#{{ selected.user_id }}</span>
+            <span v-if="selected.user_id" class="text-xs text-ink-subtle">#{{ selected.user_id }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="动作">{{ selected.action }}</el-descriptions-item>
           <el-descriptions-item label="资源">
@@ -443,7 +443,7 @@ function formatTime(value: string): string {
               {{ selected.success ? '成功' : '失败' }}
             </el-tag>
             <span class="ml-2">HTTP {{ selected.status_code }}</span>
-            <span class="ml-2 text-gray-400">{{ selected.duration_ms }}ms</span>
+            <span class="ml-2 text-ink-subtle">{{ selected.duration_ms }}ms</span>
           </el-descriptions-item>
           <el-descriptions-item label="来源 IP">{{ selected.ip || '-' }}</el-descriptions-item>
           <el-descriptions-item label="User-Agent">
@@ -452,8 +452,8 @@ function formatTime(value: string): string {
         </el-descriptions>
 
         <template v-if="detailText(selected)">
-          <div class="text-xs text-gray-500">附加信息</div>
-          <pre class="max-h-80 overflow-auto rounded bg-gray-50 p-3 text-xs">{{ detailText(selected) }}</pre>
+          <div class="text-xs text-ink-muted">附加信息</div>
+          <pre class="max-h-80 overflow-auto rounded bg-surface-sunken p-3 text-xs">{{ detailText(selected) }}</pre>
         </template>
       </div>
     </el-drawer>

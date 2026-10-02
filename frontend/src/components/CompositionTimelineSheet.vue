@@ -119,8 +119,8 @@ watch(open, (isOpen) => {
             size="normal"
           >
             <div class="text-sm font-medium">{{ labelOf(event.event_type) }}</div>
-            <div class="text-xs text-gray-500">{{ event.summary }}</div>
-            <div class="text-xs text-gray-400">{{ event.actor || `用户 #${event.actor_id}` }}</div>
+            <div class="text-xs text-ink-muted">{{ event.summary }}</div>
+            <div class="text-xs text-ink-subtle">{{ event.actor || `用户 #${event.actor_id}` }}</div>
           </el-timeline-item>
         </el-timeline>
 

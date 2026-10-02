@@ -24,6 +24,7 @@ import {
   useQuestionAiTools,
   type PendingQuestionEdits,
 } from '@/composables/useQuestionAiTools'
+import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const route = useRoute()
@@ -778,7 +779,7 @@ function pad(n: number): string {
 
       <div
         v-if="moreFiltersVisible"
-        class="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2"
+        class="mt-2 flex flex-wrap items-center gap-2 border-t border-hairline pt-2"
       >
         <el-input
           v-model="filters.source"
@@ -831,8 +832,8 @@ function pad(n: number): string {
         </el-select>
       </div>
 
-      <div v-if="selection.length" class="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
-        <span class="text-sm text-gray-500">已选 {{ selection.length }} 项</span>
+      <div v-if="selection.length" class="mt-2 flex flex-wrap items-center gap-2 border-t border-hairline pt-2">
+        <span class="text-sm text-ink-muted">已选 {{ selection.length }} 项</span>
         <template v-if="canEdit">
           <el-button size="small" type="primary" plain :loading="solving.active" @click="solveSelected">
             AI 解题（{{ selection.length }} 道）
@@ -881,7 +882,7 @@ function pad(n: number): string {
         </div>
       </template>
 
-      <div v-if="solving.active" class="text-xs text-gray-500">
+      <div v-if="solving.active" class="text-xs text-ink-muted">
         <el-progress
           :percentage="solving.total ? Math.round((solving.done / solving.total) * 100) : 0"
           :stroke-width="10"
@@ -900,7 +901,7 @@ function pad(n: number): string {
       </div>
 
       <div v-else class="text-xs">
-        <div class="mb-1 text-gray-500">
+        <div class="mb-1 text-ink-muted">
           已写入 {{ solveReport.filter((r) => r.status === 'solved').length }} 道；
           保持原答案 {{ solveReport.filter((r) => r.status === 'skipped').length }} 道；
           未成功 {{ solveReport.filter((r) => r.status === 'failed').length }} 道。
@@ -917,10 +918,10 @@ function pad(n: number): string {
             v-if="item.doc"
             :doc="item.doc"
             compact
-            class="stem-clamp-1 text-gray-500"
+            class="stem-clamp-1 text-ink-muted"
           />
-          <span v-else class="text-gray-500">{{ item.stem }}</span>
-          <span class="text-gray-400">{{ item.message }}</span>
+          <span v-else class="text-ink-muted">{{ item.stem }}</span>
+          <span class="text-ink-subtle">{{ item.message }}</span>
         </div>
       </div>
     </el-card>
@@ -945,7 +946,7 @@ function pad(n: number): string {
                 compact
                 class="stem-clamp text-sm"
               />
-              <div v-else class="stem-clamp text-sm text-gray-400">
+              <div v-else class="stem-clamp text-sm text-ink-subtle">
                 {{ row.stem_text || '（无题干）' }}
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-1">
@@ -963,7 +964,7 @@ function pad(n: number): string {
                 >
                   {{ tag.name }}
                 </el-tag>
-                <span v-if="row.child_count" class="text-xs text-gray-400">
+                <span v-if="row.child_count" class="text-xs text-ink-subtle">
                   含 {{ row.child_count }} 个小问
                 </span>
               </div>
@@ -981,7 +982,7 @@ function pad(n: number): string {
 
         <el-table-column label="难度" width="110">
           <template #default="{ row }">
-            <span class="text-amber-500">{{ '★'.repeat(row.difficulty) }}</span>
+            <DifficultyStars :level="row.difficulty" />
           </template>
         </el-table-column>
 
@@ -999,11 +1000,11 @@ function pad(n: number): string {
               content="当前列表没有按更新时间排序，这一列只显示每道题各自的最后更新时间。"
               placement="top"
             >
-              <el-icon class="ml-1 align-middle text-gray-400"><InfoFilled /></el-icon>
+              <el-icon class="ml-1 align-middle text-ink-subtle"><InfoFilled /></el-icon>
             </el-tooltip>
           </template>
           <template #default="{ row }">
-            <span class="text-xs text-gray-500">{{ formatTime(row.updated_at) }}</span>
+            <span class="text-xs text-ink-muted">{{ formatTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
 
@@ -1087,21 +1088,21 @@ function pad(n: number): string {
               {{ detail.question_type_label }}
             </el-tag>
             <el-tag size="small" :type="statusTag(detail.status)">{{ statusLabel(detail) }}</el-tag>
-            <span class="text-amber-500">{{ '★'.repeat(detail.difficulty) }}</span>
+            <DifficultyStars :level="detail.difficulty" />
             <el-tag v-if="detail.visibility === 'private'" size="small" type="warning">私有</el-tag>
-            <span class="ml-auto text-xs text-gray-400">v{{ detail.content_version }} · r{{ detail.content_revision }}</span>
+            <span class="ml-auto text-xs text-ink-subtle">v{{ detail.content_version }} · r{{ detail.content_revision }}</span>
           </div>
 
           <!-- 母子题结构：母题可点回详情，小问就地列出并可点开。
                服务端早就把 children 一起返回了，此前界面上没有任何地方渲染它。 -->
-          <div v-if="detail.parent_id" class="mb-2 rounded border border-amber-200 bg-amber-50 p-2 text-sm">
-            <span class="mr-2 text-xs text-amber-700">子题</span>
+          <div v-if="detail.parent_id" class="mb-2 rounded border border-warning-border bg-warning-soft p-2 text-sm">
+            <span class="mr-2 text-xs text-warning-text">子题</span>
             母题：
             <el-link type="primary" @click="jumpTo(detail.parent_id)">#{{ detail.parent_id }}</el-link>
           </div>
 
-          <div v-if="detail.children.length" class="mb-3 rounded border border-blue-200 bg-blue-50 p-2">
-            <div class="mb-1 text-xs text-blue-700">母题 · 含 {{ detail.children.length }} 个小问</div>
+          <div v-if="detail.children.length" class="mb-3 rounded border border-accent-border bg-accent-soft p-2">
+            <div class="mb-1 text-xs text-accent-text">母题 · 含 {{ detail.children.length }} 个小问</div>
             <div class="space-y-1">
               <div
                 v-for="child in detail.children"
@@ -1129,18 +1130,18 @@ function pad(n: number): string {
             </el-button>
           </div>
 
-          <div class="mb-1 text-xs text-gray-500">题干</div>
-          <div class="mb-4 rounded border border-gray-200 p-3">
+          <div class="mb-1 text-xs text-ink-muted">题干</div>
+          <div class="mb-4 rounded border border-hairline p-3">
             <RichContent :doc="detail.stem" />
           </div>
 
           <template v-if="detail.options.length">
-            <div class="mb-1 text-xs text-gray-500">选项</div>
+            <div class="mb-1 text-xs text-ink-muted">选项</div>
             <div class="mb-4 space-y-1">
               <div
                 v-for="option in detail.options"
                 :key="option.id"
-                class="flex gap-2 rounded border border-gray-200 p-2"
+                class="flex gap-2 rounded border border-hairline p-2"
               >
                 <span class="font-medium">{{ option.label }}.</span>
                 <RichContent :doc="option.content" class="flex-1" />
@@ -1148,8 +1149,8 @@ function pad(n: number): string {
             </div>
           </template>
 
-          <div class="mb-1 text-xs text-gray-500">答案</div>
-          <div class="mb-4 rounded bg-green-50 p-3 text-sm">
+          <div class="mb-1 text-xs text-ink-muted">答案</div>
+          <div class="mb-4 rounded bg-success-soft p-3 text-sm">
             <template v-if="detail.answer.kind === 'single' || detail.answer.kind === 'multiple'">
               {{
                 (detail.answer.correct ?? [])
@@ -1165,7 +1166,7 @@ function pad(n: number): string {
                 第 {{ index + 1 }} 空：
                 <span v-for="(group, gi) in blank.accepts" :key="gi">
                   <RichContent v-for="(item, ii) in group" :key="ii" :doc="item" class="inline" />
-                  <span v-if="gi < blank.accepts.length - 1" class="text-gray-400"> 或 </span>
+                  <span v-if="gi < blank.accepts.length - 1" class="text-ink-subtle"> 或 </span>
                 </span>
               </div>
             </template>
@@ -1173,28 +1174,28 @@ function pad(n: number): string {
               <RichContent :doc="detail.answer.reference" />
             </template>
             <template v-else-if="detail.answer.kind === 'pending'">
-              <span class="text-gray-500">待补充答案</span>
-              <span class="ml-1 text-xs text-gray-400">
+              <span class="text-ink-muted">待补充答案</span>
+              <span class="ml-1 text-xs text-ink-subtle">
                 这道题由智能录题的「仅录题」模式录入，答案与解析由老师填写。
               </span>
             </template>
             <template v-else>
-              <span class="text-gray-500">未能识别答案结构</span>
+              <span class="text-ink-muted">未能识别答案结构</span>
             </template>
           </div>
 
           <template v-if="detail.analysis">
-            <div class="mb-1 text-xs text-gray-500">解析</div>
-            <div class="mb-4 rounded border border-gray-200 p-3">
+            <div class="mb-1 text-xs text-ink-muted">解析</div>
+            <div class="mb-4 rounded border border-hairline p-3">
               <RichContent :doc="detail.analysis" />
             </div>
           </template>
 
           <!-- 审核记录：端点与审核日志表早就存在，界面上却一个入口都没有。
                审核透明度为零的表现就是"这道题被谁驳回过、为什么"无从查证。 -->
-          <div class="mb-1 text-xs text-gray-500">审核记录</div>
-          <div v-loading="reviewLogsLoading" class="mb-4 rounded border border-gray-200 p-3">
-            <div v-if="!reviewLogs.length && !reviewLogsLoading" class="text-sm text-gray-400">
+          <div class="mb-1 text-xs text-ink-muted">审核记录</div>
+          <div v-loading="reviewLogsLoading" class="mb-4 rounded border border-hairline p-3">
+            <div v-if="!reviewLogs.length && !reviewLogsLoading" class="text-sm text-ink-subtle">
               暂无审核记录
             </div>
             <div v-else class="space-y-2">
@@ -1206,14 +1207,14 @@ function pad(n: number): string {
                 <el-tag size="small" :type="reviewActionTag(log.action)">
                   {{ reviewActionLabel(log.action) }}
                 </el-tag>
-                <span class="text-gray-500">{{ log.reviewer || '未知' }}</span>
-                <span class="text-xs text-gray-400">{{ formatTime(log.created_at) }}</span>
-                <span v-if="log.comment" class="w-full text-xs text-gray-600">「{{ log.comment }}」</span>
+                <span class="text-ink-muted">{{ log.reviewer || '未知' }}</span>
+                <span class="text-xs text-ink-subtle">{{ formatTime(log.created_at) }}</span>
+                <span v-if="log.comment" class="w-full text-xs text-ink-regular">「{{ log.comment }}」</span>
               </div>
             </div>
           </div>
 
-          <div class="flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+          <div class="flex flex-wrap gap-2 border-t border-hairline pt-3">
             <el-button v-if="detail.permissions.can_edit" type="primary" @click="openEdit(detail)">
               编辑
             </el-button>

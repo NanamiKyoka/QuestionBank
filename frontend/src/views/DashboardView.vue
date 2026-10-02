@@ -5,6 +5,8 @@ import { statsApi } from '@/api'
 import type { GlobalStats, SubjectStats } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { useSubjectStore } from '@/stores/subject'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import StatTile from '@/components/ui/StatTile.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -66,6 +68,22 @@ const difficultyRows = computed(() => {
 const maxType = computed(() => Math.max(1, ...typeRows.value.map((r) => r.total)))
 const maxDifficulty = computed(() => Math.max(1, ...difficultyRows.value.map((r) => r.total)))
 
+type Tone = 'accent' | 'success' | 'warning' | 'danger' | 'neutral'
+
+const overviewTiles = computed<{ label: string; value: number; tone: Tone }[]>(() => [
+  { label: '题目总数', value: stats.value?.questions.total ?? 0, tone: 'accent' },
+  { label: '待审核', value: stats.value?.questions.pending ?? 0, tone: 'warning' },
+  { label: '知识点', value: stats.value?.knowledge_points ?? 0, tone: 'success' },
+  { label: '试卷', value: stats.value?.papers ?? 0, tone: 'neutral' },
+])
+
+const reviewRows = computed<{ label: string; value: number; tone: Tone }[]>(() => [
+  { label: '草稿', value: stats.value?.questions.draft ?? 0, tone: 'neutral' },
+  { label: '待审核', value: stats.value?.questions.pending ?? 0, tone: 'warning' },
+  { label: '已发布', value: stats.value?.questions.published ?? 0, tone: 'success' },
+  { label: '已归档', value: stats.value?.questions.archived ?? 0, tone: 'neutral' },
+])
+
 /**
  * 趋势图数据。
  *
@@ -119,7 +137,16 @@ function formatNumber(n: number): string {
 </script>
 
 <template>
-  <div v-loading="loading" class="space-y-4">
+  <div class="space-y-4">
+    <PageHeader
+      title="总览"
+      :description="subject.currentId ? `${subject.current?.name ?? ''}的题库与组卷情况` : ''"
+    >
+      <template #actions>
+        <el-button :loading="loading" @click="load"><el-icon class="mr-1"><Refresh /></el-icon>刷新</el-button>
+      </template>
+    </PageHeader>
+
     <el-alert
       v-if="!subject.hasSubjects"
       type="info"
@@ -135,20 +162,23 @@ function formatNumber(n: number): string {
     </el-alert>
 
     <template v-else>
-      <!-- 学科概览 -->
-      <el-row :gutter="12">
-        <el-col v-for="card in [
-          { label: '题目总数', value: stats?.questions.total ?? 0, tone: 'blue' },
-          { label: '待审核', value: stats?.questions.pending ?? 0, tone: 'orange' },
-          { label: '知识点', value: stats?.knowledge_points ?? 0, tone: 'green' },
-          { label: '试卷', value: stats?.papers ?? 0, tone: 'purple' },
-        ]" :key="card.label" :xs="12" :sm="12" :md="6">
-          <el-card shadow="never" class="mb-3">
-            <div class="text-xs text-gray-500">{{ card.label }}</div>
-            <div class="mt-1 text-2xl font-semibold">{{ formatNumber(card.value) }}</div>
-          </el-card>
-        </el-col>
-      </el-row>
+      <!-- 学科概览：一条指标带，而不是四个互相竞争的白盒 -->
+      <el-card shadow="never" body-class="!p-0">
+        <div class="grid grid-cols-2 divide-hairline md:grid-cols-4 md:divide-x">
+          <div
+            v-for="tile in overviewTiles"
+            :key="tile.label"
+            class="px-4 py-3.5"
+          >
+            <StatTile
+              :label="tile.label"
+              :value="tile.value"
+              :tone="tile.tone"
+              :muted="tile.value === 0"
+            />
+          </div>
+        </div>
+      </el-card>
 
       <el-row :gutter="12">
         <!-- 建题趋势 -->
@@ -157,7 +187,7 @@ function formatNumber(n: number): string {
             <template #header>
               <div class="flex items-center justify-between">
                 <span class="text-sm font-medium">近 30 天建题趋势</span>
-                <span class="text-xs text-gray-400">
+                <span class="num text-xs text-ink-subtle">
                   共 {{ formatNumber(trend.reduce((sum, d) => sum + d.total, 0)) }} 道
                 </span>
               </div>
@@ -167,12 +197,12 @@ function formatNumber(n: number): string {
               <div
                 v-for="point in trend"
                 :key="point.day"
-                class="group relative flex-1 rounded-t bg-blue-500/80 transition-colors hover:bg-blue-600"
+                class="group relative flex-1 rounded-t bg-accent/80 transition-colors hover:bg-accent"
                 :style="{ height: `${Math.max(point.total / maxTrend * 100, point.total ? 4 : 1)}%` }"
                 :title="`${point.day}：${point.total} 道`"
               />
             </div>
-            <div class="mt-2 flex justify-between text-xs text-gray-400">
+            <div class="mt-2 flex justify-between text-xs text-ink-subtle">
               <span>{{ trend[0]?.day }}</span>
               <span>{{ trend[trend.length - 1]?.day }}</span>
             </div>
@@ -185,33 +215,16 @@ function formatNumber(n: number): string {
             <template #header>
               <span class="text-sm font-medium">审核进度</span>
             </template>
-            <div class="space-y-3">
-              <div
-                v-for="row in [
-                  { label: '草稿', value: stats?.questions.draft ?? 0, color: '#909399' },
-                  { label: '待审核', value: stats?.questions.pending ?? 0, color: '#e6a23c' },
-                  { label: '已发布', value: stats?.questions.published ?? 0, color: '#67c23a' },
-                  { label: '已归档', value: stats?.questions.archived ?? 0, color: '#c0c4cc' },
-                ]"
-                :key="row.label"
-              >
-                <div class="mb-1 flex justify-between text-xs">
-                  <span>{{ row.label }}</span>
-                  <span class="text-gray-500">{{ row.value }}</span>
-                </div>
-                <div class="h-1.5 overflow-hidden rounded bg-gray-100">
-                  <div
-                    class="h-full rounded transition-all"
-                    :style="{
-                      width: `${(row.value / Math.max(1, stats?.questions.total ?? 1)) * 100}%`,
-                      backgroundColor: row.color,
-                    }"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <el-divider class="my-3" />
+            <StatTile
+              v-for="row in reviewRows"
+              :key="row.label"
+              :label="row.label"
+              :value="row.value"
+              :tone="row.tone"
+              :bar="(row.value / Math.max(1, stats?.questions.total ?? 1)) * 100"
+              :muted="row.value === 0"
+              class="mb-3"
+            />
 
             <el-button
               text
@@ -219,7 +232,8 @@ function formatNumber(n: number): string {
               size="small"
               @click="router.push({ name: 'questions', query: { status: 'pending' } })"
             >
-              去处理待审核题目 →
+              去处理待审核题目
+              <el-icon class="ml-1"><ArrowRight /></el-icon>
             </el-button>
           </el-card>
         </el-col>
@@ -230,21 +244,19 @@ function formatNumber(n: number): string {
         <el-col :xs="24" :md="8">
           <el-card shadow="never" class="mb-3">
             <template #header><span class="text-sm font-medium">题型分布</span></template>
-            <div v-if="typeRows.length === 0" class="py-4 text-center text-xs text-gray-400">
+            <div v-if="typeRows.length === 0" class="py-4 text-center text-xs text-ink-subtle">
               暂无数据
             </div>
-            <div v-for="row in typeRows" :key="row.key" class="mb-2">
-              <div class="mb-1 flex justify-between text-xs">
-                <span>{{ row.label }}</span>
-                <span class="text-gray-500">{{ row.total }}</span>
-              </div>
-              <div class="h-1.5 overflow-hidden rounded bg-gray-100">
-                <div
-                  class="h-full rounded bg-blue-500"
-                  :style="{ width: `${(row.total / maxType) * 100}%` }"
-                />
-              </div>
-            </div>
+            <StatTile
+              v-for="row in typeRows"
+              :key="row.key"
+              :label="row.label"
+              :value="row.total"
+              tone="accent"
+              :bar="(row.total / maxType) * 100"
+              :muted="row.total === 0"
+              class="mb-3"
+            />
           </el-card>
         </el-col>
 
@@ -252,18 +264,16 @@ function formatNumber(n: number): string {
         <el-col :xs="24" :md="8">
           <el-card shadow="never" class="mb-3">
             <template #header><span class="text-sm font-medium">难度分布</span></template>
-            <div v-for="row in difficultyRows" :key="row.level" class="mb-2">
-              <div class="mb-1 flex justify-between text-xs">
-                <span>{{ '★'.repeat(row.level) }}</span>
-                <span class="text-gray-500">{{ row.total }}</span>
-              </div>
-              <div class="h-1.5 overflow-hidden rounded bg-gray-100">
-                <div
-                  class="h-full rounded bg-amber-400"
-                  :style="{ width: `${(row.total / maxDifficulty) * 100}%` }"
-                />
-              </div>
-            </div>
+            <StatTile
+              v-for="row in difficultyRows"
+              :key="row.level"
+              :label="`难度 ${row.level}`"
+              :value="row.total"
+              tone="neutral"
+              :bar="(row.total / maxDifficulty) * 100"
+              :muted="row.total === 0"
+              class="mb-3"
+            />
           </el-card>
         </el-col>
 
@@ -271,13 +281,13 @@ function formatNumber(n: number): string {
         <el-col :xs="24" :md="8">
           <el-card shadow="never" class="mb-3">
             <template #header><span class="text-sm font-medium">最近试卷</span></template>
-            <div v-if="!stats?.recent_papers.length" class="py-4 text-center text-xs text-gray-400">
+            <div v-if="!stats?.recent_papers.length" class="py-4 text-center text-xs text-ink-subtle">
               还没有试卷
             </div>
             <div
               v-for="paper in stats?.recent_papers ?? []"
               :key="paper.id"
-              class="flex items-center justify-between border-b border-gray-100 py-2 last:border-0"
+              class="flex items-center justify-between border-b border-hairline py-2 last:border-0"
             >
               <span class="truncate text-sm">{{ paper.title }}</span>
               <el-tag size="small" type="info">{{ statusLabel(paper.status) }}</el-tag>
@@ -292,8 +302,8 @@ function formatNumber(n: number): string {
       <template #header>
         <span class="text-sm font-medium">系统总览（管理员）</span>
       </template>
-      <el-row :gutter="12">
-        <el-col
+      <div class="grid grid-cols-2 gap-4 md:grid-cols-5">
+        <StatTile
           v-for="item in [
             { label: '学科', value: globalStats.subjects },
             { label: '全库题目', value: globalStats.questions },
@@ -302,20 +312,15 @@ function formatNumber(n: number): string {
             { label: 'Token 用量（30 天）', value: globalStats.ai.total_tokens },
           ]"
           :key="item.label"
-          :xs="12"
-          :sm="8"
-          :md="4"
-        >
-          <div class="mb-2">
-            <div class="text-xs text-gray-500">{{ item.label }}</div>
-            <div class="text-lg font-semibold">{{ formatNumber(item.value) }}</div>
-          </div>
-        </el-col>
-      </el-row>
+          :label="item.label"
+          :value="item.value"
+          tone="neutral"
+        />
+      </div>
 
       <template v-if="globalStats.top_actions.length">
         <el-divider class="my-3" />
-        <div class="mb-2 text-xs text-gray-500">最近 30 天最常见的操作</div>
+        <div class="mb-2 text-xs text-ink-muted">最近 30 天最常见的操作</div>
         <div class="flex flex-wrap gap-2">
           <el-tag
             v-for="action in globalStats.top_actions"

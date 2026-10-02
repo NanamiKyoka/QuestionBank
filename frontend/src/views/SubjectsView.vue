@@ -196,7 +196,7 @@ void hintOf
         <el-table-column prop="description" label="说明" min-width="200" show-overflow-tooltip />
         <el-table-column label="审核门槛" width="100">
           <template #default="{ row }">
-            <span class="text-gray-500">{{ row.review_threshold }} 人</span>
+            <span class="text-ink-muted">{{ row.review_threshold }} 人</span>
           </template>
         </el-table-column>
         <el-table-column label="我的角色" width="100">
@@ -229,7 +229,7 @@ void hintOf
         </el-form-item>
         <el-form-item label="审核门槛">
           <el-input-number v-model="form.review_threshold" :min="1" :max="10" />
-          <div class="ml-2 text-xs text-gray-400">需要几位负责人通过才算审核通过</div>
+          <div class="ml-2 text-xs text-ink-subtle">需要几位负责人通过才算审核通过</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -267,7 +267,7 @@ void hintOf
               <el-avatar :size="24">{{ (row.nickname || row.username).slice(0, 1) }}</el-avatar>
               <div>
                 <div class="text-sm">{{ row.nickname || row.username }}</div>
-                <div class="text-xs text-gray-400">{{ row.username }}</div>
+                <div class="text-xs text-ink-subtle">{{ row.username }}</div>
               </div>
             </div>
           </template>

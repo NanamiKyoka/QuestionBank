@@ -191,22 +191,26 @@ defineExpose({
 
 <style scoped>
 .qm-canvas {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--qm-paper-border);
+  border-radius: var(--qm-radius);
+  background: var(--qm-paper);
   padding: 0.75rem;
   min-height: 20rem;
 }
 .qm-canvas--readonly {
-  background: var(--el-fill-color-blank);
+  background: var(--qm-surface-sunken);
 }
 .qm-canvas__empty {
   text-align: center;
-  color: var(--el-text-color-placeholder);
+  color: var(--qm-ink-subtle);
   padding: 3rem 0;
   font-size: 0.875rem;
 }
 .qm-canvas__content {
   outline: none;
+}
+.qm-canvas__content:focus-visible {
+  outline: 2px solid var(--qm-accent-text);
+  outline-offset: 3px;
 }
 </style>
