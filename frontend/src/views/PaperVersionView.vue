@@ -249,7 +249,7 @@ function itemNumberOf(item: SnapshotNode): string {
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
             <span class="truncate text-base font-semibold">{{ version?.title ?? '版本预览' }}</span>
-            <el-tag v-if="version" size="small" effect="plain">v{{ version.version_no }}</el-tag>
+            <el-tag v-if="version" size="small" effect="plain" class="num">v{{ version.version_no }}</el-tag>
             <el-tag v-if="version" size="small" type="info">只读</el-tag>
           </div>
           <div v-if="version" class="text-xs text-ink-subtle">

@@ -166,9 +166,12 @@ async function removeCategory(category: TagCategory) {
       </template>
 
       <div
+        role="button"
+        tabindex="0"
         class="cursor-pointer rounded px-2 py-1.5 text-sm"
         :class="activeCategory === 'all' ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="activeCategory = 'all'"
+        @keydown.enter="activeCategory = 'all'"
       >
         全部标签
         <span class="float-right text-xs text-ink-subtle">{{ tags.length }}</span>
@@ -177,25 +180,35 @@ async function removeCategory(category: TagCategory) {
       <div
         v-for="category in categories"
         :key="category.id"
+        role="button"
+        tabindex="0"
         class="group flex cursor-pointer items-center rounded px-2 py-1.5 text-sm"
         :class="activeCategory === category.id ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="activeCategory = category.id"
+        @keydown.enter="activeCategory = category.id"
       >
         <span class="flex-1 truncate">{{ category.name }}</span>
         <span class="text-xs text-ink-subtle">{{ category.tag_count }}</span>
         <el-icon
           v-if="canManage"
-          class="ml-1 hidden text-danger-text group-hover:block"
+          class="ml-1 hidden cursor-pointer text-danger-text group-hover:block"
+          role="button"
+          tabindex="0"
+          :aria-label="`删除分类「${category.name}」`"
           @click.stop="removeCategory(category)"
+          @keydown.enter.stop="removeCategory(category)"
         >
           <Delete />
         </el-icon>
       </div>
 
       <div
+        role="button"
+        tabindex="0"
         class="cursor-pointer rounded px-2 py-1.5 text-sm"
         :class="activeCategory === 'none' ? 'bg-accent-soft text-accent-text' : 'hover:bg-surface-sunken'"
         @click="activeCategory = 'none'"
+        @keydown.enter="activeCategory = 'none'"
       >
         未分类
         <span class="float-right text-xs text-ink-subtle">

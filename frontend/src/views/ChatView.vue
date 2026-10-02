@@ -293,8 +293,12 @@ function formatTime(value: string): string {
           <div class="flex items-center gap-1">
             <span class="flex-1 truncate text-sm">{{ session.title }}</span>
             <el-icon
-              class="hidden text-ink-subtle hover:text-danger-text group-hover:block"
+              class="hidden shrink-0 cursor-pointer text-ink-subtle hover:text-danger-text group-hover:block"
+              role="button"
+              tabindex="0"
+              :aria-label="`删除对话「${session.title}」`"
               @click.stop="removeSession(session)"
+              @keydown.enter.stop="removeSession(session)"
             >
               <Delete />
             </el-icon>

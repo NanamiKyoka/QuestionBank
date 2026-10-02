@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { subjectApi, userApi } from '@/api'
 import type { Subject, SubjectRole, User } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -166,7 +167,8 @@ function roleLabel(row: User): string {
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="rows" row-key="id">
+      <TableSkeleton v-if="loading" :rows="6" :cols="6" />
+      <el-table v-else :data="rows" row-key="id">
         <el-table-column label="用户" min-width="200">
           <template #default="{ row }">
             <div class="flex items-center gap-2">

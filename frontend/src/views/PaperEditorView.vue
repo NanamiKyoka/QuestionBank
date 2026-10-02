@@ -36,6 +36,7 @@ import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStre
 import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -1223,7 +1224,7 @@ function isUsed(row: QuestionBrief): boolean {
       <div v-for="version in versions" :key="version.id" class="mb-2 rounded border border-hairline p-3">
         <div class="flex items-center justify-between">
           <div>
-            <span class="font-medium">v{{ version.version_no }}</span>
+            <span class="num font-medium">v{{ version.version_no }}</span>
             <span class="ml-2 text-xs text-ink-subtle">{{ version.question_count }} 题</span>
           </div>
           <el-dropdown @command="(f: 'docx' | 'latex') => exportPaper(f, version.version_no)">
@@ -1269,8 +1270,8 @@ function isUsed(row: QuestionBrief): boolean {
         <el-button type="primary" @click="pickerQuery.page = 1; searchPicker()">搜索</el-button>
       </div>
 
-      <el-table
-        v-loading="pickerLoading"
+      <TableSkeleton v-if="pickerLoading" :rows="6" :cols="6" />
+      <el-table v-else
         :data="pickerRows"
         height="380"
         @row-click="togglePick"

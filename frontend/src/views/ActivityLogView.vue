@@ -6,6 +6,7 @@ import { userApi } from '@/api'
 import type { User } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -342,15 +343,15 @@ function formatTime(value: string): string {
         </div>
       </template>
 
-      <EmptyState v-if="!loading && rows.length === 0" description="没有符合条件的记录" />
+      <EmptyState
+        v-if="!loading && rows.length === 0"
+        description="没有符合条件的记录"
+        hint="调整时间范围或状态码筛选，或者清空条件重新查一次。"
+      />
 
-      <el-table
-        v-else
-        v-loading="loading"
-        :data="rows"
-        row-key="id"
-        @row-click="openDetail"
-      >
+      <TableSkeleton v-if="loading" :rows="8" :cols="6" />
+
+      <el-table v-else :data="rows" row-key="id" @row-click="openDetail">
         <el-table-column label="时间" width="160">
           <template #default="{ row }">
             <span class="text-xs text-ink-muted">{{ formatTime(row.created_at) }}</span>
@@ -388,12 +389,12 @@ function formatTime(value: string): string {
         </el-table-column>
         <el-table-column label="状态码" width="90" align="center">
           <template #default="{ row }">
-            <span :class="row.success ? '' : 'text-danger-text'">{{ row.status_code }}</span>
+            <span class="num" :class="row.success ? '' : 'text-danger-text'">{{ row.status_code }}</span>
           </template>
         </el-table-column>
         <el-table-column label="耗时" width="90" align="right">
           <template #default="{ row }">
-            <span class="text-xs text-ink-muted">{{ row.duration_ms }}ms</span>
+            <span class="num text-xs text-ink-muted">{{ row.duration_ms }}ms</span>
           </template>
         </el-table-column>
         <el-table-column label="IP" width="140">
@@ -429,12 +430,12 @@ function formatTime(value: string): string {
           <el-descriptions-item label="时间">{{ formatTime(selected.created_at) }}</el-descriptions-item>
           <el-descriptions-item label="用户">
             {{ selected.username || '（已删除）' }}
-            <span v-if="selected.user_id" class="text-xs text-ink-subtle">#{{ selected.user_id }}</span>
+            <span v-if="selected.user_id" class="num text-xs text-ink-subtle">#{{ selected.user_id }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="动作">{{ selected.action }}</el-descriptions-item>
           <el-descriptions-item label="资源">
             {{ selected.resource }}
-            <span v-if="selected.resource_id">#{{ selected.resource_id }}</span>
+            <span v-if="selected.resource_id" class="num">#{{ selected.resource_id }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="请求">
             <el-tag size="small" :type="methodTag(selected.method)" effect="plain">

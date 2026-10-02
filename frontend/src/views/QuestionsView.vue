@@ -26,6 +26,7 @@ import {
 } from '@/composables/useQuestionAiTools'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const route = useRoute()
@@ -939,8 +940,8 @@ function pad(n: number): string {
 
     <!-- 列表 -->
     <el-card shadow="never">
-      <el-table
-        v-loading="loading"
+      <TableSkeleton v-if="loading" :rows="6" :cols="6" />
+      <el-table v-else
         :data="rows"
         row-key="id"
         @selection-change="(val: QuestionBrief[]) => (selection = val)"
@@ -1110,7 +1111,7 @@ function pad(n: number): string {
             <el-tag size="small" :type="statusTag(detail.status)">{{ statusLabel(detail) }}</el-tag>
             <DifficultyStars :level="detail.difficulty" />
             <el-tag v-if="detail.visibility === 'private'" size="small" type="warning">私有</el-tag>
-            <span class="ml-auto text-xs text-ink-subtle">v{{ detail.content_version }} · r{{ detail.content_revision }}</span>
+            <span class="num ml-auto text-xs text-ink-subtle">v{{ detail.content_version }} · r{{ detail.content_revision }}</span>
           </div>
 
           <!-- 母子题结构：母题可点回详情，小问就地列出并可点开。
@@ -1118,7 +1119,7 @@ function pad(n: number): string {
           <div v-if="detail.parent_id" class="mb-2 rounded border border-warning-border bg-warning-soft p-2 text-sm">
             <span class="mr-2 text-xs text-warning-text">子题</span>
             母题：
-            <el-link type="primary" @click="jumpTo(detail.parent_id)">#{{ detail.parent_id }}</el-link>
+            <el-link type="primary" class="num" @click="jumpTo(detail.parent_id)">#{{ detail.parent_id }}</el-link>
           </div>
 
           <div v-if="detail.children.length" class="mb-3 rounded border border-accent-border bg-accent-soft p-2">

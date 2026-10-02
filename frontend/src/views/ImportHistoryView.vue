@@ -11,6 +11,7 @@ import {
 import type { QuestionBrief } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -291,7 +292,8 @@ function countText(row: ImportTask): string {
         <span v-if="!subject.currentId" class="ml-auto text-xs text-ink-subtle">请先在右上角选择学科</span>
       </div>
 
-      <el-table v-loading="loading" :data="rows" row-key="id" class="mt-3">
+      <TableSkeleton v-if="loading" :rows="6" :cols="6" />
+      <el-table v-else :data="rows" row-key="id" class="mt-3">
         <el-table-column label="导入内容" min-width="220">
           <template #default="{ row }">
             <div class="text-sm">{{ row.original_filename || '（未命名）' }}</div>
@@ -400,7 +402,8 @@ function countText(row: ImportTask): string {
         :description="`状态：${drawer.task.status_label} · 共 ${drawer.total} 题`"
       />
 
-      <el-table v-loading="drawer.loading" :data="drawer.rows" row-key="id">
+      <TableSkeleton v-if="drawer.loading" :rows="6" :cols="6" />
+      <el-table v-else :data="drawer.rows" row-key="id">
         <el-table-column label="题干" min-width="320">
           <template #default="{ row }">
             <RichContent :doc="row.stem_doc" compact class="stem-clamp text-sm" />

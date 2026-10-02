@@ -98,7 +98,7 @@ async function pickImage(event: Event) {
         title="上标"
         @click="run((e) => e.chain().focus().toggleSuperscript().run())"
       >
-        x²
+        <el-icon><Top /></el-icon>
       </el-button>
       <el-button
         size="small"
@@ -106,16 +106,16 @@ async function pickImage(event: Event) {
         title="下标"
         @click="run((e) => e.chain().focus().toggleSubscript().run())"
       >
-        x₂
+        <el-icon><Bottom /></el-icon>
       </el-button>
     </el-button-group>
 
     <el-divider direction="vertical" />
 
     <!-- 公式与填空：题库的核心内容形态，绝不能少 -->
-    <el-button size="small" @click="run(requestInlineMath)">$ 行内公式</el-button>
-    <el-button size="small" @click="run(requestBlockMath)">∑ 独立公式</el-button>
-    <el-button size="small" @click="run(insertBlank)">＿ 填空位</el-button>
+    <el-button size="small" title="插入行内公式" @click="run(requestInlineMath)">行内公式</el-button>
+    <el-button size="small" title="插入独立公式" @click="run(requestBlockMath)">独立公式</el-button>
+    <el-button size="small" title="插入填空位" @click="run(insertBlank)">填空位</el-button>
 
     <el-divider direction="vertical" />
 
@@ -126,7 +126,7 @@ async function pickImage(event: Event) {
         title="无序列表"
         @click="run((e) => e.chain().focus().toggleBulletList().run())"
       >
-        • 列表
+        <el-icon><List /></el-icon>
       </el-button>
       <el-button
         size="small"
@@ -134,9 +134,11 @@ async function pickImage(event: Event) {
         title="有序列表"
         @click="run((e) => e.chain().focus().toggleOrderedList().run())"
       >
-        1. 列表
+        <el-icon><Finished /></el-icon>
       </el-button>
-      <el-button size="small" title="插入表格" @click="run(insertTable)">▦ 表格</el-button>
+      <el-button size="small" title="插入表格" @click="run(insertTable)">
+        <el-icon><Grid /></el-icon>
+      </el-button>
     </el-button-group>
 
     <label class="ml-1 inline-block">
@@ -146,7 +148,9 @@ async function pickImage(event: Event) {
         class="hidden"
         @change="pickImage"
       />
-      <el-button size="small" :loading="uploading" tag="span">🖼 图片</el-button>
+      <el-button size="small" :loading="uploading" tag="span" title="插入图片">
+        <el-icon><Picture /></el-icon>
+      </el-button>
     </label>
 
     <el-button size="small" class="ml-auto" @click="run(clearFormat)">清除格式</el-button>

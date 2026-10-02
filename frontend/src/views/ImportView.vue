@@ -786,10 +786,18 @@ function goToPaper(paperId: number) {
             <template v-else>
               <div v-if="form.answerImages.length" class="mb-2 flex flex-wrap gap-2">
                 <div v-for="(img, index) in form.answerImages" :key="img" class="relative">
-                  <img :src="img" class="h-16 w-16 rounded border border-hairline object-cover" />
+                  <img
+                    :src="img"
+                    alt="答案页截图"
+                    class="h-16 w-16 rounded border border-hairline object-cover"
+                  />
                   <el-icon
                     class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-danger text-white"
+                    role="button"
+                    tabindex="0"
+                    :aria-label="`移除第 ${index + 1} 张答案页截图`"
                     @click="removeAnswerImage(index)"
+                    @keydown.enter="removeAnswerImage(index)"
                   >
                     <Close />
                   </el-icon>
@@ -836,10 +844,18 @@ function goToPaper(paperId: number) {
         <el-tab-pane label="上传图片" name="image">
           <div class="mb-2 flex flex-wrap gap-2">
             <div v-for="(img, index) in form.images" :key="img" class="relative">
-              <img :src="img" class="h-24 w-24 rounded border border-hairline object-cover" />
+              <img
+                :src="img"
+                alt="试卷截图"
+                class="h-24 w-24 rounded border border-hairline object-cover"
+              />
               <el-icon
                 class="absolute -right-1 -top-1 cursor-pointer rounded-full bg-danger text-white"
+                role="button"
+                tabindex="0"
+                :aria-label="`移除第 ${index + 1} 张试卷截图`"
                 @click="removeImage(index)"
+                @keydown.enter="removeImage(index)"
               >
                 <Close />
               </el-icon>
@@ -958,7 +974,7 @@ function goToPaper(paperId: number) {
           <el-tag v-if="runMeta.mode === 'record'" size="small" type="warning" effect="plain">
             仅录题 · 未求解
           </el-tag>
-          <span class="text-ink-subtle">耗时 {{ runMeta.elapsed_ms }}ms · 任务 #{{ runMeta.task_id }}</span>
+          <span class="num text-ink-subtle">耗时 {{ runMeta.elapsed_ms }}ms · 任务 #{{ runMeta.task_id }}</span>
           <el-tag v-if="!runMeta.methodReported" size="small" type="info" effect="plain">
             服务端未回报实际路径
           </el-tag>

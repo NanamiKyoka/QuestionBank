@@ -5,6 +5,7 @@ import { knowledgePointApi } from '@/api'
 import type { KnowledgePoint } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const subject = useSubjectStore()
@@ -171,8 +172,8 @@ async function reindex(force: boolean) {
         </div>
       </template>
 
-      <el-table
-        v-loading="loading"
+      <TableSkeleton v-if="loading" :rows="6" :cols="6" />
+      <el-table v-else
         :data="tree"
         row-key="id"
         default-expand-all

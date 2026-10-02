@@ -6,6 +6,7 @@ import { ApiError } from '@/api/http'
 import { paperApi, type PaperBrief, type PaperFolder, type PaperScope, type PaperStatus } from '@/api/paper'
 import { useSubjectStore } from '@/stores/subject'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 
 const router = useRouter()
@@ -452,7 +453,8 @@ function formatTime(value: string): string {
       </el-card>
 
       <el-card shadow="never">
-        <el-table v-loading="loading" :data="rows" row-key="id">
+        <TableSkeleton v-if="loading" :rows="6" :cols="6" />
+        <el-table v-else :data="rows" row-key="id">
           <el-table-column label="标题" min-width="240">
             <template #default="{ row }">
               <el-link
@@ -498,7 +500,7 @@ function formatTime(value: string): string {
 
           <el-table-column label="修订" width="70">
             <template #default="{ row }">
-              <span class="text-xs text-ink-subtle">r{{ row.revision }}</span>
+              <span class="num text-xs text-ink-subtle">r{{ row.revision }}</span>
             </template>
           </el-table-column>
 

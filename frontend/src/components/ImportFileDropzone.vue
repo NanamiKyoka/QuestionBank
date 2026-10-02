@@ -96,6 +96,8 @@ function clear() {
 <template>
   <div
     tabindex="0"
+    role="button"
+    aria-label="拖放文件到此处上传，或按 Enter 打开文件选择"
     class="rounded-lg border-2 border-dashed px-6 py-8 text-center transition-colors focus:outline-none"
     :class="[
       dragging ? 'border-accent bg-accent-soft/60' : 'border-hairline-strong bg-surface-sunken/40',

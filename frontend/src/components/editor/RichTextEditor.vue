@@ -185,52 +185,56 @@ defineExpose({
       <el-button-group class="ml-1">
         <el-button
           size="small"
+          title="上标"
           :type="editor.isActive('superscript') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleSuperscript().run()"
         >
-          x²
+          <el-icon><Top /></el-icon>
         </el-button>
         <el-button
           size="small"
+          title="下标"
           :type="editor.isActive('subscript') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleSubscript().run()"
         >
-          x₂
+          <el-icon><Bottom /></el-icon>
         </el-button>
       </el-button-group>
 
       <el-divider direction="vertical" />
 
-      <el-button size="small" @click="insertInlineMath">$ 行内公式</el-button>
-      <el-button size="small" @click="insertBlockMath">∑ 独立公式</el-button>
-      <el-button size="small" @click="insertBlank">＿ 填空位</el-button>
+      <el-button size="small" title="插入行内公式" @click="insertInlineMath">行内公式</el-button>
+      <el-button size="small" title="插入独立公式" @click="insertBlockMath">独立公式</el-button>
+      <el-button size="small" title="插入填空位" @click="insertBlank">填空位</el-button>
 
       <el-divider direction="vertical" />
 
       <el-button-group>
         <el-button
           size="small"
+          title="无序列表"
           :type="editor.isActive('bulletList') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleBulletList().run()"
         >
-          • 列表
+          <el-icon><List /></el-icon>
         </el-button>
         <el-button
           size="small"
+          title="有序列表"
           :type="editor.isActive('orderedList') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleOrderedList().run()"
         >
-          1. 列表
+          <el-icon><Finished /></el-icon>
         </el-button>
         <el-button
           size="small"
+          title="插入表格"
           :type="editor.isActive('table') ? 'primary' : 'default'"
           @click="insertTableBlock"
         >
-          ▦ 表格
+          <el-icon><Grid /></el-icon>
         </el-button>
       </el-button-group>
-
 
       <label class="ml-1 inline-block">
         <input
@@ -239,7 +243,9 @@ defineExpose({
           class="hidden"
           @change="pickImage"
         />
-        <el-button size="small" :loading="uploading" tag="span">🖼 图片</el-button>
+        <el-button size="small" :loading="uploading" tag="span" title="插入图片">
+          <el-icon><Picture /></el-icon>
+        </el-button>
       </label>
 
       <el-button size="small" class="ml-auto" @click="clearAllFormat">清除格式</el-button>
@@ -255,8 +261,11 @@ defineExpose({
 
 <style scoped>
 .prose-editor :deep(.ProseMirror) {
-  outline: none;
   min-height: inherit;
+}
+.prose-editor:focus-within :deep(.ProseMirror) {
+  outline: 2px solid var(--qm-accent-text);
+  outline-offset: 3px;
 }
 .prose-editor :deep(.ProseMirror p) {
   margin: 0.35rem 0;

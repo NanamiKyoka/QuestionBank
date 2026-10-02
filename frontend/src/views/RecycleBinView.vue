@@ -8,6 +8,7 @@ import RichContent from '@/components/RichContent.vue'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 /**
@@ -228,7 +229,8 @@ function formatTime(value: string): string {
             </span>
           </div>
 
-          <el-table v-loading="questionLoading" :data="questionRows" row-key="id" class="mt-3">
+          <TableSkeleton v-if="questionLoading" :rows="6" :cols="6" />
+          <el-table v-else :data="questionRows" row-key="id" class="mt-3">
             <el-table-column label="题干" min-width="320">
               <template #default="{ row }">
                 <RichContent
@@ -337,7 +339,8 @@ function formatTime(value: string): string {
             </span>
           </div>
 
-          <el-table v-loading="paperLoading" :data="paperRows" row-key="id" class="mt-3">
+          <TableSkeleton v-if="paperLoading" :rows="6" :cols="6" />
+          <el-table v-else :data="paperRows" row-key="id" class="mt-3">
             <el-table-column label="标题" min-width="240">
               <template #default="{ row }">
                 <span class="text-sm">{{ row.title }}</span>
@@ -362,7 +365,7 @@ function formatTime(value: string): string {
 
             <el-table-column label="修订" width="70">
               <template #default="{ row }">
-                <span class="text-xs text-ink-subtle">r{{ row.revision }}</span>
+                <span class="num text-xs text-ink-subtle">r{{ row.revision }}</span>
               </template>
             </el-table-column>
 

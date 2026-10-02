@@ -6,6 +6,7 @@ import type { Subject, SubjectMember, SubjectRole } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const auth = useAuthStore()
@@ -189,7 +190,8 @@ void hintOf
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="rows" row-key="id">
+      <TableSkeleton v-if="loading" :rows="6" :cols="6" />
+      <el-table v-else :data="rows" row-key="id">
         <el-table-column prop="name" label="名称" min-width="160">
           <template #default="{ row }">
             <span class="font-medium">{{ row.name }}</span>
@@ -264,7 +266,8 @@ void hintOf
         </div>
       </el-alert>
 
-      <el-table v-loading="memberLoading" :data="members" row-key="user_id">
+      <TableSkeleton v-if="memberLoading" :rows="6" :cols="6" />
+      <el-table v-else :data="members" row-key="user_id">
         <el-table-column label="成员" min-width="160">
           <template #default="{ row }">
             <div class="flex items-center gap-2">
