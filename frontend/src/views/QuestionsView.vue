@@ -1213,9 +1213,9 @@ function pad(n: number): string {
             <template v-else-if="detail.answer.kind === 'blanks'">
               <div v-for="(blank, index) in detail.answer.blanks ?? []" :key="blank.id">
                 第 {{ index + 1 }} 空：
-                <span v-for="(group, gi) in blank.accepts" :key="gi">
+                <span v-for="(group, gi) in blank.accepts ?? []" :key="gi">
                   <RichContent v-for="(item, ii) in group" :key="ii" :doc="item" class="inline" />
-                  <span v-if="gi < blank.accepts.length - 1" class="text-ink-subtle"> 或 </span>
+                  <span v-if="gi < (blank.accepts?.length ?? 0) - 1" class="text-ink-subtle"> 或 </span>
                 </span>
               </div>
             </template>

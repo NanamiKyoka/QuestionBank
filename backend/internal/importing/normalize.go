@@ -164,7 +164,11 @@ func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
 	normalized, err := domain.NormalizeOptions(opts)
 	if err != nil {
 		d.Warnings = append(d.Warnings, "选项标签重复或为空，已忽略选项")
-		normalized = nil
+	}
+	// 非选择题的选项是空数组而不是 nil：草稿卡按 options.length 渲染，
+	// nil 会序列化成 null，让整张审核卡抛异常。
+	if normalized == nil {
+		normalized = []model.Option{}
 	}
 	d.Options = normalized
 

@@ -68,7 +68,7 @@ function answerText(draft: ImportDraft): string {
     case 'boolean':
       return answer.bool_answer ? '正确' : '错误'
     case 'blanks':
-      return (answer.blanks ?? []).map((b) => b.accepts.length).join(' / ') + ' 个空'
+      return (answer.blanks ?? []).map((b) => (b.accepts ?? []).length).join(' / ') + ' 个空'
     case 'reference':
       return '见参考答案'
     case 'pending':
