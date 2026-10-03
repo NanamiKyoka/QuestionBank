@@ -63,7 +63,7 @@ function answerText(draft: ImportDraft): string {
     case 'single':
     case 'multiple':
       return (answer.correct ?? [])
-        .map((id) => draft.options.find((o) => o.id === id)?.label ?? id)
+        .map((id) => draft.options?.find((o) => o.id === id)?.label ?? id)
         .join('、')
     case 'boolean':
       return answer.bool_answer ? '正确' : '错误'

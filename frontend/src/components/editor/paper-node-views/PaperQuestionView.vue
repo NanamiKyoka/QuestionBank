@@ -127,7 +127,7 @@ function setScore(next: number | undefined) {
       <template v-if="projection">
         <RichContent :doc="projection.stem" />
         <div
-          v-if="projection.options.length"
+          v-if="projection.options?.length"
           class="qm-canvas-question__options"
           :style="{ columns: optionColumns }"
         >

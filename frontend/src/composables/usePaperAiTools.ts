@@ -490,7 +490,7 @@ export function toPaperProjection(detail: QuestionDetail): PaperQuestionProjecti
     question_type_label: detail.question_type_label,
     difficulty: detail.difficulty,
     stem: detail.stem,
-    options: detail.options.map((o) => ({
+    options: (detail.options ?? []).map((o) => ({
       id: o.id,
       label: o.label,
       content: o.content ?? emptyRichDoc(),

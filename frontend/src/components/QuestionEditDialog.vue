@@ -218,7 +218,7 @@ async function loadQuestion(id: number) {
     originalStatus.value = detail.status
 
     // 选项：把富文本还原成 `$...$` 纯文本，保证"读出来再写回去"不丢公式。
-    form.options = detail.options.length
+    form.options = detail.options?.length
       ? detail.options.map((o) => ({ label: o.label, text: richDocToPlain(o.content) }))
       : [
           { label: 'A', text: '' },
@@ -228,7 +228,7 @@ async function loadQuestion(id: number) {
         ]
 
     // 答案：后端存的是选项 id，界面显示的是标签，需要一次映射。
-    const labelOf = new Map(detail.options.map((o) => [o.id, o.label]))
+    const labelOf = new Map((detail.options ?? []).map((o) => [o.id, o.label]))
     switch (detail.answer.kind) {
       case 'pending':
         form.answerPending = true

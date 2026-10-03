@@ -194,7 +194,10 @@ func (s *QuestionService) buildDetail(ctx context.Context, user *model.User, q *
 		return nil, apperr.ErrInternal.WithCause(err)
 	}
 
-	var options []model.Option
+	// 非选择题没有选项，options 必须初始化成空切片而不是留 nil：
+	// nil 会序列化成 "options": null，前端读 .length 时直接抛异常，
+	// 表现是这道题打不开详情、也进不了编辑。
+	options := []model.Option{}
 	if !q.Options.IsEmpty() {
 		if err := q.Options.Into(&options); err != nil {
 			return nil, apperr.ErrInternal.WithCause(err)

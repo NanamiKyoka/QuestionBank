@@ -11,9 +11,11 @@ import {
   applyPaperOperations,
   diffPaperNodes,
   renderPaperOutline,
+  toPaperProjection,
   type PreparedPaperOp,
 } from '../usePaperAiTools'
 import { plainToRichDoc } from '@/lib/richdoc'
+import type { QuestionDetail } from '@/api/types'
 import type { PaperNode, PaperQuestionProjection, QuestionRef } from '@/api/paper'
 
 // ---- 夹具 ----
@@ -473,5 +475,34 @@ describe('renderPaperOutline', () => {
   it('标题的 level 缺失时按 H1 标注', () => {
     const base = [node({ id: 'h', node_type: 'heading', position: 0, content: plainToRichDoc('大题') })]
     expect(renderPaperOutline('期中', base, {}, OPTS)).toContain('标题 H1：大题')
+  })
+})
+
+// 非选择题的选项是空数组。旧数据里它是 null，画布读 options.length
+// 会抛异常，整张卷子渲染不出来——所以这里钉住"null 也必须降级成 []"。
+describe('toPaperProjection', () => {
+  const base = {
+    id: 7,
+    question_type: 'essay' as const,
+    question_type_label: '解答题',
+    difficulty: 3,
+    stem: plainToRichDoc('证明题'),
+    answer: { kind: 'reference' as const },
+  }
+
+  it('选项为 null 时降级成空数组', () => {
+    const detail = { ...base, options: null } as unknown as QuestionDetail
+    expect(toPaperProjection(detail).options).toEqual([])
+  })
+
+  it('选择题的选项照常带过去', () => {
+    const detail = {
+      ...base,
+      question_type: 'single_choice' as const,
+      options: [{ id: 'opt_1', label: 'A', content: plainToRichDoc('甲') }],
+    } as unknown as QuestionDetail
+    const out = toPaperProjection(detail)
+    expect(out.options).toHaveLength(1)
+    expect(out.options[0].label).toBe('A')
   })
 })

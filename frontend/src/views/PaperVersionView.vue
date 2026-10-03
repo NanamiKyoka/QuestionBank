@@ -182,7 +182,7 @@ function answerTextOf(q: PaperQuestionProjection): string {
     case 'single':
     case 'multiple':
       return (q.answer.correct ?? [])
-        .map((id) => q.options.find((o) => o.id === id)?.label ?? id)
+        .map((id) => q.options?.find((o) => o.id === id)?.label ?? id)
         .join('、')
     case 'boolean':
       return q.answer.bool_answer == null ? '' : q.answer.bool_answer ? '正确' : '错误'
@@ -344,7 +344,7 @@ function itemNumberOf(item: SnapshotNode): string {
 
                 <template v-if="questionOf(node)">
                   <RichContent :doc="questionOf(node)?.stem" class="mt-0.5" />
-                  <div v-if="questionOf(node)?.options.length" class="mt-1 space-y-0.5">
+                  <div v-if="questionOf(node)?.options?.length" class="mt-1 space-y-0.5">
                     <div
                       v-for="option in questionOf(node)?.options"
                       :key="option.id"

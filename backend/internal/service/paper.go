@@ -282,7 +282,8 @@ func (s *PaperService) projectQuestions(ctx context.Context, nodes []model.Paper
 // 冻结之后题库又改过，界面就该提示可以同步最新内容。
 // 题目已被删除时一律视为过期——内容已经不完整了。
 func projectionFromFrozen(fq frozenQuestion, declared map[uint]int64, live *model.Question) schema.PaperQuestionProjection {
-	var options []model.Option
+	// 与 buildDetail 同一约定：非选择题的选项是空数组，不是 null。
+	options := []model.Option{}
 	if !fq.Options.IsEmpty() {
 		_ = fq.Options.Into(&options)
 	}

@@ -1150,7 +1150,7 @@ function pad(n: number): string {
             <el-link type="primary" class="num" @click="jumpTo(detail.parent_id)">#{{ detail.parent_id }}</el-link>
           </div>
 
-          <div v-if="detail.children.length" class="mb-3 rounded border border-accent-border bg-accent-soft p-2">
+          <div v-if="detail.children?.length" class="mb-3 rounded border border-accent-border bg-accent-soft p-2">
             <div class="mb-1 text-xs text-accent-text">母题 · 含 {{ detail.children.length }} 个小问</div>
             <div class="space-y-1">
               <div
@@ -1184,7 +1184,7 @@ function pad(n: number): string {
             <RichContent :doc="detail.stem" />
           </div>
 
-          <template v-if="detail.options.length">
+          <template v-if="detail.options?.length">
             <div class="mb-1 text-xs text-ink-muted">选项</div>
             <div class="mb-4 space-y-1">
               <div
@@ -1203,7 +1203,7 @@ function pad(n: number): string {
             <template v-if="detail.answer.kind === 'single' || detail.answer.kind === 'multiple'">
               {{
                 (detail.answer.correct ?? [])
-                  .map((id) => detail?.options.find((o) => o.id === id)?.label ?? id)
+                  .map((id) => detail?.options?.find((o) => o.id === id)?.label ?? id)
                   .join('、')
               }}
             </template>
