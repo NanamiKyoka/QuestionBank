@@ -39,7 +39,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <!-- h-full 不能去掉：布局根节点的 h-full 参照的是这个 div，
+       它没有定高就会解析成 auto，el-main 的 overflow:auto 随之失效，
+       滚的变成整个页面（侧边栏与顶栏会一起被滚走）。 -->
+  <div class="flex h-full flex-col">
     <a href="#main-content" class="skip-link">跳到主要内容</a>
     <RouterView />
   </div>

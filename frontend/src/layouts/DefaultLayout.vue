@@ -120,7 +120,7 @@ async function onLogout() {
 </script>
 
 <template>
-  <el-container class="h-full">
+  <el-container class="h-full min-h-0">
     <el-aside
       :width="collapsed ? '64px' : '212px'"
       class="border-r border-hairline transition-all duration-200"
@@ -151,7 +151,7 @@ async function onLogout() {
       </el-menu>
     </el-aside>
 
-    <el-container>
+    <el-container class="min-h-0">
       <el-header class="flex items-center justify-between gap-3 border-b border-hairline px-4">
         <div class="flex min-w-0 items-center gap-2">
           <el-button
@@ -211,7 +211,7 @@ async function onLogout() {
         </div>
       </el-header>
 
-      <el-main id="main-content" class="bg-surface-sunken">
+      <el-main id="main-content" class="min-h-0 bg-surface-sunken">
         <RouterView v-if="!subject.loading" />
         <div v-else class="flex h-full items-center justify-center">
           <el-icon class="is-loading" :size="28"><Loading /></el-icon>
