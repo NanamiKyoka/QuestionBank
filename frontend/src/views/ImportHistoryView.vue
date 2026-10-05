@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -20,7 +20,8 @@ import { useSubjectStore } from '@/stores/subject'
  * 回答三个问题：**我导入过什么**、**哪一次出了问题**、**那次导出来的题在哪**。
  * 抽取跑在后端的进程内 worker 上（并发 1），这一页刻意不假装自己是一个
  * 任务看板：队列区只如实展示计数与位置，并明确告诉用户
- * "排队中不等于马上会开始"。
+ * "排队中不等于马上会开始"。队列真在推进时它每 5 秒自己跟着走，
+ * 免得用户对着一张其实一直在变的表反复点刷新。
  *
  * 状态相关的判断（能不能重试、能不能放弃）全部由后端随任务一起下发，
  * 前端不复制状态机——两份规则必然漂移，漂移的表象是"按钮能点，点了报 409"。
@@ -62,6 +63,8 @@ onMounted(() => {
   void load()
 })
 
+onBeforeUnmount(stopPolling)
+
 watch(
   () => subject.currentId,
   () => {
@@ -70,14 +73,45 @@ watch(
   },
 )
 
-async function load() {
+/**
+ * 队列在推进时的自动刷新。
+ *
+ * 后台 worker 是真的在消费队列（状态、计数、FIFO 位置都会变），
+ * 但列表只在用户点「刷新」时才重新拉一次——于是屏幕上每分钟都在变的
+ * 队列，看起来和卡死了一样。有活儿才轮询，没活儿就停，别空转。
+ */
+const POLL_INTERVAL = 5_000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function pollingWanted(): boolean {
+  const status = queue.value
+  if (!status || !subject.currentId || !status.worker_online) return false
+  return status.stats.pending > 0 || status.stats.processing > 0
+}
+
+function syncPolling() {
+  if (pollingWanted()) {
+    if (!pollTimer) pollTimer = setInterval(() => void load(true), POLL_INTERVAL)
+  } else {
+    stopPolling()
+  }
+}
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = null
+}
+
+async function load(silent = false) {
   if (!subject.currentId) {
     rows.value = []
     total.value = 0
     queue.value = null
+    stopPolling()
     return
   }
-  loading.value = true
+  // 静默刷新不能闪骨架屏：用户正看着列表，每 5 秒白一次比不刷新更烦。
+  if (!silent) loading.value = true
   try {
     const [list, status] = await Promise.all([
       importTaskApi.list(subject.currentId, {
@@ -91,10 +125,14 @@ async function load() {
     total.value = list.total ?? 0
     queue.value = status
   } catch {
-    rows.value = []
-    total.value = 0
+    // 轮询里的一次网络抖动不该把用户正在看的列表清空。
+    if (!silent) {
+      rows.value = []
+      total.value = 0
+    }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
+    syncPolling()
   }
 }
 
@@ -275,6 +313,25 @@ function countText(row: ImportTask): string {
       description="队列暂时不会推进：worker 未在运行。可稍后刷新，或回到智能录题页重新发起。"
     />
 
+    <!-- 排队中的任务与它们的 FIFO 位置：这一页自己会每 5 秒跟着队列走 -->
+    <el-card v-if="queue && queue.active_tasks.length" shadow="never">
+      <div class="text-xs text-ink-subtle">正在排队 / 处理</div>
+      <div class="mt-1 space-y-1">
+        <div
+          v-for="task in queue.active_tasks"
+          :key="task.task_id"
+          class="flex items-center gap-2 text-sm"
+        >
+          <el-tag size="small" :type="statusTag(task.status)">{{ task.status_label }}</el-tag>
+          <span class="min-w-0 truncate">{{ task.original_filename || '（未命名）' }}</span>
+          <span class="ml-auto shrink-0 text-xs text-ink-subtle">
+            {{ task.status === 'processing' ? '正在抽取' : `第 ${task.queue_position} 位` }}
+          </span>
+        </div>
+      </div>
+      <div class="mt-2 text-xs text-ink-subtle">{{ queue.hint }}</div>
+    </el-card>
+
     <el-card shadow="never">
       <div class="flex flex-wrap items-center gap-2">
         <el-select v-model="query.status" placeholder="状态" clearable class="w-36" @change="search">
@@ -384,7 +441,7 @@ function countText(row: ImportTask): string {
           :total="total"
           :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next, jumper"
-          @current-change="load"
+          @current-change="() => load()"
           @size-change="search"
         />
       </div>
