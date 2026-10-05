@@ -58,7 +58,14 @@ const scrollBox = ref<HTMLElement | null>(null)
 const canChat = computed(() => !!subject.currentId)
 
 onMounted(loadSessions)
-watch(() => subject.currentId, loadSessions)
+watch(() => subject.currentId, () => {
+  // 会话属于上一个学科：只刷新列表的话 currentSessionId 还指着旧学科的会话，
+  // 下一次提问会写进那条会话里。连同在飞的流一起掐掉。
+  controller?.abort()
+  currentSessionId.value = null
+  bubbles.value = []
+  void loadSessions()
+})
 
 async function loadSessions() {
   if (!subject.currentId) return

@@ -109,6 +109,15 @@ watch(
   () => subject.currentId,
   async () => {
     filters.page = 1
+    // 这些 id 属于上一个学科，而下拉选项已经用新学科重填了：
+    // 留着旧 id 会得到一个清不掉的筛选片和 0 行结果。
+    filters.knowledge_point_ids = []
+    filters.tag_ids = []
+    filters.created_by = null
+    filters.reviewer_id = null
+    // AI 改动预览里是旧学科的题目 id，留着「应用」会按原 id 打到别的学科上。
+    pendingAiEdits.value = null
+    selection.value = []
     await Promise.all([loadOptions(), load()])
   },
 )

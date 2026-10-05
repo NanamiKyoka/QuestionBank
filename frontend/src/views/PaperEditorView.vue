@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/http'
@@ -293,6 +293,15 @@ async function setUniformScore() {
 }
 
 onMounted(load)
+
+// 路由组件没有 key：同名路由换参数（改地址栏、前进后退）时组件不会重建。
+// 换了卷子就要重新拉取，否则屏幕上是 A 卷的草稿、地址栏却是 B 卷，
+// 助手会话还会继续挂在 A 卷上。
+watch(paperId, async () => {
+  chatController?.abort()
+  newChatSession()
+  await load()
+})
 
 /** 有未保存改动时离开页面要拦一下。 */
 onBeforeRouteLeave(async () => {

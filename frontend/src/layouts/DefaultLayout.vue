@@ -98,9 +98,9 @@ onMounted(async () => {
 })
 
 async function onSwitchSubject(id: number) {
+  // 各页面都 watch(currentId) 自己刷新。过去这里还顺手往 URL 写 _s=<id>，
+  // 而全站没有一处读它——只会污染分享出去的链接。
   await subject.switchTo(id)
-  // 切学科后刷新当前页面的数据。用 replace 避免在历史里堆一串同学科记录。
-  await router.replace({ path: route.path, query: { ...route.query, _s: String(id) } })
 }
 
 async function onLogout() {
