@@ -1,11 +1,26 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
+import type { InlineConfig as VitestInlineConfig } from 'vitest'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import Components from 'unplugin-vue-components/vite'
 import type { ComponentResolver } from 'unplugin-vue-components'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import * as ElementPlusIcons from '@element-plus/icons-vue'
+
+/**
+ * 把 vitest 的配置项接进 vite 的 UserConfig。
+ *
+ * vitest 自己的类型扩展写在 `vitest/config` 里，但那份声明给的是它配套的 vite
+ * （rollup 体系），而本项目是 vite 8（rolldown）——引它会连带把 Plugin 类型也换成
+ * rollup 的，`@vitejs/plugin-vue` 之类全都对不上。这里只声明用得上的那一个键，
+ * 类型取自 vitest 本体导出的 `InlineConfig`，与它的官方声明是同一个类型，可以并存。
+ */
+declare module 'vite' {
+  interface UserConfig {
+    test?: VitestInlineConfig
+  }
+}
 
 // 后端地址：开发时通过 Vite 代理转发，避免 CORS。
 const backend = process.env.QM_BACKEND ?? 'http://127.0.0.1:8080'
@@ -111,5 +126,11 @@ export default defineConfig({
     // 生产由后端或 nginx 托管静态文件，不需要 sourcemap。
     sourcemap: false,
     chunkSizeWarningLimit: 1500,
+  },
+  test: {
+    // 环境按文件声明：需要 DOM 的测试在文件头写 @vitest-environment jsdom，
+    // 其余保持默认的 node。setupFiles 负责补回被 Node 实验性同名全局顶掉的
+    // localStorage（详见 vitest.setup.ts）。
+    setupFiles: ['./vitest.setup.ts'],
   },
 })
