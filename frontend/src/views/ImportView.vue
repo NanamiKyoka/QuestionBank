@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { importApi, uploadApi, type CommitResult } from '@/api/ai'
+import { ApiError } from '@/api/http'
 import { knowledgePointApi, tagApi } from '@/api'
 import {
   groupImportDrafts,
@@ -41,6 +42,24 @@ const subject = useSubjectStore()
 const tab = ref<'file' | 'text' | 'image'>('file')
 const loading = ref(false)
 const committing = ref(false)
+
+/**
+ * 正在进行的那次识别。有了句柄才谈得上"取消"与"离开拦截"。
+ *
+ * 抽取是全站最长的同步请求（预算 20 分钟），此前唯一的反馈是按钮转圈：
+ * 用户既不能取消，刷新页面还会白白让服务端把活干完。
+ */
+const extractAbort = ref<AbortController | null>(null)
+
+/** 已等待秒数：转圈没有时间感，计时才能把"慢"和"卡死"区分开。 */
+const elapsed = ref(0)
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+const elapsedLabel = computed(() => {
+  const s = elapsed.value
+  if (s < 60) return `${s} 秒`
+  return `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒`
+})
 
 const form = reactive({
   content: '',
@@ -224,6 +243,57 @@ onMounted(async () => {
   await loadOptions()
   loaded.value = true
   await loadFromRoute()
+})
+
+// ---- 取消与离开拦截 ----
+
+/** 中止进行中的识别：请求断开，结果不再回传，本次不产生任何草稿。 */
+function cancelExtract() {
+  extractAbort.value?.abort()
+}
+
+/** 收掉句柄与计时：请求回来（或被取消）之后就不再算"进行中"。 */
+function endExtract() {
+  extractAbort.value = null
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
+
+/**
+ * 识别进行中离开页面要拦一下。
+ *
+ * 站内跳转和刷新不同——它是可以被准确告知代价的。说清楚"这次识别作废"，
+ * 比一句没人能验证的"请不要关闭页面"有用得多。
+ */
+onBeforeRouteLeave(async () => {
+  if (!extractAbort.value) return true
+  try {
+    await ElMessageBox.confirm(
+      '正在识别中，离开会中断本次操作，已识别的内容不会保留。',
+      '识别尚未完成',
+      { type: 'warning', confirmButtonText: '中断并离开', cancelButtonText: '留在这里' },
+    )
+  } catch {
+    return false
+  }
+  cancelExtract()
+  return true
+})
+
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (!extractAbort.value) return
+  event.preventDefault()
+  // 现代浏览器忽略自定义文案，但必须调用才能触发原生确认。
+  event.returnValue = ''
+}
+
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  cancelExtract()
+  if (elapsedTimer) clearInterval(elapsedTimer)
 })
 
 /**
@@ -522,35 +592,60 @@ async function extract() {
     return
   }
 
+  const controller = new AbortController()
+  extractAbort.value = controller
+  const signal = controller.signal
   loading.value = true
+  elapsed.value = 0
+  elapsedTimer = setInterval(() => {
+    elapsed.value += 1
+  }, 1000)
   commitResult.value = null
   const auto = form.mode === 'record' && autoCommit.value
   try {
     const result =
       tab.value === 'file' && form.file
-        ? await importTaskApi.upload(subject.currentId, {
-            file: form.file,
-            method: form.method,
-            mode: form.mode,
-            // 仅录题不读答案页：不发过去，省下的不只是一次读图，
-            // 还有模型照着答案页把每道题"顺手"算一遍的可能。
-            answerImages: form.mode === 'record' ? undefined : form.answerImages,
-          })
-        : await importTaskApi.extract(subject.currentId, {
-            content: tab.value === 'text' ? form.content : '',
-            images: tab.value === 'image' ? form.images : undefined,
-            method: form.method,
-            mode: form.mode,
-            solve_for_content: form.mode === 'solve' ? form.solve_for_content : undefined,
-          })
+        ? await importTaskApi.upload(
+            subject.currentId,
+            {
+              file: form.file,
+              method: form.method,
+              mode: form.mode,
+              // 仅录题不读答案页：不发过去，省下的不只是一次读图，
+              // 还有模型照着答案页把每道题"顺手"算一遍的可能。
+              answerImages: form.mode === 'record' ? undefined : form.answerImages,
+            },
+            { signal },
+          )
+        : await importTaskApi.extract(
+            subject.currentId,
+            {
+              content: tab.value === 'text' ? form.content : '',
+              images: tab.value === 'image' ? form.images : undefined,
+              method: form.method,
+              mode: form.mode,
+              solve_for_content: form.mode === 'solve' ? form.solve_for_content : undefined,
+            },
+            { signal },
+          )
+    // 请求已经回来了：接下来是入库，那一步不该再显示"取消"。
+    endExtract()
     // 自动入库时要吞掉"识别出 N 道题"这句：它读起来像"完事了"，
     // 而真正的结果紧接着由入库那一步给出。两句一起弹只会让人以为重复执行了。
     acceptResult(result, auto)
     if (auto && drafts.value.length) {
       await doCommit(true)
     }
+  } catch (err) {
+    // 取消不是失败：交代清楚"什么都没留下"，也不把它抛成未处理的 rejection。
+    if (err instanceof ApiError && err.isCancelled) {
+      ElMessage.info('已取消识别，本次没有产生草稿')
+      return
+    }
+    throw err
   } finally {
     loading.value = false
+    endExtract()
   }
 }
 
@@ -1032,12 +1127,14 @@ function goToPaper(paperId: number) {
           <el-icon class="mr-1"><MagicStick /></el-icon>
           {{ submitLabel }}
         </el-button>
-        <span v-if="loading" class="text-xs text-ink-subtle">
+        <el-button v-if="extractAbort" @click="cancelExtract">取消识别</el-button>
+        <span v-if="extractAbort" class="text-xs text-ink-subtle">
           {{ pdfIsSlow
-            ? 'PDF 正在逐页渲染并交给模型识别，通常要几分钟，请不要关闭页面。'
-            : '正在解析，大文件可能需要几分钟，请不要关闭页面。' }}
+            ? 'PDF 正在逐页渲染并交给模型识别，通常要几分钟。'
+            : '正在解析，大文件可能需要几分钟。' }}
+          已等待 {{ elapsedLabel }}，随时可以取消。
         </span>
-        <span v-else-if="submitHint" class="text-xs text-ink-subtle">{{ submitHint }}</span>
+        <span v-else-if="!loading && submitHint" class="text-xs text-ink-subtle">{{ submitHint }}</span>
       </div>
     </el-card>
 

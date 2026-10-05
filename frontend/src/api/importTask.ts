@@ -254,6 +254,8 @@ export const importTaskApi = {
    *
    * `method` 决定走模型还是确定性规则解析；留空由后端按自己的默认值决定
    * （当前是 `ai`），客户端不替服务端承诺。
+   *
+   * `config` 用来带上 AbortSignal：识别可能跑上几分钟，没有取消就只能干等。
    */
   extract: (
     subjectId: number,
@@ -264,7 +266,12 @@ export const importTaskApi = {
       mode?: ImportMode
       solve_for_content?: string
     },
-  ) => post<ImportExtractResponse>(`/subjects/${subjectId}/imports/extract`, payload, SLOW_TIMEOUT),
+    config?: AxiosRequestConfig,
+  ) =>
+    post<ImportExtractResponse>(`/subjects/${subjectId}/imports/extract`, payload, {
+      ...SLOW_TIMEOUT,
+      ...config,
+    }),
 
   /**
    * 上传**一个**文档（.docx / .md / .txt / .pdf / .zip）并抽取。
@@ -284,6 +291,7 @@ export const importTaskApi = {
       mode: ImportMode
       answerImages?: string[]
     },
+    config?: AxiosRequestConfig,
   ) => {
     const form = new FormData()
     form.append('file', payload.file)
@@ -293,7 +301,10 @@ export const importTaskApi = {
       // 每个地址作为一个独立部分，字段名固定为 images。
       form.append('images', new Blob([ref], { type: 'text/plain' }), ref)
     }
-    return post<ImportExtractResponse>(`/subjects/${subjectId}/imports/upload`, form, SLOW_TIMEOUT)
+    return post<ImportExtractResponse>(`/subjects/${subjectId}/imports/upload`, form, {
+      ...SLOW_TIMEOUT,
+      ...config,
+    })
   },
 
   /** 导入历史。当前用户只看得到自己的记录，管理员默认看全部。 */

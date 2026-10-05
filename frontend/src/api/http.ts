@@ -35,7 +35,20 @@ export class ApiError extends Error {
   get isConflict() {
     return this.status === 409
   }
+
+  /** 是否为用户主动取消的请求：没有结果，但也不是失败。 */
+  get isCancelled() {
+    return this.code === CANCELLED_CODE
+  }
 }
+
+/**
+ * 用户主动取消（AbortController）的请求所用的业务码。
+ *
+ * 499 与 nginx 的同名状态码一个意思：客户端先关掉了请求。
+ * 取消不该弹全局错误提示，调用方也要能把它和真正的失败分开说话。
+ */
+export const CANCELLED_CODE = 499
 
 /**
  * 未登录处理器。
@@ -94,6 +107,11 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiEnvelope<unknown>>) => {
+    // 用户主动取消：请求没有响应体，走下面的分支会弹成"网络异常"。
+    if (axios.isCancel(error)) {
+      return Promise.reject(new ApiError(0, CANCELLED_CODE, '请求已取消'))
+    }
+
     // 网络层失败：没有响应体，只能给通用提示。
     if (!error.response) {
       if (error.code === 'ECONNABORTED') {
