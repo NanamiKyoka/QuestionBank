@@ -83,25 +83,49 @@ async function onSubmit() {
   <AuthShell title="初始化 QuestionMind" subtitle="创建第一个管理员账号。完成后即可登录使用。">
     <template #corner><ThemeToggle /></template>
 
+    <!-- autocomplete 是给密码管理器的：没有它，浏览器既不保存也不回填，
+         「记住密码」在这个页面上等于没有。回车提交则与登录页保持一致。 -->
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <el-form-item label="管理员用户名" prop="username">
-        <el-input v-model="form.username" placeholder="字母或数字，如 admin" />
+        <el-input
+          v-model="form.username"
+          placeholder="字母或数字，如 admin"
+          autocomplete="username"
+          @keyup.enter="onSubmit"
+        />
       </el-form-item>
 
       <el-form-item label="显示名称">
-        <el-input v-model="form.nickname" placeholder="选填，默认为用户名" />
+        <el-input v-model="form.nickname" placeholder="选填，默认为用户名" autocomplete="nickname" />
       </el-form-item>
 
       <el-form-item label="密码" prop="password">
-        <el-input v-model="form.password" type="password" show-password placeholder="至少 8 位" />
+        <el-input
+          v-model="form.password"
+          type="password"
+          show-password
+          placeholder="至少 8 位"
+          autocomplete="new-password"
+          @keyup.enter="onSubmit"
+        />
       </el-form-item>
 
       <el-form-item label="确认密码" prop="confirm">
-        <el-input v-model="form.confirm" type="password" show-password />
+        <el-input
+          v-model="form.confirm"
+          type="password"
+          show-password
+          autocomplete="new-password"
+          @keyup.enter="onSubmit"
+        />
       </el-form-item>
 
       <el-form-item label="默认学科">
-        <el-input v-model="form.first_subject_name" placeholder="选填，如「数学」" />
+        <el-input
+          v-model="form.first_subject_name"
+          placeholder="选填，如「数学」"
+          @keyup.enter="onSubmit"
+        />
         <div class="mt-1 text-xs text-ink-subtle">
           填写后会自动创建该学科，并把管理员设为学科负责人。
         </div>

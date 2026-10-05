@@ -53,6 +53,7 @@ async function onSubmit() {
           placeholder="请输入用户名"
           size="large"
           autofocus
+          autocomplete="username"
           @keyup.enter="onSubmit"
         />
       </el-form-item>
@@ -64,6 +65,7 @@ async function onSubmit() {
           placeholder="请输入密码"
           size="large"
           show-password
+          autocomplete="current-password"
           @keyup.enter="onSubmit"
         />
       </el-form-item>
