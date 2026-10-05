@@ -57,7 +57,7 @@ const reviewLogsLoading = ref(false)
 
 const filters = reactive<QuestionQuery>({
   keyword: '',
-  type: (route.query.status ? '' : '') as QuestionType | '',
+  type: (route.query.type as QuestionType) || '',
   status: (route.query.status as QuestionStatus) || '',
   difficulty: null,
   knowledge_point_ids: [],
@@ -124,6 +124,11 @@ watch(
 
 async function loadOptions() {
   if (!subject.currentId) return
+  // 先清空：换学科之后如果接口失败，不能把上一个学科的选项留在下拉里——
+  // 用户会以为那是本学科的标签，用它筛选却怎么都是 0 行。
+  knowledgePoints.value = []
+  tags.value = []
+  members.value = []
   try {
     // 成员表同时用作「创建人 / 审核人」下拉的数据源：
     // 审题的人一定是学科成员，而 userApi.list 只有管理员能调，
@@ -137,7 +142,9 @@ async function loadOptions() {
     tags.value = tagList
     members.value = memberList
   } catch {
-    // 选项加载失败不影响列表本身
+    // 列表本身照常展示，但这里必须出声：接口照样返回 200 却不带标签时，
+    // 用户没法自己分清"这个学科还没有标签"和"查询挂了"。
+    ElMessage.warning('标签 / 知识点加载失败，下拉框暂时是空的')
   }
 }
 
