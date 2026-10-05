@@ -196,31 +196,6 @@ export interface Draft {
   warnings: string[]
 }
 
-export interface ImportTask {
-  id: number
-  subject_id: number | null
-  user_id: number
-  source: string
-  status: string
-  status_label: string
-  file_type: string
-  mode: string
-  total_count: number
-  saved_count: number
-  failed_count: number
-  error_message?: string
-  created_at: string
-  finished_at: string | null
-}
-
-export interface ExtractResult {
-  task_id: number
-  drafts: Draft[]
-  total: number
-  warning_count: number
-  model: string
-  elapsed_ms: number
-}
 export interface CommitResult {
   task_id: number
   created_count: number
@@ -240,16 +215,6 @@ export interface CommitResult {
 }
 
 export const importApi = {
-  extract: (
-    subjectId: number,
-    payload: {
-      content?: string
-      images?: string[]
-      mode?: 'extract' | 'solve'
-      solve_for_content?: string
-    },
-  ) => post<ExtractResult>(`/subjects/${subjectId}/imports/extract`, payload),
-
   commit: (
     subjectId: number,
     payload: {
@@ -275,12 +240,6 @@ export const importApi = {
       }[]
     },
   ) => post<CommitResult>(`/subjects/${subjectId}/imports/commit`, payload),
-
-  listTasks: (subjectId: number, limit = 20) =>
-    get<PageResult<ImportTask> | ImportTask[]>(`/subjects/${subjectId}/imports`, {
-      page: 1,
-      page_size: limit,
-    }),
 }
 
 // ---- AI 助手对话 ----

@@ -84,7 +84,10 @@ export function silenceError(code: number) {
 
 export const http: AxiosInstance = axios.create({
   baseURL: '/api/v1',
-  timeout: 120_000, // 智能录题与 AI 对话耗时较长
+  // 默认超时：凡是没单独声明的请求都用它（列表、CRUD、会话历史）。
+  // 走模型的三类各自放宽：AI 解题 → AI_TIMEOUT（见下），
+  // 单文件抽取与整批排队 → SLOW_TIMEOUT（importTask.ts）。改之前先确认动的是哪一类。
+  timeout: 120_000,
 })
 
 /**
