@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import type { ImportDraft } from '@/api/importTask'
 import type { AnswerSpec, QuestionType, RichDoc } from '@/api/types'
 import RichTextEditor from '@/components/editor/RichTextEditor.vue'
+import { useFormDirty, useDialogDiscardGuard } from '@/composables/useUnsavedGuard'
 import { emptyDoc, plainToRichDoc, richDocToPlain } from '@/lib/richdoc'
 
 /**
@@ -75,6 +76,17 @@ const form = reactive({
    */
   answerPending: false,
 })
+
+// 草稿的这次修改只活在弹窗里（点了保存才交给上层列表）：
+// 关掉就等于放弃，四条关闭路径都要过同一道确认。
+const formDirty = useFormDirty(() => form)
+const closeGuard = useDialogDiscardGuard(
+  () => formDirty.dirty.value,
+  () => {
+    visible.value = false
+  },
+  '这条草稿的修改还没保存，确定关闭吗？',
+)
 
 /** 原答案里引用了草稿中没有的选项 id。保存会丢掉它们，必须先说一声。 */
 const danglingAnswers = ref<string[]>([])
@@ -178,6 +190,9 @@ function load(draft: ImportDraft) {
     default:
       break
   }
+
+  // 草稿回填完的这份内容就是原点。
+  formDirty.markClean()
 }
 
 function addOption() {
@@ -319,7 +334,14 @@ function onSubmit() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="修改草稿" width="760px" top="6vh" destroy-on-close>
+  <el-dialog
+    v-model="visible"
+    title="修改草稿"
+    width="760px"
+    top="6vh"
+    destroy-on-close
+    :before-close="closeGuard.beforeClose"
+  >
     <el-alert
       v-if="unknownType"
       type="warning"
@@ -432,7 +454,7 @@ function onSubmit() {
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="closeGuard.requestClose">取消</el-button>
       <el-button type="primary" @click="onSubmit">应用修改</el-button>
     </template>
   </el-dialog>

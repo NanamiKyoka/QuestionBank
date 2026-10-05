@@ -15,6 +15,7 @@ import type {
   Tag,
 } from '@/api/types'
 import RichTextEditor from '@/components/editor/RichTextEditor.vue'
+import { useFormDirty, useDialogDiscardGuard } from '@/composables/useUnsavedGuard'
 import { emptyDoc, plainToRichDoc, richDocToPlain } from '@/lib/richdoc'
 
 /**
@@ -99,6 +100,17 @@ const rules: FormRules = {
   question_type: [{ required: true, message: '请选择题型', trigger: 'change' }],
 }
 
+// 题干是一个字一个字敲出来的，关掉就没了：取消、X、ESC、遮罩四条路
+// 都要过同一道确认，否则最顺手的那条路就成了一条漏网的路。
+const formDirty = useFormDirty(() => form)
+const closeGuard = useDialogDiscardGuard(
+  () => formDirty.dirty.value,
+  () => {
+    visible.value = false
+  },
+  '这道题还有没保存的编辑，确定关闭吗？',
+)
+
 const isChoice = computed(
   () => form.question_type === 'single_choice' || form.question_type === 'multiple_choice',
 )
@@ -124,6 +136,8 @@ watch(
     await loadOptions()
     reset()
     if (props.questionId) await loadQuestion(props.questionId)
+    // 回填完的这份内容就是原点，接下来的每个字才算改动。
+    formDirty.markClean()
   },
 )
 
@@ -404,6 +418,7 @@ async function onSubmit() {
     }
     ElMessage.success(props.questionId ? '已保存' : '已创建')
     emit('saved', saved)
+    formDirty.markClean()
     visible.value = false
   } finally {
     submitting.value = false
@@ -418,6 +433,7 @@ async function onSubmit() {
     width="860px"
     top="5vh"
     destroy-on-close
+    :before-close="closeGuard.beforeClose"
   >
     <el-form ref="formRef" v-loading="loading" :model="form" :rules="rules" label-width="80px">
       <el-row :gutter="12">
@@ -608,7 +624,7 @@ async function onSubmit() {
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="closeGuard.requestClose">取消</el-button>
       <el-button type="primary" :loading="submitting" @click="onSubmit">保存</el-button>
     </template>
   </el-dialog>

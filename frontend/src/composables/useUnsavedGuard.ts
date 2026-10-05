@@ -73,6 +73,46 @@ export function useFormDirty<T>(read: () => T): { dirty: Ref<boolean>; markClean
 }
 
 /**
+ * 弹窗关闭前的未保存确认。
+ *
+ * 弹窗是全站最容易手滑丢稿的地方：点 X、按 ESC、点遮罩都会直接关掉，
+ * 而题干、模型配置这类内容是一个字一个字敲出来的——关闭前必须说一声。
+ *
+ * 返回两个处理器：`requestClose` 给「取消」按钮用，`beforeClose` 给
+ * el-dialog 的 `:before-close`（X / ESC / 遮罩都走它），两条路同一道确认。
+ */
+export function useDialogDiscardGuard(
+  isDirty: () => boolean,
+  close: () => void,
+  message = '表单里还有没保存的内容，确定关闭吗？',
+) {
+  async function confirmed(): Promise<boolean> {
+    if (!isDirty()) return true
+    try {
+      await ElMessageBox.confirm(message, '未保存的改动', {
+        type: 'warning',
+        confirmButtonText: '关闭并丢弃',
+        cancelButtonText: '留在这里',
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  return {
+    requestClose: async () => {
+      if (await confirmed()) close()
+    },
+    beforeClose: (done: () => void) => {
+      void confirmed().then((ok) => {
+        if (ok) done()
+      })
+    },
+  }
+}
+
+/**
  * 键序无关的 JSON 序列化。
  *
  * 直接 JSON.stringify 的话，后端返回的字段顺序一变就会被当成"改过"——

@@ -12,7 +12,7 @@ import {
 } from '@/api/ai'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { ApiError, get } from '@/api/http'
-import { useFormDirty, useUnsavedGuard } from '@/composables/useUnsavedGuard'
+import { useFormDirty, useDialogDiscardGuard, useUnsavedGuard } from '@/composables/useUnsavedGuard'
 
 /**
  * AI 设置。
@@ -60,6 +60,17 @@ const providerForm = reactive({
 /** 用户是否主动要更换密钥。 */
 const replacingKey = ref(false)
 
+// 密钥与端点都是一串一串敲出来的，关掉就没了：
+// 取消、X、ESC、遮罩四条关闭路径都要过同一道确认。
+const providerDirty = useFormDirty(() => providerForm)
+const providerGuard = useDialogDiscardGuard(
+  () => providerDirty.dirty.value,
+  () => {
+    providerVisible.value = false
+  },
+  '供应商设置还没保存，确定关闭吗？',
+)
+
 const modelVisible = ref(false)
 const editingModelId = ref<number | null>(null)
 const modelForm = reactive({
@@ -78,6 +89,15 @@ const modelForm = reactive({
   context_window: 0,
   is_active: true,
 })
+
+const modelDirty = useFormDirty(() => modelForm)
+const modelGuard = useDialogDiscardGuard(
+  () => modelDirty.dirty.value,
+  () => {
+    modelVisible.value = false
+  },
+  '模型配置还没保存，确定关闭吗？',
+)
 
 const testing = ref<number | null>(null)
 
@@ -144,6 +164,7 @@ function openCreateProvider() {
   providerForm.api_key = ''
   providerForm.is_active = true
   replacingKey.value = true // 新建时本来就该填密钥
+  providerDirty.markClean()
   providerVisible.value = true
 }
 
@@ -155,6 +176,7 @@ function openEditProvider(provider: Provider) {
   providerForm.api_key = ''
   providerForm.is_active = provider.is_active
   replacingKey.value = !provider.has_key
+  providerDirty.markClean()
   providerVisible.value = true
 }
 
@@ -201,6 +223,7 @@ async function submitProvider() {
     showSaveError(err)
     return // 留在弹窗里让用户改，别把已填的内容丢掉
   }
+  providerDirty.markClean()
   providerVisible.value = false
   await load()
 }
@@ -274,6 +297,7 @@ function openCreateModel(provider?: Provider) {
   modelForm.max_tokens = 4096
   modelForm.context_window = 0
   modelForm.is_active = true
+  modelDirty.markClean()
   modelVisible.value = true
 }
 
@@ -288,6 +312,7 @@ function openEditModel(model: ModelInfo) {
   modelForm.max_tokens = model.max_tokens
   modelForm.context_window = model.context_window
   modelForm.is_active = model.is_active
+  modelDirty.markClean()
   modelVisible.value = true
 }
 
@@ -326,6 +351,7 @@ async function submitModel() {
     })
     ElMessage.success('已创建')
   }
+  modelDirty.markClean()
   modelVisible.value = false
   await load()
 }
@@ -543,6 +569,7 @@ watch(active, syncSelection, { immediate: true })
       v-model="providerVisible"
       :title="editingProviderId ? '编辑供应商' : '添加供应商'"
       width="560px"
+      :before-close="providerGuard.beforeClose"
     >
       <el-form label-width="100px">
         <el-form-item label="名称" required>
@@ -607,7 +634,7 @@ watch(active, syncSelection, { immediate: true })
       </el-form>
 
       <template #footer>
-        <el-button @click="providerVisible = false">取消</el-button>
+        <el-button @click="providerGuard.requestClose">取消</el-button>
         <el-button type="primary" @click="submitProvider">保存</el-button>
       </template>
     </el-dialog>
@@ -617,6 +644,7 @@ watch(active, syncSelection, { immediate: true })
       v-model="modelVisible"
       :title="editingModelId ? '编辑模型' : '添加模型'"
       width="500px"
+      :before-close="modelGuard.beforeClose"
     >
       <el-form label-width="100px">
         <el-form-item label="供应商" required>
@@ -654,7 +682,7 @@ watch(active, syncSelection, { immediate: true })
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="modelVisible = false">取消</el-button>
+        <el-button @click="modelGuard.requestClose">取消</el-button>
         <el-button type="primary" @click="submitModel">保存</el-button>
       </template>
     </el-dialog>
