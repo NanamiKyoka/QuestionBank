@@ -62,6 +62,59 @@ const form = reactive({
 
 const uploading = ref(false)
 
+/**
+ * 一次选中的多份文档，等用户决定怎么处理。
+ *
+ * 单份识别和整批排队是两条完全不同的路：前者当场返回草稿，
+ * 后端要一路等到模型返回；后者立刻返回任务列表，后台依次跑。
+ * 替用户挑一条都不合适——整份文件夹里可能只有一份是他现在要看的。
+ */
+const batchFiles = ref<File[]>([])
+const enqueuing = ref(false)
+
+function onBatch(files: File[]) {
+  form.file = null
+  batchFiles.value = files
+}
+
+function discardBatch() {
+  batchFiles.value = []
+}
+
+function sizeLabel(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+}
+
+/** 整批排队：后台 worker 依次处理，结果在导入历史里看。 */
+async function enqueueBatch() {
+  if (!subject.currentId || !batchFiles.value.length) return
+  enqueuing.value = true
+  try {
+    const res = await importTaskApi.enqueue(subject.currentId, {
+      files: batchFiles.value,
+      method: form.method,
+      mode: form.mode,
+    })
+    const rejected = res.failures?.length
+      ? `，${res.rejected} 个未收下：${res.failures.join('；')}`
+      : ''
+    ElMessage.success(`已排队 ${res.accepted} 个文件${rejected}`)
+    batchFiles.value = []
+    void router.push({ name: 'import-history' })
+  } finally {
+    enqueuing.value = false
+  }
+}
+
+/** 只识别第一份：其余留在原地不清空，用户可以再点一次排队。 */
+function takeFirstOnly() {
+  const [first] = batchFiles.value
+  if (!first) return
+  batchFiles.value = []
+  form.file = first
+}
+
 const drafts = ref<ImportDraft[]>([])
 const selected = ref<Set<number>>(new Set())
 /** 来源文件筛选；空串 = 全部。一次响应可能覆盖多个文件（.zip）。 */
@@ -204,6 +257,7 @@ watch(
     commitResult.value = null
     runMeta.value = null
     fileFilter.value = ''
+    batchFiles.value = []
     await loadOptions()
   },
 )
@@ -323,8 +377,10 @@ function removeAnswerImage(index: number) {
 /** 换文件时答案页要一并清掉：上一份卷子的答案对新卷子毫无意义。 */
 watch(
   () => form.file,
-  () => {
+  (file) => {
     form.answerImages = []
+    // 用户明确选了单份，之前那批待分流的文档就作废了。
+    if (file) batchFiles.value = []
   },
 )
 
@@ -775,7 +831,42 @@ function goToPaper(paperId: number) {
             v-model="form.file"
             :disabled="loading || !canEdit"
             @image="onImageFile"
+            @batch="onBatch"
           />
+
+          <!-- 多份文档的分流口：同步识别与排队是两条耗时差一个量级的路。 -->
+          <div
+            v-if="batchFiles.length"
+            class="mt-3 rounded-lg border border-accent-border bg-accent-soft/40 p-3"
+          >
+            <div class="flex flex-wrap items-center gap-2">
+              <el-tag type="primary" size="small">已选 {{ batchFiles.length }} 份文档</el-tag>
+              <span class="text-xs text-ink-muted">选一个处理方式：</span>
+            </div>
+            <div class="mt-2 max-h-32 overflow-y-auto text-xs text-ink-regular">
+              <div v-for="f in batchFiles" :key="f.name" class="truncate">
+                {{ f.name }} · {{ sizeLabel(f.size) }}
+              </div>
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <el-button
+                type="primary"
+                size="small"
+                :loading="enqueuing"
+                :disabled="!canEdit"
+                @click="enqueueBatch"
+              >
+                整批排队，后台依次识别
+              </el-button>
+              <el-button size="small" :disabled="loading || !canEdit" @click="takeFirstOnly">
+                只识别第一份（{{ batchFiles[0]?.name }}）
+              </el-button>
+              <el-button size="small" text @click="discardBatch">取消</el-button>
+            </div>
+            <div class="mt-1 text-xs text-ink-subtle">
+              排队后可以离开本页，进度与重试都在「导入历史」里。
+            </div>
+          </div>
 
           <!-- 答案页。放在文件页而不是图片页，是因为它的意义完全依附于文档：
                有试卷才有对应它的答案。 -->

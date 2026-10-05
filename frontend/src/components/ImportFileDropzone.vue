@@ -28,9 +28,12 @@ const emit = defineEmits<{
   'update:modelValue': [file: File | null]
   /** 拖进来/粘进来的是图片：交给上层转交图片识别。 */
   image: [file: File]
+  /** 一次拿到多份文档：交给上层决定同步识别还是整批排队。 */
+  batch: [files: File[]]
 }>()
 
 const picker = ref<HTMLInputElement | null>(null)
+const folderPicker = ref<HTMLInputElement | null>(null)
 const dragging = ref(false)
 
 const extensions = computed(() =>
@@ -51,31 +54,54 @@ function sizeLabel(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
 
-function pickFile(file: File | undefined): void {
-  if (!file) return
-  if (file.type.startsWith('image/')) {
-    emit('image', file)
+/**
+ * 把一次选择/拖拽拿到的文件分流。
+ *
+ * 单份仍走 `update:modelValue`（"我现在就要看结果"），
+ * 多份走 `batch`——整个文件夹的卷子交给后台 worker 依次排队，
+ * 比逐个提交后自己盯进度现实得多。
+ * 图片不进这条通道：`/imports/upload` 只吃文档，原样交回上层转图片识别。
+ */
+function dispatchFiles(files: File[]): void {
+  const docs: File[] = []
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      emit('image', file)
+      continue
+    }
+    const name = file.name.toLowerCase()
+    if (!extensions.value.some((ext) => name.endsWith(ext))) {
+      ElMessage.warning(`不支持的文件类型：${file.name}。当前只接受 ${formatHint.value}`)
+      continue
+    }
+    docs.push(file)
+  }
+  if (!docs.length) return
+  if (docs.length === 1) {
+    emit('update:modelValue', docs[0])
     return
   }
-  const name = file.name.toLowerCase()
-  if (!extensions.value.some((ext) => name.endsWith(ext))) {
-    ElMessage.warning(`不支持的文件类型：${file.name}。当前只接受 ${formatHint.value}`)
-    return
-  }
-  emit('update:modelValue', file)
+  emit('batch', docs)
+}
+
+function collect(input: HTMLInputElement | null): File[] {
+  const files = Array.from(input?.files ?? [])
+  if (input) input.value = '' // 允许重选同一个文件
+  return files
 }
 
 function onPick(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  input.value = '' // 允许重选同一个文件
-  pickFile(files[0])
+  dispatchFiles(collect(event.target as HTMLInputElement))
+}
+
+function onPickFolder(event: Event) {
+  dispatchFiles(collect(event.target as HTMLInputElement))
 }
 
 function onDrop(event: DragEvent) {
   dragging.value = false
   if (props.disabled) return
-  pickFile(Array.from(event.dataTransfer?.files ?? [])[0])
+  dispatchFiles(Array.from(event.dataTransfer?.files ?? []))
 }
 
 function onPaste(event: ClipboardEvent) {
@@ -83,7 +109,7 @@ function onPaste(event: ClipboardEvent) {
   for (const item of Array.from(event.clipboardData?.items ?? [])) {
     if (!item.type.startsWith('image/')) continue
     const blob = item.getAsFile()
-    if (blob) pickFile(new File([blob], `pasted-${Date.now()}.png`, { type: blob.type }))
+    if (blob) emit('image', new File([blob], `pasted-${Date.now()}.png`, { type: blob.type }))
     return
   }
 }
@@ -107,14 +133,18 @@ function clear() {
     @dragleave.prevent="dragging = false"
     @drop.prevent="onDrop"
     @paste="onPaste"
+    @keydown.enter.prevent="picker?.click()"
+    @keydown.space.prevent="picker?.click()"
   >
+    <input ref="picker" type="file" multiple :accept="accept" class="hidden" :disabled="disabled" @change="onPick" />
+    <!-- 选整个文件夹：webkitdirectory 是事实标准，选中的就是目录里的全部文件。 -->
     <input
-      ref="picker"
+      ref="folderPicker"
       type="file"
-      :accept="accept"
+      webkitdirectory
       class="hidden"
       :disabled="disabled"
-      @change="onPick"
+      @change="onPickFolder"
     />
 
     <template v-if="modelValue">
@@ -134,11 +164,19 @@ function clear() {
     <template v-else>
       <div class="flex flex-col items-center gap-2">
         <el-icon :size="36" class="text-ink-subtle/60"><UploadFilled /></el-icon>
-        <el-button type="primary" plain :disabled="disabled" @click="picker?.click()">
-          <el-icon class="mr-1"><FolderOpened /></el-icon>
-          选择文件
-        </el-button>
-        <div class="text-xs text-ink-muted">或把文件拖到这里，也可以直接 Ctrl+V 粘贴截图</div>
+        <div class="flex flex-wrap justify-center gap-2">
+          <el-button type="primary" plain :disabled="disabled" @click="picker?.click()">
+            <el-icon class="mr-1"><FolderOpened /></el-icon>
+            选择文件
+          </el-button>
+          <el-button plain :disabled="disabled" @click="folderPicker?.click()">
+            <el-icon class="mr-1"><Files /></el-icon>
+            选择文件夹
+          </el-button>
+        </div>
+        <div class="text-xs text-ink-muted">
+          或把文件拖到这里，也可以直接 Ctrl+V 粘贴截图；一次选中多份会提示整批排队。
+        </div>
         <div class="mt-1 flex flex-wrap items-center justify-center gap-2 text-xs text-ink-subtle">
           <el-tag v-for="ext in extensions" :key="ext" size="small" type="info" effect="plain">
             {{ ext.slice(1).toUpperCase() }}
