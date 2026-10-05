@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -67,6 +68,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	// 同时下发 cookie：预览/下载这类"浏览器直接打开"的请求无法设置请求头，
 	// 只能靠 cookie 携带凭证。HttpOnly/Secure 由部署环境决定（见结构体注释）。
+	//
+	// SameSite=Lax 显式写出来：跨站 POST 不带凭证，而顶部导航（在新窗口
+	// 打开导出文件）仍然带——Lax 正是这两种行为的分界，不该靠浏览器默认值。
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("token", res.AccessToken, int(h.tokenTTL.Seconds()), "/", "", h.secureCookie, h.secureCookie)
 
 	response.OK(c, res)
@@ -75,6 +80,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 // Logout POST /auth/logout
 // 无状态 JWT 的"登出"就是清掉 cookie；客户端还需自行丢弃 token。
 func (h *AuthHandler) Logout(c *gin.Context) {
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("token", "", -1, "/", "", h.secureCookie, h.secureCookie)
 	response.NoContent(c)
 }

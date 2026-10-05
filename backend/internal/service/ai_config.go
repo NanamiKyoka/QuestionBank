@@ -74,6 +74,9 @@ func (s *AIConfigService) CreateProvider(ctx context.Context, actor *model.User,
 	if err := validateInterfaceType(req.InterfaceType); err != nil {
 		return nil, err
 	}
+	if err := validateBaseURL(req.BaseURL); err != nil {
+		return nil, err
+	}
 
 	dup, err := s.repos.AIProviders.ExistsName(ctx, req.Name, 0)
 	if err != nil {
@@ -140,6 +143,9 @@ func (s *AIConfigService) UpdateProvider(ctx context.Context, actor *model.User,
 		fields["interface_type"] = *req.InterfaceType
 	}
 	if req.BaseURL != nil {
+		if err := validateBaseURL(*req.BaseURL); err != nil {
+			return nil, err
+		}
 		fields["base_url"] = strings.TrimSpace(*req.BaseURL)
 	}
 	if req.IsActive != nil {
@@ -432,6 +438,18 @@ func validateInterfaceType(t string) error {
 	return apperr.New(apperr.CodeInvalidParam,
 		"不支持的接口类型，当前仅支持："+strings.Join(ai.InterfaceTypes(), "、")).
 		WithDetail("收到的值是 %q；该厂商若提供 OpenAI 兼容端点，请选择 %s 并填写对应的 base_url", t, ai.TypeOpenAI)
+}
+
+// validateBaseURL 校验自定义网关地址。新建与更新共用，规则来自 ai 包，
+// 与真正发起请求时的校验是同一套——不会出现"存得下、连不上"的缝。
+//
+// 更新路径必须在 service 里校验：指针字段上的 binding 对"指向空串"不可靠
+// （omitempty 看的是指针非 nil），只靠 tag 会漏掉整条更新链路。
+func validateBaseURL(raw string) error {
+	if err := ai.ValidateBaseURL(raw); err != nil {
+		return apperr.New(apperr.CodeInvalidParam, "网关地址无效："+err.Error())
+	}
+	return nil
 }
 
 // providerServable 判断该模型所属供应商当前能否真正发起调用。
@@ -791,6 +809,11 @@ func humanizeAIError(err error) string {
 		// 截断不是"再试一次"能解决的：同样的输入会得到同样的截断。
 		// 直接把该去哪儿调说清楚，比"服务不可用"有用得多。
 		return truncateHint(err)
+	case errors.Is(err, ai.ErrBlockedAddress):
+		// 不要只说"连不上"：这句话直接告诉运维该改哪个配置。
+		return "网关地址指向了内网或本机地址，已阻止（本机自建网关可设置 QM_AI_ALLOW_PRIVATE_URL=true 放开）"
+	case errors.Is(err, ai.ErrBadRequest):
+		return "上游拒绝了请求，请检查模型名、参数与网关地址"
 	case errors.Is(err, ai.ErrUnavailable):
 		return "供应商服务暂时不可用"
 	}

@@ -19,6 +19,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/NanamiKyoka/questionmind/internal/ai"
 	"github.com/NanamiKyoka/questionmind/internal/aiagent"
 	"github.com/NanamiKyoka/questionmind/internal/config"
 	"github.com/NanamiKyoka/questionmind/internal/db"
@@ -64,6 +65,10 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// AI 网关地址的内网限制：默认拒绝回环 / 内网 / 链路本地；
+	// 要连本机自建网关（Ollama 等）需配置显式放开（见 ai.SetAllowPrivateURL）。
+	ai.SetAllowPrivateURL(cfg.AI.AllowPrivateURL)
 
 	info := version.Get()
 	slog.Info("QuestionMind 启动中",

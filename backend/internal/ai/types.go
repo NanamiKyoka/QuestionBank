@@ -9,6 +9,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -174,6 +175,10 @@ var (
 	// 单独成一个领域错误而不是复用解析失败：用户要做的不是"再试一次"，
 	// 而是去调大上限——重试只会得到一模一样的截断结果。
 	ErrTruncated = errors.New("ai: 输出被上限截断")
+	// ErrBadRequest 上游拒绝了请求（参数、模型名之类的 4xx），重试没有意义。
+	ErrBadRequest = errors.New("ai: 请求被上游拒绝")
+	// ErrBlockedAddress 目标地址落在禁止拨号的网段（回环 / 内网 / 链路本地）。
+	ErrBlockedAddress = errors.New("ai: 目标地址在内网或回环网段")
 )
 
 // Config 供应商运行配置。由 ai_config 服务从数据库装载。
@@ -215,6 +220,11 @@ func (c Config) validate() error {
 	case TypeOpenAI, TypeGemini:
 	default:
 		return errors.New("ai: 未知的供应商类型 " + c.InterfaceType)
+	}
+	// 地址在发起请求前就拦下来：拨号阶段才报错的话，
+	// 用户看到的是"连不上"，而真正的问题是地址写错了。
+	if err := ValidateBaseURL(c.BaseURL); err != nil {
+		return fmt.Errorf("ai: 网关地址无效: %w", err)
 	}
 	return nil
 }

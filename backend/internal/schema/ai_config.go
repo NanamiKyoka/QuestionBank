@@ -12,8 +12,9 @@ import (
 type ProviderCreateRequest struct {
 	Name          string `json:"name" binding:"required,min=1,max=64"`
 	InterfaceType string `json:"interface_type" binding:"required,oneof=openai gemini"`
-	BaseURL       string `json:"base_url" binding:"omitempty,url,max=255"`
-	APIKey        string `json:"api_key" binding:"required,min=1,max=512"`
+	// BaseURL 只认 http/https：file://、ftp:// 这类 scheme 得在进门时就挡下。
+	BaseURL string `json:"base_url" binding:"omitempty,http_url,max=255"`
+	APIKey  string `json:"api_key" binding:"required,min=1,max=512"`
 
 	IsActive  *bool `json:"is_active"`
 	SortOrder *int  `json:"sort_order"`
@@ -27,8 +28,10 @@ type ProviderCreateRequest struct {
 type ProviderUpdateRequest struct {
 	Name          *string `json:"name" binding:"omitempty,min=1,max=64"`
 	InterfaceType *string `json:"interface_type" binding:"omitempty,oneof=openai gemini"`
-	BaseURL       *string `json:"base_url" binding:"omitempty,max=255"`
-	APIKey        *string `json:"api_key" binding:"omitempty,max=512"`
+	// BaseURL 指针上的 binding 校验对"指向空串"并不可靠（omitempty 看的是
+	// 指针本身非 nil），所以 scheme 校验放在 service 层做，与新建路径同一套规则。
+	BaseURL *string `json:"base_url" binding:"omitempty,max=255"`
+	APIKey  *string `json:"api_key" binding:"omitempty,max=512"`
 
 	IsActive  *bool `json:"is_active"`
 	SortOrder *int  `json:"sort_order"`

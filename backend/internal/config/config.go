@@ -89,6 +89,12 @@ type AIConfig struct {
 	RequestTimeout time.Duration `yaml:"request_timeout"`
 	// MaxRetries 失败重试次数（指数退避）。
 	MaxRetries int `yaml:"max_retries"`
+	// AllowPrivateURL 允许把 base_url 指向内网 / 本机地址。
+	//
+	// 默认 false：请求会带上 API Key，指到 169.254.169.254 这类元数据
+	// 地址就是一次带凭证的 SSRF。本机自建网关（Ollama / vLLM）与内网
+	// HTTP 代理场景要显式打开。
+	AllowPrivateURL bool `yaml:"allow_private_url"`
 	// AgentBudget 助手一次运行的预算。
 	MaxTurns     int           `yaml:"max_turns"`
 	MaxToolCalls int           `yaml:"max_tool_calls"`
@@ -204,6 +210,7 @@ func applyEnv(cfg *Config) {
 
 	setDuration(&cfg.AI.RequestTimeout, "QM_AI_REQUEST_TIMEOUT")
 	setInt(&cfg.AI.MaxRetries, "QM_AI_MAX_RETRIES")
+	setBool(&cfg.AI.AllowPrivateURL, "QM_AI_ALLOW_PRIVATE_URL")
 	setInt(&cfg.AI.MaxTurns, "QM_AI_MAX_TURNS")
 	setInt(&cfg.AI.MaxToolCalls, "QM_AI_MAX_TOOL_CALLS")
 	setDuration(&cfg.AI.WallClock, "QM_AI_WALL_CLOCK")

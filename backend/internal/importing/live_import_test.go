@@ -85,6 +85,10 @@ func liveFixture(t *testing.T) ([]Chunk, *ai.OpenAIProvider, PromptOptions, bool
 		t.Skip("未配置 QMB_LIVE_BASE_URL / QMB_LIVE_MODEL / QMB_LIVE_API_KEY / QMB_PDF")
 	}
 
+	// 这个用例的地址来自开发者显式设置的环境变量，而且常常指向本机网关
+	// （Ollama、vLLM），因此放开 ai 包对内网地址的限制。
+	ai.SetAllowPrivateURL(true)
+
 	raw, err := os.ReadFile(pdfPath)
 	if err != nil {
 		t.Fatalf("读取 PDF 失败: %v", err)

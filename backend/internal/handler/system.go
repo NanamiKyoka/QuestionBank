@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"log/slog"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
@@ -26,9 +28,10 @@ func NewSystemHandler(auth *service.AuthService, gdb *gorm.DB, appName string) *
 func (h *SystemHandler) Health(c *gin.Context) {
 	body := gin.H{"status": "ok", "database": "ok"}
 	if err := db.Health(h.gdb); err != nil {
-		body["status"] = "degraded"
-		body["database"] = err.Error()
-		c.JSON(503, body)
+		// 原始错误串通常带着 .db 文件的绝对路径甚至 DSN，而这个接口
+		// 无需认证就能访问：对外只说"不可用"，原因进服务端日志。
+		slog.Warn("健康检查未通过", "error", err)
+		c.JSON(503, gin.H{"status": "degraded", "database": "unavailable"})
 		return
 	}
 	response.OK(c, body)

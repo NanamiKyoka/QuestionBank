@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -34,7 +35,11 @@ func NewOpenAI(cfg Config) *OpenAIProvider {
 		cfg: cfg,
 		// 不设 Timeout：超时由每个请求的 context 控制，
 		// 这样才能对流式响应做"整体超时"而不是"单次读取超时"。
-		client: &http.Client{},
+		client: &http.Client{
+			// 拨号前校验目标网段，重定向前重新校验（见 ssrf.go）。
+			Transport:     sharedTransport,
+			CheckRedirect: checkRedirect,
+		},
 	}
 }
 
@@ -591,29 +596,40 @@ type rateLimitError struct {
 func (e *rateLimitError) Error() string { return e.Message }
 func (e *rateLimitError) Unwrap() error { return ErrRateLimited }
 
+// classifyHTTPStatus 把上游状态码映射为领域错误。
+//
+// 上游响应体只进服务端日志，绝不进错误串：错误串会经 humanizeAIError
+// 原样返回给调用方（连通性测试还包着一层 HTTP 200），等于把上游返回的
+// 任意内容——内网地址、堆栈、配置片段——回显到浏览器里。
 func classifyHTTPStatus(status int, body, retryAfter string) error {
 	detail := strings.TrimSpace(body)
 	if len(detail) > 500 {
 		detail = detail[:500]
 	}
+	attrs := []any{"http_status", status, "upstream_body", detail}
+	if status >= 500 {
+		slog.Warn("AI 上游返回错误", attrs...)
+	} else {
+		slog.Debug("AI 上游返回错误", attrs...)
+	}
 
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%w: HTTP %d %s", ErrUnauthorized, status, detail)
+		return fmt.Errorf("%w: HTTP %d", ErrUnauthorized, status)
 	case http.StatusNotFound:
-		return fmt.Errorf("%w: HTTP 404 %s", ErrModelNotFound, detail)
+		return fmt.Errorf("%w: HTTP 404", ErrModelNotFound)
 	case http.StatusTooManyRequests:
 		return &rateLimitError{
-			Message:    fmt.Sprintf("请求被限流: HTTP 429 %s", detail),
+			Message:    "请求被限流: HTTP 429",
 			RetryAfter: parseRetryAfter(retryAfter),
 		}
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
-		return fmt.Errorf("%w: HTTP %d %s", ErrTimeout, status, detail)
+		return fmt.Errorf("%w: HTTP %d", ErrTimeout, status)
 	default:
 		if status >= 500 {
-			return fmt.Errorf("%w: HTTP %d %s", ErrUnavailable, status, detail)
+			return fmt.Errorf("%w: HTTP %d", ErrUnavailable, status)
 		}
-		return fmt.Errorf("ai: HTTP %d %s", status, detail)
+		return fmt.Errorf("%w: HTTP %d", ErrBadRequest, status)
 	}
 }
 
@@ -640,21 +656,25 @@ func parseRetryAfter(v string) time.Duration {
 }
 
 // classifyAPIError 把响应体里的 error 对象映射为领域错误。
+//
+// 与 classifyHTTPStatus 同样的纪律：上游给的 message 只用来做分类与写日志，
+// 不写进错误串——它最终会回到浏览器里。
 func classifyAPIError(message, typ string) error {
 	lower := strings.ToLower(message + " " + typ)
 	switch {
 	case strings.Contains(lower, "rate limit"), strings.Contains(lower, "quota"),
 		strings.Contains(lower, "too many"):
-		return &rateLimitError{Message: "请求被限流: " + message}
+		return &rateLimitError{Message: "请求被限流"}
 	case strings.Contains(lower, "api key"), strings.Contains(lower, "unauthorized"),
 		strings.Contains(lower, "authentication"):
-		return fmt.Errorf("%w: %s", ErrUnauthorized, message)
+		return fmt.Errorf("%w: 上游拒绝了凭证", ErrUnauthorized)
 	case strings.Contains(lower, "model"), strings.Contains(lower, "not found"):
-		return fmt.Errorf("%w: %s", ErrModelNotFound, message)
+		return fmt.Errorf("%w: 上游查无此模型", ErrModelNotFound)
 	case strings.Contains(lower, "timeout"):
-		return fmt.Errorf("%w: %s", ErrTimeout, message)
+		return fmt.Errorf("%w: 上游处理超时", ErrTimeout)
 	}
-	return errors.New("ai: " + message)
+	slog.Debug("AI 上游返回未识别的错误", "error_message", message, "error_type", typ)
+	return fmt.Errorf("%w: 上游返回了未识别的错误", ErrBadRequest)
 }
 
 // mapContextErr 把 context 错误映射为领域错误。
