@@ -303,11 +303,16 @@ func SetupLogger(cfg *config.Config, extra io.Writer) (func(), error) {
 
 	var file *os.File
 	if cfg.Log.File != "" {
-		f, err := os.OpenFile(cfg.Log.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		// 0o600 而不是 0o644：日志里有 IP、路径、业务错误细节，
+		// 不该让同机的其他账号读走。
+		f, err := os.OpenFile(cfg.Log.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("打开日志文件失败: %w", err)
 		}
 		file = f
+		// 已存在的日志文件保持旧权限位（OpenFile 只在创建时生效），
+		// 显式收紧一次，否则升级上来的部署仍然是 0644。
+		_ = f.Chmod(0o600)
 		writers = append(writers, f)
 	}
 

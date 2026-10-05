@@ -1585,6 +1585,15 @@ func pageRangeLabel(index, perCall int) string {
 	return fmt.Sprintf("第 %d~%d 页", from, from+perCall-1)
 }
 
+// maxInlineImageBytes 单次抽取允许内联的图片总字节数。
+//
+// 每张引用的图都会被读进来、base64 后直接写进提示词——base64 还要再膨胀
+// 约 1/3。没有这个预算时，100 页扫描件会变成几十 MB 的请求体：
+// 供应商那边要么 413，要么按这个体量计费，而用户在提交前毫无察觉。
+//
+// 声明为变量而不是常量，是为了让测试能把它调小（同 backoffBase）。
+var maxInlineImageBytes int64 = 24 << 20
+
 // materializeImages 把图片引用换成模型能真正拿到的东西。
 //
 // 上传接口返回的是 /media/xxx.jpg 这种**本服务自己的**相对路径。
@@ -1594,6 +1603,7 @@ func pageRangeLabel(index, perCall int) string {
 //
 // 已经是 data URL 或 http(s) 的原样放行：前端也可能直接传公网地址。
 // 单张读不出来只丢这一张并如实报告，不让整批录题失败。
+// 内联总量受 maxInlineImageBytes 约束，超预算的直接跳过并写进告警。
 func (s *ImportService) materializeImages(refs []string) ([]string, []string, error) {
 	if len(refs) == 0 {
 		return nil, nil, nil
@@ -1601,13 +1611,18 @@ func (s *ImportService) materializeImages(refs []string) ([]string, []string, er
 
 	out := make([]string, 0, len(refs))
 	var warnings []string
+	var used int64
 
+budget:
 	for i, ref := range refs {
 		ref = strings.TrimSpace(ref)
-		switch {
-		case strings.HasPrefix(ref, "data:image/"),
-			strings.HasPrefix(ref, "http://"),
-			strings.HasPrefix(ref, "https://"):
+		if isInlineImageRef(ref) {
+			// 已经是 data URL 或公网地址的按长度计：它同样会原样进提示词。
+			if used+int64(len(ref)) > maxInlineImageBytes {
+				warnings = append(warnings, budgetWarning(i))
+				break budget
+			}
+			used += int64(len(ref))
 			out = append(out, ref)
 			continue
 		}
@@ -1623,6 +1638,10 @@ func (s *ImportService) materializeImages(refs []string) ([]string, []string, er
 			slog.Warn("读取导入图片失败", "ref", ref, "error", err)
 			continue
 		}
+		if used+int64(len(data)) > maxInlineImageBytes {
+			warnings = append(warnings, budgetWarning(i))
+			break budget
+		}
 		url, err := visionprep.ToDataURL(data)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf(
@@ -1630,6 +1649,7 @@ func (s *ImportService) materializeImages(refs []string) ([]string, []string, er
 			slog.Warn("处理导入图片失败", "ref", ref, "error", err)
 			continue
 		}
+		used += int64(len(data))
 		out = append(out, url)
 	}
 
@@ -1638,6 +1658,19 @@ func (s *ImportService) materializeImages(refs []string) ([]string, []string, er
 			"图片都不可用，无法识别").WithDetail("%s", strings.Join(warnings, "；"))
 	}
 	return out, warnings, nil
+}
+
+// isInlineImageRef 判断引用是否已经可以直接发给模型，不必读本地文件。
+func isInlineImageRef(ref string) bool {
+	return strings.HasPrefix(ref, "data:image/") ||
+		strings.HasPrefix(ref, "http://") ||
+		strings.HasPrefix(ref, "https://")
+}
+
+// budgetWarning 内联预算耗尽时的告警，带上跳过的位置与额度。
+func budgetWarning(index int) string {
+	return fmt.Sprintf("图片总量超过 %d MB，第 %d 张及其后的图片已跳过",
+		maxInlineImageBytes>>20, index+1)
 }
 
 // firstError 挑一个最有代表性的错误返回。

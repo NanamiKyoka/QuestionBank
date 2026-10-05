@@ -22,7 +22,9 @@ type ExtractRequest struct {
 	// 混在一起时提示词无法区分，模型会把题目页当成答案页照抄。
 	//
 	// 由服务端内部流转（PDF 上传路径），客户端一般不填。
-	PageImages []string `json:"page_images,omitempty"`
+	// 上限 50：与 extracting 的分页上限对齐；真有 100 页的卷子
+	// 也不该一次塞进同一个请求——页图会被逐张 base64 内联进提示词。
+	PageImages []string `json:"page_images,omitempty" binding:"max=50"`
 	// Mode extract（抽取新题）| solve（补写答案）| record（仅录题，不求解）。
 	Mode string `json:"mode" binding:"omitempty,oneof=extract solve record"`
 	// SolveForContent 仅在 mode=solve 时使用：待补答案的题目文本。

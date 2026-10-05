@@ -45,6 +45,9 @@ const (
 	CodeUsernameTaken    Code = 40904
 	CodeCannotSelfLock   Code = 40905
 
+	// 413 请求体过大
+	CodePayloadTooLarge Code = 41301
+
 	// 422 语义错误
 	CodeUnprocessable  Code = 42201
 	CodeCrossSubject   Code = 42202

@@ -12,6 +12,7 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -73,11 +74,14 @@ func Recovery() gin.HandlerFunc {
 // AccessLog 记录访问日志。
 //
 // 只记录必要字段；请求体与响应体一律不记，避免把密码、API Key 写进日志。
+// query 里的 `token=` 必须脱敏：导出/预览这类"浏览器直接打开"的请求
+// 会把访问令牌拼在 URL 上，原样落盘等于把 7 天有效的账号接管权
+// 交给任何能读日志的人（运维、共享机器、被轮转归档的副本）。
 func AccessLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := redactQuery(c.Request.URL.RawQuery)
 
 		c.Next()
 
@@ -111,6 +115,41 @@ func AccessLog() gin.HandlerFunc {
 			slog.Info("请求完成", attrs...)
 		}
 	}
+}
+
+// redactedQuery 参数名列表：值绝不允许出现在日志里。
+var redactedQueryParams = map[string]bool{
+	"token":        true,
+	"access_token": true,
+	"api_key":      true,
+	"apikey":       true,
+	"password":     true,
+}
+
+// redactQuery 把敏感参数的值替换成 ***，其余原样保留。
+//
+// 逐个解析而不是正则替换：query 里可能有转义过的 `%26token%3D`，
+// 正则会误伤正常的路径参数，而 url.ParseQuery 保证只动真正的键值对。
+// 解析失败时宁可整段丢弃，也不能把原始串漏出去。
+func redactQuery(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return "[unreadable]"
+	}
+	changed := false
+	for key := range values {
+		if redactedQueryParams[strings.ToLower(key)] {
+			values.Set(key, "***")
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	return values.Encode()
 }
 
 // CORS 跨域支持。

@@ -7,6 +7,7 @@ package handler
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/NanamiKyoka/questionmind/internal/middleware"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/apperr"
 	"github.com/NanamiKyoka/questionmind/internal/pkg/response"
 )
@@ -18,6 +19,9 @@ import (
 // 而不是笼统的"参数错误"。
 func bind(c *gin.Context, req any) bool {
 	if err := c.ShouldBindJSON(req); err != nil {
+		if middleware.FailBodyTooLarge(c, err) {
+			return false
+		}
 		response.Fail(c, apperr.New(apperr.CodeBindingFailed, "请求参数不合法").
 			WithDetail("%v", err))
 		return false

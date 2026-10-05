@@ -29,6 +29,9 @@ func (h *UploadHandler) UploadImages(c *gin.Context) {
 
 	form, err := c.MultipartForm()
 	if err != nil {
+		if middleware.FailBodyTooLarge(c, err) {
+			return
+		}
 		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "表单解析失败").
 			WithDetail("请以 multipart/form-data 提交，字段名为 files"))
 		return

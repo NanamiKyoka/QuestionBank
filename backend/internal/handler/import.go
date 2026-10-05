@@ -55,6 +55,9 @@ func (h *ImportHandler) Upload(c *gin.Context) {
 
 	fh, err := c.FormFile("file")
 	if err != nil {
+		if middleware.FailBodyTooLarge(c, err) {
+			return
+		}
 		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "请选择要导入的文件"))
 		return
 	}
@@ -212,6 +215,9 @@ func (h *ImportHandler) Enqueue(c *gin.Context) {
 
 	headers, err := c.MultipartForm()
 	if err != nil {
+		if middleware.FailBodyTooLarge(c, err) {
+			return
+		}
 		response.Fail(c, apperr.New(apperr.CodeInvalidParam, "请求不是有效的文件上传"))
 		return
 	}

@@ -49,6 +49,25 @@ type Deps struct {
 
 const apiPrefix = "/api/v1"
 
+// 请求体上限。
+//
+// 默认那一条是**全局兜底**：/auth/login 不需要认证，
+// 没有上限的 body 是免费的内存放大器。8 MB 覆盖所有 JSON 端点
+// （最大的是 200000 字的粘贴内容，远不到 1 MB）。
+//
+// 上传类路由在自己的组里放宽，因为它们收的本来就是几十 MB 的文档；
+// 放宽后的值仍然是**有限**的——"有限"才是这条防线的全部意义。
+const (
+	defaultBodyLimit = 8 << 20
+	// uploadBodyLimit 图片上传：单张上限是 MaxUploadMB（默认 50），
+	// 一次可传多张，留三倍余量。
+	uploadBodyLimit = 150 << 20
+	// importBodyLimit 文档导入。单文件 32 MB、一批最多 50 个，
+	// 这里给的是"一个合理批次"的上限，而不是理论最大值：
+	// 真要传 50 个 32 MB 的文件，请分批。
+	importBodyLimit = 512 << 20
+)
+
 // setupExemptPaths 未初始化时也必须放行的路径，否则前端既探测不到状态也完不成初始化。
 var setupExemptPaths = []string{
 	apiPrefix + "/system/health",
@@ -72,6 +91,9 @@ func New(d Deps) *gin.Engine {
 	r.Use(
 		middleware.RequestID(),
 		middleware.Recovery(),
+		// 请求体上限放在 AccessLog 之前：超限的请求不该把整个 body 读进内存。
+		// 默认 8 MB 覆盖所有 JSON 端点，上传类路由在各自的组里调高。
+		middleware.BodyLimit(defaultBodyLimit),
 		middleware.AccessLog(),
 		middleware.CORS(d.Config.Server.CORSAllowOrigins),
 	)
@@ -87,6 +109,10 @@ func New(d Deps) *gin.Engine {
 
 	system := handler.NewSystemHandler(d.Auth, d.DB, d.Config.App.Name)
 
+	// 鉴权接口的限流器：整个进程一个，login 与 setup 共用。
+	// 必须在 router 里构造——它没有依赖，但生命周期与引擎一致。
+	authLimiter := middleware.NewRateLimiter(nil)
+
 	// 容器探活放在 /api 之外，避免被 setup 门禁拦住。
 	r.GET("/healthz", system.Health)
 
@@ -94,7 +120,7 @@ func New(d Deps) *gin.Engine {
 	v1.Use(setupGuard(d.Auth.State()))
 
 	registerSystemRoutes(v1, system)
-	registerAuthRoutes(v1, handler.NewAuthHandler(d.Auth, d.Config.JWT.AccessTTL, d.Config.IsProduction()))
+	registerAuthRoutes(v1, handler.NewAuthHandler(d.Auth, d.Config.JWT.AccessTTL, d.Config.IsProduction()), authLimiter)
 	registerSubjectRoutes(v1, d)
 	registerKnowledgePointRoutes(v1, d)
 	registerTagRoutes(v1, d)
@@ -165,10 +191,15 @@ func registerSystemRoutes(g *gin.RouterGroup, h *handler.SystemHandler) {
 	sys.GET("/setup-status", h.SetupStatus)
 }
 
-func registerAuthRoutes(g *gin.RouterGroup, h *handler.AuthHandler) {
+func registerAuthRoutes(g *gin.RouterGroup, h *handler.AuthHandler, limiter *middleware.RateLimiter) {
 	auth := g.Group("/auth")
-	auth.POST("/setup", h.Setup)
-	auth.POST("/login", h.Login)
+	// 这两条不带任何凭证就能打进来，且每次失败都要跑一遍 bcrypt。
+	// 限流挂在**这两个 handler 上**而不是整个 /auth 组：
+	// 组上挂会把已登录的 /auth/me 一起限了，那是正常用户在正常操作。
+	// 放在绑定之前：连读 body 都要先过桶。
+	gated := middleware.RateLimit(limiter)
+	auth.POST("/setup", gated, h.Setup)
+	auth.POST("/login", gated, h.Login)
 
 	me := auth.Group("")
 	me.Use(middleware.RequireAuth())
@@ -351,6 +382,8 @@ func registerImportRoutes(g *gin.RouterGroup, d Deps) {
 	// 智能录题挂在学科下：抽取与入库都需要学科的编辑权限，由 service 层判定。
 	imports := g.Group("/subjects/:subject_id/imports")
 	imports.Use(middleware.RequireAuth())
+	// 文档上传比 JSON 大得多，单独放宽（仍然是有限的）。
+	imports.Use(bodyLimit(importBodyLimit))
 	{
 		imports.POST("/extract", h.Extract)
 		imports.POST("/commit", h.Commit)
@@ -439,9 +472,22 @@ func registerUploadRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewUploadHandler(d.Uploads)
 	up := g.Group("/uploads")
 	up.Use(middleware.RequireAuth())
+	up.Use(bodyLimit(uploadBodyLimit))
 	{
 		up.POST("/images", h.UploadImages)
 		up.DELETE("/images", h.DeleteImage)
+	}
+}
+
+// bodyLimit 覆盖本组路由的请求体上限。
+//
+// 必须以中间件形式挂载：上限由全局 BodyLimit 写进上下文，
+// 而 handler 读请求体时才去取它——组中间件在 handler 之前跑，
+// 所以这里的覆盖一定来得及。
+func bodyLimit(n int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		middleware.SetBodyLimit(c, n)
+		c.Next()
 	}
 }
 

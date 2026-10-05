@@ -120,6 +120,30 @@ func TestMaterializeImagesRejectsTraversal(t *testing.T) {
 	}
 }
 
+// 内联图片有总字节预算：超预算的要跳过并如实告警，
+// 而不是把几十 MB 的 base64 直接塞进提示词。
+func TestMaterializeImagesStopsAtByteBudget(t *testing.T) {
+	orig := maxInlineImageBytes
+	maxInlineImageBytes = 64
+	t.Cleanup(func() { maxInlineImageBytes = orig })
+
+	svc := &ImportService{storage: storage.NewLocal(t.TempDir(), "/media")}
+	got, warnings, err := svc.materializeImages([]string{
+		"data:image/png;base64," + strings.Repeat("A", 40),
+		"data:image/png;base64," + strings.Repeat("B", 40),
+		"data:image/png;base64," + strings.Repeat("C", 40),
+	})
+	if err != nil {
+		t.Fatalf("超预算不该整体失败: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("预算 64 字节只够第一张，实际留下 %d 张", len(got))
+	}
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "第 2 张") {
+		t.Fatalf("应当说明是从哪一张开始被跳过的: %v", warnings)
+	}
+}
+
 func fakeJPEG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
