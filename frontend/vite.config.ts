@@ -58,7 +58,8 @@ function dropLegacyFonts(): Plugin {
               return `src:${kept.join(',')}`
             },
           )
-          bundle[name] = { ...asset, source: next }
+          // 就地改 source，不能写成 `bundle[name] = {...}`：rolldown 忽略对 bundle 变量的赋值。
+          asset.source = next
           return next
         })
         .join('')
