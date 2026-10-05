@@ -38,6 +38,13 @@ jobs:
       - name: go test
         working-directory: backend
         run: go test ./... -count=1
+      # 竞态检测单独跑一轮：-race 必须有 cgo，与上一步对齐发布构建的
+      # CGO_ENABLED=0 互斥，所以这里单独把它打开。
+      - name: go test -race
+        working-directory: backend
+        env:
+          CGO_ENABLED: '1'
+        run: go test ./... -count=1 -race
 
   frontend:
     name: 前端类型检查与测试
@@ -56,3 +63,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      # typecheck 与 vitest 都不会真正打包：tailwind 类生成、按需引入的分包、
+      # go:embed 吃进去的产物，只有 build 会暴露问题。
+      - run: pnpm build

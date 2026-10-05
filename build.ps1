@@ -102,7 +102,7 @@ function Build-Web {
 }
 
 function Build-Binary([string]$Cmd, [string]$OutFile) {
-    Test-Tool 'go' '请先安装 Go 1.24+'
+    Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
     $env:CGO_ENABLED = '0'
     $env:GOTOOLCHAIN = 'local'
 
@@ -133,7 +133,7 @@ function Build-Binary([string]$Cmd, [string]$OutFile) {
 }
 
 function Invoke-Tests {
-    Test-Tool 'go' '请先安装 Go 1.24+'
+    Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
     $env:CGO_ENABLED = '0'
     $env:GOTOOLCHAIN = 'local'
     Push-Location $Backend
@@ -141,7 +141,7 @@ function Invoke-Tests {
 }
 
 function Invoke-Check {
-    Test-Tool 'go' '请先安装 Go 1.24+'
+    Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
     $env:CGO_ENABLED = '0'
     $env:GOTOOLCHAIN = 'local'
     Push-Location $Backend
@@ -161,7 +161,7 @@ function Invoke-Check {
 }
 
 function Build-Cross {
-    Test-Tool 'go' '请先安装 Go 1.24+'
+    Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
     if (-not (Test-Path (Join-Path $WebDist 'index.html'))) {
         Write-Host "==> 未检测到已构建的前端，先执行 web 目标" -ForegroundColor Yellow
         Build-Web
@@ -270,17 +270,17 @@ try {
         'migrate' {
             # 破坏性变更走这里，而不是指望模型结构自动推导。
             # 已存在的库第一次执行时会被"基线化"：AutoMigrate 幂等，老库只登记不重建。
-            Test-Tool 'go' '请先安装 Go 1.24+'
+            Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
             Push-Location $Backend
             try { go run ./cmd/migrate up } finally { Pop-Location }
         }
         'migrate-status' {
-            Test-Tool 'go' '请先安装 Go 1.24+'
+            Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
             Push-Location $Backend
             try { go run ./cmd/migrate status } finally { Pop-Location }
         }
         'run'     {
-            Test-Tool 'go' '请先安装 Go 1.24+'
+            Test-Tool 'go' '请先安装 Go 1.27+（版本要求见 backend/go.mod）'
             Push-Location $Backend
             try { go run ./cmd/server } finally { Pop-Location }
         }
