@@ -86,7 +86,7 @@ type AgentRun struct {
 	ModelName    string `gorm:"size:128" json:"model_name"`
 	ProviderName string `gorm:"size:64" json:"provider_name"`
 
-	// StopReason: completed | budget_exhausted | error
+	// StopReason: completed | budget_exhausted | time_limit | tool_limit | canceled | failed
 	StopReason string `gorm:"size:32" json:"stop_reason"`
 
 	// 用量汇总。

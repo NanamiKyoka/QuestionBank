@@ -85,6 +85,11 @@ type RunFinished struct {
 	RunID      string
 	Text       string
 	StopReason string
+	// Budget 是本次运行的预算上限，随 done 帧下发。
+	//
+	// 只发 stop_reason 的话，前端只能说"触发了某个限制"，
+	// 而"为什么停"的答案就在这三个数字里（3 分钟 / 20 次工具 / 5 轮）。
+	Budget Budget
 }
 
 func (*RunFinished) EventType() string { return "run.finished" }
@@ -99,9 +104,12 @@ func (*RunFailed) EventType() string { return "run.failed" }
 
 // StopReason 结束原因。
 const (
-	StopCompleted       = "completed"
+	StopCompleted = "completed"
+	// StopBudgetExhausted 特指**轮次**用尽：墙钟单独一档，
+	// 两者混用一个值，界面上就只能说"达到了某个预算"。
 	StopBudgetExhausted = "budget_exhausted"
 	StopToolLimit       = "tool_limit"
+	StopTimeLimit       = "time_limit"
 	StopCanceled        = "canceled"
 )
 

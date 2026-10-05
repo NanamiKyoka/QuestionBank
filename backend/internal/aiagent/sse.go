@@ -102,11 +102,21 @@ func ToFrames(ev Event) []SSEFrame {
 		}}}
 
 	case *RunFinished:
-		return []SSEFrame{{Event: EventDone, Data: map[string]any{
+		data := map[string]any{
 			"run_id":      e.RunID,
 			"stop_reason": e.StopReason,
 			"text":        e.Text,
-		}}}
+		}
+		// 预算随帧下发：前端才能把 time_limit/tool_limit/budget_exhausted
+		// 说成"3 分钟 / 20 次 / 5 轮"，而不是只丢给用户一个英文枚举。
+		if e.Budget.MaxTurns > 0 {
+			data["budget"] = map[string]any{
+				"max_turns":          e.Budget.MaxTurns,
+				"max_tool_calls":     e.Budget.MaxToolCalls,
+				"wall_clock_seconds": int(e.Budget.WallClock.Seconds()),
+			}
+		}
+		return []SSEFrame{{Event: EventDone, Data: data}}
 
 	case *RunFailed:
 		// 失败也要以 done 收尾：前端只认 done 作为"流结束"。

@@ -21,6 +21,9 @@ type fakeTurn struct {
 	toolCalls []ai.ToolCall
 	usage     *ai.Usage
 	err       error
+	// delay 模拟一次慢调用：墙钟预算这类"真实时间才推进"的限制，
+	// 用零耗时的替身根本测不出来（时钟分辨率会让断言变成碰运气）。
+	delay time.Duration
 }
 
 type fakeProvider struct {
@@ -45,6 +48,9 @@ func (f *fakeProvider) ChatStream(_ context.Context, req ai.ChatRequest, emit fu
 
 	if turn.err != nil {
 		return turn.err
+	}
+	if turn.delay > 0 {
+		time.Sleep(turn.delay)
 	}
 	// 逐字发出，模拟真实的流式分片。
 	for _, r := range turn.text {
@@ -717,6 +723,49 @@ func TestRuntimeBudgetMaxToolCalls(t *testing.T) {
 	}
 }
 
+// 墙钟超时应标记 time_limit，而不是和轮次用尽共用 budget_exhausted——
+// 两者对用户是完全不同的两句话。
+func TestRuntimeBudgetWallClock(t *testing.T) {
+	reg := NewRegistry()
+	reg.MustRegister(&Tool{Name: "loop", Executor: ExecutorServer,
+		Handler: func(context.Context, ToolCall) (ToolResult, error) { return TextResult("继续"), nil }})
+
+	// 第一轮就耗掉 50ms，而墙钟预算只有 5ms：
+	// 第二轮开始前必然判超时，且不会再调用模型。
+	prov := &fakeProvider{turns: []fakeTurn{{
+		delay:     50 * time.Millisecond,
+		toolCalls: []ai.ToolCall{{ID: "c", Name: "loop", Arguments: "{}"}},
+	}}}
+	rt := NewRuntime(prov, reg, NewChannel(time.Second),
+		Budget{MaxTurns: 3, MaxToolCalls: 5, WallClock: 5 * time.Millisecond})
+
+	events, err := collectRun(t, rt, baseRequest())
+	if err != nil {
+		t.Fatalf("不应报错: %v", err)
+	}
+
+	var finished *RunFinished
+	for _, ev := range events {
+		if e, ok := ev.(*RunFinished); ok {
+			finished = e
+		}
+	}
+	if finished == nil {
+		t.Fatal("应发出结束事件")
+	}
+	if finished.StopReason != StopTimeLimit {
+		t.Fatalf("墙钟超时应标记 time_limit，实际 %q", finished.StopReason)
+	}
+	if prov.calls() != 1 {
+		t.Fatalf("预算耗尽后不应再调用模型，实际 %d 次", prov.calls())
+	}
+	// 预算要随事件带出去，界面才说得出"3 分钟 / 5 轮 / 20 次"。
+	if finished.Budget.MaxTurns != 3 || finished.Budget.MaxToolCalls != 5 ||
+		finished.Budget.WallClock != 5*time.Millisecond {
+		t.Fatalf("应带上本次预算，实际 %+v", finished.Budget)
+	}
+}
+
 // 模型调用失败 → RunFailed，且不再发 RunFinished。
 func TestRuntimeProviderError(t *testing.T) {
 	prov := &fakeProvider{turns: []fakeTurn{{err: errors.New("网络中断")}}}
@@ -858,6 +907,24 @@ func TestSSEDoneIsTerminal(t *testing.T) {
 	}
 	if failed[0].Event != EventError || failed[1].Event != EventDone {
 		t.Fatalf("帧顺序应为 error 后 done，实际 %s, %s", failed[0].Event, failed[1].Event)
+	}
+}
+
+// done 帧要带上预算上限，否则 stop_reason 只是一个说不清缘由的英文枚举。
+func TestSSEDoneCarriesBudget(t *testing.T) {
+	fin := &RunFinished{
+		RunID:      "r",
+		StopReason: StopTimeLimit,
+		Budget:     Budget{MaxTurns: 5, MaxToolCalls: 20, WallClock: 3 * time.Minute},
+	}
+	data := ToFrames(fin)[0].Data.(map[string]any)
+	budget, ok := data["budget"].(map[string]any)
+	if !ok {
+		t.Fatalf("done 帧应携带预算，实际 data: %+v", data)
+	}
+	if budget["max_turns"] != 5 || budget["max_tool_calls"] != 20 ||
+		budget["wall_clock_seconds"] != 180 {
+		t.Fatalf("预算字段错误: %+v", budget)
 	}
 }
 

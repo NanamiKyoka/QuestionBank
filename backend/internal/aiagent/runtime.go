@@ -199,7 +199,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest, emit func(Event) erro
 			return nil
 		}
 		if time.Since(started) > r.budget.WallClock {
-			stopReason = StopBudgetExhausted
+			stopReason = StopTimeLimit
 			break
 		}
 
@@ -215,7 +215,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest, emit func(Event) erro
 			if errors.Is(err, ai.ErrCanceled) || ctx.Err() != nil {
 				stopReason = StopCanceled
 				finish(model.AgentRunFailed, "用户取消")
-				_ = emit(&RunFinished{RunID: req.RunID, Text: fullText, StopReason: StopCanceled})
+				_ = emit(&RunFinished{RunID: req.RunID, Text: fullText, StopReason: StopCanceled, Budget: r.budget})
 				return nil
 			}
 			finish(model.AgentRunFailed, err.Error())
@@ -296,7 +296,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest, emit func(Event) erro
 	}
 
 	finish(model.AgentRunDone, "")
-	return emit(&RunFinished{RunID: req.RunID, Text: finalText, StopReason: stopReason})
+	return emit(&RunFinished{RunID: req.RunID, Text: finalText, StopReason: stopReason, Budget: r.budget})
 }
 
 // streamTurn 跑一轮模型调用，收集文本与工具调用。

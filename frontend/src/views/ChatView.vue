@@ -10,6 +10,7 @@ import {
 } from '@/composables/useAiClientTools'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
+import { addUsage, stopNotice, usageNote, type RunUsage } from '@/lib/aiRun'
 
 /**
  * AI 助手对话。
@@ -30,6 +31,12 @@ interface Bubble {
   /** 工具调用记录，用于展示"助手正在做什么"。 */
   tools: { name: string; output?: string; running: boolean }[]
   error?: string
+  /** 逐轮累加的 token 用量，来自 usage 帧。 */
+  usage?: RunUsage
+  /** 气泡下方的收尾说明：这次运行为什么停（预算耗尽、被取消……）。 */
+  notice?: string | null
+  /** 气泡下方的用量说明。 */
+  usageText?: string | null
 }
 
 const subject = useSubjectStore()
@@ -241,8 +248,16 @@ function handleFrame(frame: ChatStreamFrame, assistant: Bubble) {
       // 候选题目卡片：对话页只做提示，不自动应用。
       assistant.content += `\n（已生成 ${((payload.ids ?? []) as number[]).length} 道候选题目，可到组卷界面查看）`
       break
-    case 'usage':
+    case 'usage': {
+      // 每一轮模型调用上报一次增量，气泡上要展示的是整次运行的合计。
+      const usage = addUsage(assistant.usage, payload)
+      assistant.usage = usage
+      assistant.usageText = usageNote(usage)
+      break
+    }
     case 'done':
+      // 墙钟超时时气泡可能是空的：这行收尾说明就是用户唯一能看到的东西。
+      assistant.notice = stopNotice(payload)
       break
     default:
       break
@@ -391,6 +406,15 @@ function formatTime(value: string): string {
             </div>
 
             <div v-if="bubble.error" class="mt-1 text-xs text-danger-text">{{ bubble.error }}</div>
+
+            <!-- 收尾信息：为什么停、花了多少 tokens。正常收尾时两行都不出现。 -->
+            <div
+              v-if="bubble.notice || bubble.usageText"
+              class="mt-1.5 space-y-0.5 text-xs text-ink-subtle"
+            >
+              <div v-if="bubble.notice">{{ bubble.notice }}</div>
+              <div v-if="bubble.usageText">{{ bubble.usageText }}</div>
+            </div>
           </div>
         </div>
       </div>
