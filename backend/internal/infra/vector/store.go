@@ -16,10 +16,7 @@ import (
 	"sort"
 )
 
-// 内存占用参考阈值。
 const (
-	// InMemoryVectorLimit 建议的内存向量上限（条目数）。
-	InMemoryVectorLimit = 50000
 	// bytesPerFloat32 float32 的字节宽度。
 	bytesPerFloat32 = 4
 )

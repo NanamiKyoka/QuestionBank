@@ -330,11 +330,6 @@ func (l *Local) PublicPrefix() string { return l.publicPrefix }
 // MediaDir 返回媒体根目录（绝对路径）。
 func (l *Local) MediaDir() string { return l.mediaDir }
 
-// Save 的别名形式，便于在只关心地址的场景使用。
-func (l *Local) PublicURL(mediaPath string) string {
-	return l.publicPrefix + "/" + strings.TrimPrefix(mediaPath, "/")
-}
-
 // extOf 返回小写扩展名。
 func extOf(name string) string {
 	i := strings.LastIndex(name, ".")

@@ -71,11 +71,10 @@ type JWTConfig struct {
 
 type StorageConfig struct {
 	// UploadDir / MediaDir 相对路径基于 DataDir 解析。
-	UploadDir    string   `yaml:"upload_dir"`
-	MediaDir     string   `yaml:"media_dir"`
-	MaxUploadMB  int      `yaml:"max_upload_mb"`
-	AllowedExts  []string `yaml:"allowed_exts"`
-	PublicPrefix string   `yaml:"public_prefix"`
+	UploadDir    string `yaml:"upload_dir"`
+	MediaDir     string `yaml:"media_dir"`
+	MaxUploadMB  int    `yaml:"max_upload_mb"`
+	PublicPrefix string `yaml:"public_prefix"`
 }
 
 type LogConfig struct {
@@ -150,11 +149,6 @@ func defaultConfig() *Config {
 			MediaDir:     "media",
 			MaxUploadMB:  50,
 			PublicPrefix: "/media",
-			AllowedExts: []string{
-				".docx", ".doc", ".md", ".markdown", ".txt", ".pdf",
-				".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp",
-				".zip",
-			},
 		},
 		Log: LogConfig{Level: "info"},
 		AI: AIConfig{

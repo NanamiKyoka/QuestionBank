@@ -6,9 +6,9 @@ const (
 	defaultPage     = 1
 	defaultPageSize = 20
 	maxPageSize     = 200
-	// allPageSize 表示"不分页，取全部"，但仍受 maxAll 上限保护。
-	allPageSize = -1
-	maxAll      = 5000
+	// maxAll 是 page_size 传负数（"取全部"）时真正落到 SQL 的上限。
+	// 没有它，一个 -1 就能把整张表拉进内存。
+	maxAll = 5000
 )
 
 // Query 分页参数。page_size 传 0 用默认值，传负数表示取全部。
@@ -47,5 +47,3 @@ func (q Query) Offset() int {
 	}
 	return (q.Page - 1) * q.PageSize
 }
-
-func (q Query) IsAll() bool { return q.PageSize == allPageSize || q.PageSize == maxAll }

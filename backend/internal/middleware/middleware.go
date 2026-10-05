@@ -184,12 +184,3 @@ func CORS(allowOrigins []string) gin.HandlerFunc {
 		c.Next()
 	}
 }
-
-// NoCache 禁止缓存接口响应（鉴权接口与实时数据必须禁用缓存）。
-func NoCache() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
-		c.Header("Pragma", "no-cache")
-		c.Next()
-	}
-}
