@@ -190,7 +190,16 @@ func (e *ChecksumError) Error() string {
 // Up 执行到目标版本（<=0 表示执行全部）。
 //
 // 已经在账本里的迁移会被跳过；这是重跑不炸的关键。
+//
+// 全程持锁：这是"读账本 → 执行 → 写账本"的临界区，两个副本同时启动
+// 会把同一条迁移各跑一遍（见 lock.go）。
 func (r *Runner) Up(ctx context.Context, target int) ([]Migration, error) {
+	lk, err := r.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer lk.Release()
+
 	if err := r.Verify(ctx); err != nil {
 		return nil, err
 	}
@@ -211,6 +220,7 @@ func (r *Runner) Up(ctx context.Context, target int) ([]Migration, error) {
 			return applied, fmt.Errorf("执行迁移 %s 失败: %w", m.Label(), err)
 		}
 		applied = append(applied, m)
+		lk.Touch(ctx)
 	}
 	return applied, nil
 }
@@ -244,7 +254,15 @@ func (r *Runner) apply(ctx context.Context, m Migration) error {
 }
 
 // Down 回滚最近 steps 条。
+//
+// 与 Up 同样持锁：回滚也是"读账本 → 执行 → 写账本"。
 func (r *Runner) Down(ctx context.Context, steps int) error {
+	lk, err := r.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lk.Release()
+
 	if err := r.Verify(ctx); err != nil {
 		return err
 	}
@@ -276,6 +294,7 @@ func (r *Runner) Down(ctx context.Context, steps int) error {
 		if err := r.rollback(ctx, *m); err != nil {
 			return err
 		}
+		lk.Touch(ctx)
 	}
 	return nil
 }
