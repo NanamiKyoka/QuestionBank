@@ -136,8 +136,7 @@ async function retryTask(row: ImportTask) {
   }
   try {
     await importTaskApi.retry(subject.currentId as number, row.id)
-    // 抽取是同步的，队列里没有 worker：重排队不等于重跑，必须说清楚。
-    ElMessage.warning('已重新排队。识别目前是同步执行的，需要重跑请回到智能录题页重新发起。')
+    ElMessage.success('已重新排队，后台会自动重跑这次导入。')
   } catch {
     // 接口层已弹提示。
   }

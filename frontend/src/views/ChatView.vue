@@ -402,7 +402,8 @@ function formatTime(value: string): string {
           <el-button v-if="sending" type="danger" plain @click="stop">停止生成</el-button>
           <el-button v-else type="primary" :disabled="!input.trim()" @click="send">发送</el-button>
           <span class="text-xs text-ink-subtle">
-            助手会调用工具查询题库；涉及修改的操作会先向你确认。
+            助手会调用工具查询与修改题库。改动<b>立即生效</b>，不会逐条征求同意；
+            删除的题目在回收站里还能捞回来。
           </span>
         </div>
       </div>

@@ -347,6 +347,46 @@ func TestTaskOpsRequireEditPermission(t *testing.T) {
 	}
 }
 
+// 同学科的另一个编辑者不能动别人的任务：任务 id 是连续整数，
+// 少了这道闸门就能枚举取消、重排，甚至连源文件一起删掉同侪的记录。
+func TestTaskOpsRejectForeignOwner(t *testing.T) {
+	fx := newImportFixture(t, realisticExtraction)
+	ctx := context.Background()
+	task := newPendingTask(t, fx, model.ImportStatusProcessing)
+
+	peer := &model.User{Base: model.Base{ID: 11}, Username: "peer", IsActive: true}
+	peer.Memberships = []model.SubjectMember{
+		{UserID: peer.ID, SubjectID: fx.subject.ID, Role: model.SubjectRoleEditor},
+	}
+
+	if _, err := fx.svc.CancelTask(ctx, peer, fx.subject.ID, task.ID); !apperr.Is(err, apperr.CodeForbidden) {
+		t.Fatalf("同侪放弃他人任务应 403，实际 %v", err)
+	}
+	if _, err := fx.svc.RetryTask(ctx, peer, fx.subject.ID, task.ID); !apperr.Is(err, apperr.CodeForbidden) {
+		t.Fatalf("同侪重排他人任务应 403，实际 %v", err)
+	}
+	if err := fx.svc.DeleteTask(ctx, peer, fx.subject.ID, task.ID); !apperr.Is(err, apperr.CodeForbidden) {
+		t.Fatalf("同侪删除他人任务应 403，实际 %v", err)
+	}
+
+	stored, err := fx.repos.ImportTasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("读取任务失败: %v", err)
+	}
+	if stored.Status != model.ImportStatusProcessing {
+		t.Fatalf("被拒后状态不应改变，实际 %s", stored.Status)
+	}
+
+	// 本人仍然可以。
+	if _, err := fx.svc.CancelTask(ctx, fx.editor, fx.subject.ID, task.ID); err != nil {
+		t.Fatalf("本人放弃自己的任务应成功: %v", err)
+	}
+	// 管理员也可以。
+	if _, err := fx.svc.RetryTask(ctx, fx.admin, fx.subject.ID, task.ID); err != nil {
+		t.Fatalf("管理员重排应成功: %v", err)
+	}
+}
+
 // 队列状态：计数 + FIFO 位置，并如实声明没有 worker。
 func TestQueueStatusCountsAndPositions(t *testing.T) {
 	fx := newImportFixture(t, realisticExtraction)

@@ -995,6 +995,11 @@ func (s *ImportService) CancelTask(ctx context.Context, user *model.User, subjec
 	if err != nil {
 		return nil, err
 	}
+	// 放弃/重试/删除都会动到别人导的记录（连同上传的源文件），
+	// 与读取端同一条可见性规则：本人或管理员。
+	if err := s.authorizeTaskRead(user, task); err != nil {
+		return nil, err
+	}
 	if !task.IsActive() {
 		return nil, apperr.New(apperr.CodeConflict, "任务已经结束，无法取消").
 			WithDetail("当前状态：%s", task.Status)
@@ -1023,6 +1028,9 @@ func (s *ImportService) RetryTask(ctx context.Context, user *model.User, subject
 	}
 	task, err := s.loadTask(ctx, subjectID, taskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeTaskRead(user, task); err != nil {
 		return nil, err
 	}
 
@@ -1065,6 +1073,11 @@ func (s *ImportService) DeleteTask(ctx context.Context, user *model.User, subjec
 	}
 	task, err := s.loadTask(ctx, subjectID, taskID)
 	if err != nil {
+		return err
+	}
+	// 删除会连同上传的 .docx/.pdf 源文件一起清掉，不能让同学科的
+	// 其他编辑者枚举任务 id 后把别人的记录连锅端。
+	if err := s.authorizeTaskRead(user, task); err != nil {
 		return err
 	}
 

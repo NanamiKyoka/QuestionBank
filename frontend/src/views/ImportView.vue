@@ -85,6 +85,8 @@ const runMeta = ref<{
   /** 版面大纲：标题、说明文字与题目引用的顺序。整卷导入靠它还原卷面。 */
   outline: ImportOutline[]
   total: number
+  /** 文档级告警：哪几页/哪几个文件没抽出来。为空表示这次是完整的。 */
+  warnings: string[]
 } | null>(null)
 const commitResult = ref<CommitResult | null>(null)
 
@@ -514,6 +516,7 @@ function acceptResult(result: ImportExtractResponse, quiet = false) {
     source_files: result.source_files ?? [],
     outline: result.outline ?? [],
     total: result.total,
+    warnings: result.warnings ?? [],
   }
 
   if (drafts.value.length === 0) {
@@ -524,7 +527,15 @@ function acceptResult(result: ImportExtractResponse, quiet = false) {
     )
     return
   }
-  if (!quiet) ElMessage.success(`识别出 ${result.total} 道题`)
+  // 有文档级告警时不能弹"成功"：部分页/部分文件没抽出来，
+  // 绿色的那句话会让人以为整份都齐了。
+  if (!quiet) {
+    if (runMeta.value.warnings.length) {
+      ElMessage.warning(`识别出 ${result.total} 道题，但有 ${runMeta.value.warnings.length} 项未完成`)
+    } else {
+      ElMessage.success(`识别出 ${result.total} 道题`)
+    }
+  }
 }
 
 // ---- 草稿编辑 ----
@@ -682,21 +693,23 @@ async function doCommit(auto: boolean) {
     if (result.failed_count > 0) {
       const failedSet = new Set(result.failures.map((f) => f.index))
       const remaining: ImportDraft[] = []
+      // 只重新勾选"本来就勾着且没入库成功"的那些：用户主动取消勾选的题
+      // 不能因为一次失败就被捞回来，否则再点一次就把它们也导进去了。
+      const kept = new Set<number>()
       let cursor = 0
       for (let i = 0; i < drafts.value.length; i++) {
         if (!selected.value.has(i)) {
           remaining.push(drafts.value[i])
           continue
         }
-        if (!failedSet.has(cursor)) {
-          // 已成功入库，从草稿中移除
-        } else {
+        if (failedSet.has(cursor)) {
+          kept.add(remaining.length)
           remaining.push(drafts.value[i])
         }
         cursor++
       }
       drafts.value = remaining
-      selected.value = new Set(remaining.map((_, i) => i))
+      selected.value = kept
       ElMessage.warning(`入库 ${result.created_count} 道，${result.failed_count} 道未通过，已保留待修改`)
     } else {
       // "仅录题"的默认路径下用户没有点过任何按钮，这一句要把话说完整：
@@ -955,6 +968,19 @@ function goToPaper(paperId: number) {
           </div>
         </div>
       </template>
+
+      <!-- 文档级告警必须一直挂在最显眼处：部分抽取失败和全成功长得太像，
+           只靠一条会自己消失的 toast 说不清楚。 -->
+      <el-alert
+        v-if="runMeta?.warnings.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-3"
+        title="这次抽取并不完整，缺失的部分不会出现在下面的草稿里"
+      >
+        <div v-for="(w, i) in runMeta.warnings" :key="i" class="text-xs leading-5">{{ w }}</div>
+      </el-alert>
 
       <!-- 本次抽取的如实记录：走没走模型、覆盖了哪几个文件 -->
       <div v-if="runMeta" class="mb-3 rounded border border-hairline bg-surface-sunken p-2 text-xs">
