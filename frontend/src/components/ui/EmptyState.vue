@@ -13,7 +13,8 @@ const emit = defineEmits<{ action: [] }>()
 <template>
   <div class="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
     <slot name="illustration">
-      <el-icon class="text-3xl text-ink-subtle/50"><Box /></el-icon>
+      <!-- /50 会把图形压到 2:1 以下（WCAG 1.4.11 要求 3:1），这里只留到 subtle 为止。 -->
+      <el-icon class="text-3xl text-ink-subtle"><Box /></el-icon>
     </slot>
 
     <p class="text-sm font-medium text-ink-regular">{{ description }}</p>

@@ -124,7 +124,13 @@ async function clearAll() {
             <RichContent v-if="item.stem_doc" :doc="item.stem_doc" compact class="stem-clamp text-sm" />
             <div v-else class="stem-clamp text-sm">{{ item.stem_text || '（无题干文本）' }}</div>
           </div>
-          <el-button text size="small" type="danger" @click="basket.remove(item.id)">
+          <el-button
+            text
+            size="small"
+            type="danger"
+            aria-label="移出试题篮"
+            @click="basket.remove(item.id)"
+          >
             <el-icon><Close /></el-icon>
           </el-button>
         </div>

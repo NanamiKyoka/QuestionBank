@@ -159,7 +159,13 @@ async function removeCategory(category: TagCategory) {
       <template #header>
         <div class="flex items-center justify-between">
           <span class="text-sm font-medium">分类</span>
-          <el-button v-if="canManage" text size="small" @click="categoryDialog = true">
+          <el-button
+            v-if="canManage"
+            text
+            size="small"
+            aria-label="管理分类"
+            @click="categoryDialog = true"
+          >
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>

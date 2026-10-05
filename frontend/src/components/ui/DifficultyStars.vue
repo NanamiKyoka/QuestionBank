@@ -21,8 +21,9 @@ const label = computed(() => `难度 ${filled.value} / ${props.max}`)
       v-for="n in max"
       :key="n"
       :size="size"
-      :class="n <= filled ? 'text-ink-regular' : 'text-ink-subtle/35'"
+      :class="n <= filled ? 'text-ink-regular' : 'text-ink-subtle/80'"
     >
+      <!-- 空星也得看得见"这里还差一颗"：/35 在浅色底上只有 1.6:1，/80 才过 3:1。 -->
       <component :is="n <= filled ? StarFilled : Star" />
     </el-icon>
   </span>

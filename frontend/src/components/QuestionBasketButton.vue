@@ -35,7 +35,13 @@ const visible = ref(false)
     class="basket-entry"
     :style="{ right: offsetRight }"
   >
-    <el-button circle class="!h-12 !w-12 shadow-lg" title="试题篮" @click="visible = true">
+    <el-button
+      circle
+      class="!h-12 !w-12 shadow-lg"
+      title="试题篮"
+      aria-label="试题篮"
+      @click="visible = true"
+    >
       <el-icon class="!text-xl"><ShoppingCart /></el-icon>
     </el-button>
   </el-badge>

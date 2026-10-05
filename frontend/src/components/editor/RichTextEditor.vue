@@ -186,6 +186,7 @@ defineExpose({
         <el-button
           size="small"
           title="上标"
+          aria-label="上标"
           :type="editor.isActive('superscript') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleSuperscript().run()"
         >
@@ -194,6 +195,7 @@ defineExpose({
         <el-button
           size="small"
           title="下标"
+          aria-label="下标"
           :type="editor.isActive('subscript') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleSubscript().run()"
         >
@@ -213,6 +215,7 @@ defineExpose({
         <el-button
           size="small"
           title="无序列表"
+          aria-label="无序列表"
           :type="editor.isActive('bulletList') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleBulletList().run()"
         >
@@ -221,6 +224,7 @@ defineExpose({
         <el-button
           size="small"
           title="有序列表"
+          aria-label="有序列表"
           :type="editor.isActive('orderedList') ? 'primary' : 'default'"
           @click="editor.chain().focus().toggleOrderedList().run()"
         >
@@ -229,6 +233,7 @@ defineExpose({
         <el-button
           size="small"
           title="插入表格"
+          aria-label="插入表格"
           :type="editor.isActive('table') ? 'primary' : 'default'"
           @click="insertTableBlock"
         >
@@ -237,13 +242,23 @@ defineExpose({
       </el-button-group>
 
       <label class="ml-1 inline-block">
+        <!-- 不用 hidden 类：那样输入框进不了 Tab 序，纯键盘用户就传不了图。
+             sr-only 平时裁成 0 尺寸，键盘聚焦时现回原生控件（鼠标点了不会突然蹦出来），
+             焦点看得见，Enter 就能选文件。 -->
         <input
           type="file"
           accept="image/png,image/jpeg,image/gif,image/webp"
-          class="hidden"
+          class="sr-only focus-visible:not-sr-only"
+          aria-label="插入图片"
           @change="pickImage"
         />
-        <el-button size="small" :loading="uploading" tag="span" title="插入图片">
+        <el-button
+          size="small"
+          :loading="uploading"
+          tag="span"
+          title="插入图片"
+          aria-label="插入图片"
+        >
           <el-icon><Picture /></el-icon>
         </el-button>
       </label>

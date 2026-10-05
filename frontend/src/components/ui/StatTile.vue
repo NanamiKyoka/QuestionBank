@@ -9,7 +9,12 @@ const props = withDefaults(
     tone?: 'accent' | 'success' | 'warning' | 'danger' | 'neutral'
     /** 0-100。给了就画一条占比条。 */
     bar?: number
-    /** 值为 0 时压低视觉权重。 */
+    /**
+     * 值为 0 时压低视觉权重。
+     *
+     * 只能压到 text-ink-subtle 为止：再往下（例如 /50）浅色主题只有 1.99:1，
+     * 不到 WCAG AA 正文要求的 4.5:1——压掉的恰恰是仪表盘首页那些核心数字。
+     */
     muted?: boolean
   }>(),
   { tone: 'accent', bar: undefined, muted: false },
@@ -31,7 +36,7 @@ const fill = computed(() => FILL[props.tone])
     <div class="text-xs text-ink-subtle">{{ label }}</div>
     <div
       class="num mt-1 text-2xl font-semibold leading-tight"
-      :class="muted ? 'text-ink-subtle/50' : 'text-ink'"
+      :class="muted ? 'text-ink-subtle' : 'text-ink'"
     >
       {{ typeof value === 'number' ? value.toLocaleString('zh-CN') : value }}
     </div>

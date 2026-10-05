@@ -48,13 +48,27 @@ function remove() {
 
 <template>
   <div v-if="state.canEdit" class="qm-block-actions" contenteditable="false">
-    <el-button text size="small" :disabled="!canMoveUp" title="上移" @click="move(-1)">
+    <el-button
+      text
+      size="small"
+      :disabled="!canMoveUp"
+      title="上移"
+      aria-label="上移"
+      @click="move(-1)"
+    >
       <el-icon><Top /></el-icon>
     </el-button>
-    <el-button text size="small" :disabled="!canMoveDown" title="下移" @click="move(1)">
+    <el-button
+      text
+      size="small"
+      :disabled="!canMoveDown"
+      title="下移"
+      aria-label="下移"
+      @click="move(1)"
+    >
       <el-icon><Bottom /></el-icon>
     </el-button>
-    <el-button text size="small" type="danger" title="删除" @click="remove">
+    <el-button text size="small" type="danger" title="删除" aria-label="删除" @click="remove">
       <el-icon><Delete /></el-icon>
     </el-button>
   </div>

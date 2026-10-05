@@ -96,6 +96,7 @@ async function pickImage(event: Event) {
         size="small"
         :type="editor.isActive('superscript') ? 'primary' : 'default'"
         title="上标"
+        aria-label="上标"
         @click="run((e) => e.chain().focus().toggleSuperscript().run())"
       >
         <el-icon><Top /></el-icon>
@@ -104,6 +105,7 @@ async function pickImage(event: Event) {
         size="small"
         :type="editor.isActive('subscript') ? 'primary' : 'default'"
         title="下标"
+        aria-label="下标"
         @click="run((e) => e.chain().focus().toggleSubscript().run())"
       >
         <el-icon><Bottom /></el-icon>
@@ -124,6 +126,7 @@ async function pickImage(event: Event) {
         size="small"
         :type="editor.isActive('bulletList') ? 'primary' : 'default'"
         title="无序列表"
+        aria-label="无序列表"
         @click="run((e) => e.chain().focus().toggleBulletList().run())"
       >
         <el-icon><List /></el-icon>
@@ -132,23 +135,28 @@ async function pickImage(event: Event) {
         size="small"
         :type="editor.isActive('orderedList') ? 'primary' : 'default'"
         title="有序列表"
+        aria-label="有序列表"
         @click="run((e) => e.chain().focus().toggleOrderedList().run())"
       >
         <el-icon><Finished /></el-icon>
       </el-button>
-      <el-button size="small" title="插入表格" @click="run(insertTable)">
+      <el-button size="small" title="插入表格" aria-label="插入表格" @click="run(insertTable)">
         <el-icon><Grid /></el-icon>
       </el-button>
     </el-button-group>
 
     <label class="ml-1 inline-block">
+      <!-- 不用 hidden 类：那样输入框进不了 Tab 序，纯键盘用户就传不了图。
+           sr-only 平时裁成 0 尺寸，键盘聚焦时现回原生控件（鼠标点了不会突然蹦出来），
+           焦点看得见，Enter 就能选文件。 -->
       <input
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp"
-        class="hidden"
+        class="sr-only focus-visible:not-sr-only"
+        aria-label="插入图片"
         @change="pickImage"
       />
-      <el-button size="small" :loading="uploading" tag="span" title="插入图片">
+      <el-button size="small" :loading="uploading" tag="span" title="插入图片" aria-label="插入图片">
         <el-icon><Picture /></el-icon>
       </el-button>
     </label>

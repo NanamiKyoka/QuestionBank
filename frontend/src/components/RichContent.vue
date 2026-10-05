@@ -41,6 +41,24 @@ const nodes = computed<Node[]>(() => {
 /** 把整棵文档树渲染为 HTML 字符串。 */
 const html = computed(() => renderNodes(nodes.value))
 
+/**
+ * 图片的替代文字。
+ *
+ * 图形常常就是题意（几何图、统计图、公式截图），`alt=""` 会让读屏软件整张跳过，
+ * 用户连"这里有一张图"都收不到。
+ *
+ * 顺序是 alt → title → 通用占位。不退回到文件名：上传后的落盘名是 16 字节随机
+ * 十六进制（storage/local.go 的 randomName），把它当 alt 只会念出一串噪声。
+ * 等编辑器给图片加上 alt 输入框，这里自然会优先用上用户写的那段话。
+ */
+function imageAlt(attrs?: Record<string, unknown>): string {
+  for (const key of ['alt', 'title']) {
+    const value = attrs?.[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return '题图'
+}
+
 function renderNodes(list: Node[]): string {
   return list.map(renderNode).join('')
 }
@@ -83,7 +101,7 @@ function renderNode(node: Node): string {
       const src = String(node.attrs?.src ?? '')
       if (!src) return ''
       const width = node.attrs?.width ? `width:${Number(node.attrs.width)}px;` : ''
-      return `<img src="${escapeHtml(src)}" style="${width}max-width:100%;border-radius:4px;margin:4px 0" alt="" />`
+      return `<img src="${escapeHtml(src)}" style="${width}max-width:100%;border-radius:4px;margin:4px 0" alt="${escapeHtml(imageAlt(node.attrs))}" />`
     }
 
     case 'bulletList':

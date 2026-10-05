@@ -242,7 +242,7 @@ function itemNumberOf(item: SnapshotNode): string {
     <!-- 顶栏 -->
     <el-card shadow="never">
       <div class="flex flex-wrap items-center gap-2">
-        <el-button text @click="backToEditor">
+        <el-button text aria-label="返回编辑" @click="backToEditor">
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
 

@@ -1095,7 +1095,7 @@ function isUsed(row: QuestionBrief): boolean {
         <template #header>
           <div class="flex items-center justify-between">
             <span class="text-sm font-medium">从题库选题</span>
-            <el-button text size="small" @click="openPicker">
+            <el-button text size="small" aria-label="从题库添加题目" @click="openPicker">
               <el-icon><Plus /></el-icon>
             </el-button>
           </div>

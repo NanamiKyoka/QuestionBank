@@ -363,7 +363,12 @@ function formatTime(value: string): string {
       <template #header>
         <div class="flex items-center justify-between">
           <span class="text-sm font-medium">目录</span>
-          <el-button text size="small" @click="openCreateFolder(query.folder_id)">
+          <el-button
+            text
+            size="small"
+            aria-label="新建目录"
+            @click="openCreateFolder(query.folder_id)"
+          >
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>
@@ -392,7 +397,12 @@ function formatTime(value: string): string {
              el-dropdown 自己的监听在触发元素上，外层拦冒泡不影响它展开。 -->
         <span v-if="canEdit" class="ml-1" @click.stop>
           <el-dropdown trigger="click" @command="(cmd: FolderCommand) => onFolderCommand(cmd, item.folder)">
-            <el-button text size="small" class="!h-5 !w-5 opacity-0 transition-opacity group-hover:opacity-100">
+            <el-button
+              text
+              size="small"
+              class="!h-5 !w-5 opacity-0 transition-opacity group-hover:opacity-100"
+              aria-label="目录操作"
+            >
               <el-icon><MoreFilled /></el-icon>
             </el-button>
             <template #dropdown>

@@ -298,7 +298,7 @@ function formatTime(value: string): string {
       <template #header>
         <div class="flex items-center justify-between">
           <span class="text-sm font-medium">对话</span>
-          <el-button text size="small" @click="newSession">
+          <el-button text size="small" aria-label="新建对话" @click="newSession">
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>

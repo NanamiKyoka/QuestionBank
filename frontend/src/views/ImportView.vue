@@ -1023,7 +1023,7 @@ function goToPaper(paperId: number) {
                   type="file"
                   accept="image/*"
                   multiple
-                  class="hidden"
+                  class="sr-only focus-visible:not-sr-only"
                   :disabled="loading || !canEdit"
                   @change="onPickAnswerImages"
                 />
@@ -1076,7 +1076,13 @@ function goToPaper(paperId: number) {
             <label
               class="flex h-24 w-24 cursor-pointer flex-col items-center justify-center rounded border border-dashed border-hairline-strong text-xs text-ink-subtle hover:border-accent"
             >
-              <input type="file" accept="image/*" multiple class="hidden" @change="onPickImages" />
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                class="sr-only focus-visible:not-sr-only"
+                @change="onPickImages"
+              />
               <el-icon v-if="!uploading" :size="20"><Plus /></el-icon>
               <el-icon v-else class="is-loading" :size="20"><Loading /></el-icon>
               <span class="mt-1">{{ uploading ? '上传中' : '添加图片' }}</span>
