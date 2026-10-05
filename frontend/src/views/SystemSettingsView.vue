@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { settingsApi, type SystemSettingItem } from '@/api/settings'
+import { useFormDirty, useUnsavedGuard } from '@/composables/useUnsavedGuard'
 
 /**
  * 系统设置。仅全局管理员。
@@ -27,6 +28,10 @@ const items = ref<SystemSettingItem[]>([])
 /** 每个可写项的本地草稿。用 key 做索引，避免给只读项也准备一份输入状态。 */
 const drafts = ref<Record<string, string>>({})
 
+// 草稿就是这一页全部的可写状态：改了没保存就别让人悄悄离开。
+const draftsDirty = useFormDirty(() => drafts.value)
+useUnsavedGuard(() => draftsDirty.dirty.value, '系统设置有还没保存的修改，确定离开吗？')
+
 const editableItems = computed(() => items.value.filter((i) => i.editable))
 const readOnlyItems = computed(() => items.value.filter((i) => !i.editable))
 
@@ -43,6 +48,8 @@ async function load() {
       next[item.key] = item.value
     }
     drafts.value = next
+    // 服务端的当前值就是新的原点：保存/恢复默认之后都要重算"未保存"。
+    draftsDirty.markClean()
   } finally {
     loading.value = false
   }

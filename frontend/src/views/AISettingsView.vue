@@ -12,6 +12,7 @@ import {
 } from '@/api/ai'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { ApiError, get } from '@/api/http'
+import { useFormDirty, useUnsavedGuard } from '@/composables/useUnsavedGuard'
 
 /**
  * AI 设置。
@@ -352,10 +353,19 @@ const selection = reactive({
   embedding_model_id: 0,
 })
 
+// 页面上只有这一份可写状态：模型选好了没保存就别让人悄悄离开。
+const selectionDirty = useFormDirty(() => selection)
+useUnsavedGuard(
+  () => selectionDirty.dirty.value,
+  '当前生效模型的选择还没保存，确定离开吗？',
+)
+
 function syncSelection() {
   selection.text_model_id = active.value?.text_model_id ?? 0
   selection.vision_model_id = active.value?.vision_model_id ?? 0
   selection.embedding_model_id = active.value?.embedding_model_id ?? 0
+  // 同步回来的选择就是新的原点。
+  selectionDirty.markClean()
 }
 
 async function saveActive() {

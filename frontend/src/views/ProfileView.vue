@@ -5,6 +5,7 @@ import { profileApi } from '@/api/profile'
 import { useAuthStore } from '@/stores/auth'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { useSubjectStore } from '@/stores/subject'
+import { useFormDirty, useUnsavedGuard } from '@/composables/useUnsavedGuard'
 
 /**
  * 个人资料与密码。
@@ -53,6 +54,16 @@ const passwordIssue = computed<string | null>(() => {
 
 const lastSubjectId = ref<number | null>(null)
 
+// 这一页有三份各自独立的草稿，但"离开"只看有没有任何一份还没保存。
+const profileDirty = useFormDirty(() => form)
+const passwordDirty = useFormDirty(() => pwd)
+const lastSubjectDirty = useFormDirty(() => lastSubjectId.value)
+
+useUnsavedGuard(
+  () => profileDirty.dirty.value || passwordDirty.dirty.value || lastSubjectDirty.dirty.value,
+  '资料、密码或上次学科还有没保存的改动，确定离开吗？',
+)
+
 onMounted(async () => {
   // 布局已经拉过 /auth/me 了，这里只在缺资料时补一次，
   // 免得每进一次页面都发两个一模一样的请求。
@@ -75,6 +86,10 @@ function reset() {
   pwd.next = ''
   pwd.confirm = ''
   lastSubjectId.value = auth.user?.last_subject_id ?? null
+  // 刚填回表单的值是新的原点，别把它算成"未保存改动"。
+  profileDirty.markClean()
+  passwordDirty.markClean()
+  lastSubjectDirty.markClean()
 }
 
 async function saveProfile() {
@@ -105,6 +120,7 @@ async function saveProfile() {
     }
     // 写回 store，头像与昵称立刻生效，不必等下一次刷新。
     auth.user = await profileApi.updateMe(payload)
+    profileDirty.markClean()
     ElMessage.success('已保存')
   } finally {
     savingProfile.value = false
@@ -141,6 +157,7 @@ async function changePassword() {
   pwd.current = ''
   pwd.next = ''
   pwd.confirm = ''
+  passwordDirty.markClean()
   ElMessage.success('密码已修改')
 }
 
@@ -154,6 +171,7 @@ async function saveLastSubject() {
     if (auth.user) {
       auth.user = { ...auth.user, last_subject_id: lastSubjectId.value }
     }
+    lastSubjectDirty.markClean()
     ElMessage.success('已保存')
   } finally {
     savingSubject.value = false
@@ -175,6 +193,7 @@ async function clearLastSubject() {
   if (auth.user) {
     auth.user = { ...auth.user, last_subject_id: null }
   }
+  lastSubjectDirty.markClean()
   ElMessage.success('已清除')
 }
 

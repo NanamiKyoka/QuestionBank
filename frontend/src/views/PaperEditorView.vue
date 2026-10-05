@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/http'
 import { questionApi } from '@/api'
@@ -35,6 +35,7 @@ import { abandonInflightClientTools, answerClientToolFrame } from '@/composables
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 import { addUsage, stopNotice, usageNote, type RunUsage } from '@/lib/aiRun'
 import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
@@ -304,30 +305,8 @@ watch(paperId, async () => {
   await load()
 })
 
-/** 有未保存改动时离开页面要拦一下。 */
-onBeforeRouteLeave(async () => {
-  if (!dirty.value) return true
-  try {
-    await ElMessageBox.confirm('当前试卷有未保存的改动，确定离开吗？', '未保存的改动', {
-      type: 'warning',
-      confirmButtonText: '离开并丢弃',
-      cancelButtonText: '留在这里',
-    })
-    return true
-  } catch {
-    return false
-  }
-})
-
-function onBeforeUnload(event: BeforeUnloadEvent) {
-  if (dirty.value) {
-    event.preventDefault()
-    // 现代浏览器忽略自定义文案，但必须调用才能触发原生确认。
-    event.returnValue = ''
-  }
-}
-onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
-onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
+// 有未保存改动时离开页面要拦一下：路由与刷新两种离开都接上。
+useUnsavedGuard(() => dirty.value, '当前试卷有未保存的改动，确定离开吗？')
 
 async function load() {
   loading.value = true

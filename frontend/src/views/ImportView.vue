@@ -21,6 +21,7 @@ import ImportDraftEditDialog from '@/components/ImportDraftEditDialog.vue'
 import ImportFileDropzone from '@/components/ImportFileDropzone.vue'
 import ImportParseOptions from '@/components/ImportParseOptions.vue'
 import { useSubjectStore } from '@/stores/subject'
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 
@@ -296,6 +297,14 @@ onBeforeUnmount(() => {
   if (elapsedTimer) clearInterval(elapsedTimer)
 })
 
+// 同步抽取的草稿只活在这一页，不入库就等于白抽——离开前要说一声。
+// 队列任务的草稿在服务端有存根，随时能从导入历史再打开，不用拦。
+const draftsArePersisted = ref(false)
+useUnsavedGuard(
+  () => drafts.value.length > 0 && !draftsArePersisted.value,
+  '已抽取的草稿还没有入库，离开会丢弃它们，确定离开吗？',
+)
+
 /**
  * 从导入历史跳过来时带着 ?task=<id>：把那个任务抽出的草稿拉进审核界面。
  *
@@ -309,6 +318,8 @@ async function loadFromRoute() {
   loading.value = true
   try {
     acceptResult(await importTaskApi.drafts(subject.currentId, id))
+    // 服务端存着这次任务的草稿：离开也不会丢，不值得拦。
+    draftsArePersisted.value = true
     // 用 replace 清掉地址栏里的 task，否则刷新会再拉一次。
     void router.replace({ name: 'import' })
   } finally {
@@ -651,6 +662,8 @@ async function extract() {
 
 function acceptResult(result: ImportExtractResponse, quiet = false) {
   drafts.value = result.drafts ?? []
+  // 这批草稿来自刚跑完的同步抽取：服务端没有存根，离开就没了。
+  draftsArePersisted.value = false
   // 默认全选：绝大多数情况下用户是想全部入库的，逐题勾选是负担。
   selected.value = new Set(drafts.value.map((_, i) => i))
   fileFilter.value = ''

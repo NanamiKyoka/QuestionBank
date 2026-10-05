@@ -6,6 +6,7 @@ import type { Subject } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { promptApi, type PromptCatalogEntry, type SubjectPrompt, type SubjectPrompts } from '@/api/prompt'
+import { useFormDirty, useUnsavedGuard } from '@/composables/useUnsavedGuard'
 
 /**
  * 提示词设置。仅全局管理员。
@@ -37,6 +38,14 @@ const subjectSaving = ref(false)
 /** 学科覆盖草稿：key → 正文。空串表示"删掉这条覆盖"。 */
 const subjectDrafts = ref<Record<string, string>>({})
 
+// 全局模板与学科覆盖是两份独立草稿，但"离开"只看有没有任何一份没保存。
+const globalDirty = useFormDirty(() => globalDrafts.value)
+const subjectDirty = useFormDirty(() => subjectDrafts.value)
+useUnsavedGuard(
+  () => globalDirty.dirty.value || subjectDirty.dirty.value,
+  '提示词有还没保存的修改，确定离开吗？',
+)
+
 const hasGlobalOverride = computed(() =>
   entries.value.some((item) => item.template !== null),
 )
@@ -67,6 +76,7 @@ watch(currentSubject, (id) => {
   else {
     subjectData.value = null
     subjectDrafts.value = {}
+    subjectDirty.markClean()
   }
 })
 
@@ -76,6 +86,8 @@ function resetGlobalDrafts() {
     next[item.key] = item.template?.system_prompt ?? ''
   }
   globalDrafts.value = next
+  // 刚灌进来的模板是新的原点，别把它算成"没保存的修改"。
+  globalDirty.markClean()
 }
 
 async function loadSubject(id: number) {
@@ -90,6 +102,7 @@ async function loadSubject(id: number) {
       next[item.key] = item.override_id > 0 ? item.effective : ''
     }
     subjectDrafts.value = next
+    subjectDirty.markClean()
   } finally {
     subjectLoading.value = false
   }
@@ -182,6 +195,7 @@ async function saveSubject() {
       next[item.key] = item.override_id > 0 ? item.effective : ''
     }
     subjectDrafts.value = next
+    subjectDirty.markClean()
     ElMessage.success('已保存该学科的提示词')
   } finally {
     subjectSaving.value = false
