@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { setAuthFailureHandlers } from '@/api/http'
 import { markSetupComplete } from '@/router'
 import { useAuthStore } from '@/stores/auth'
@@ -8,9 +9,13 @@ import { useAuthStore } from '@/stores/auth'
 /**
  * 应用根组件。
  *
- * 这里做一件事：把"接口层发现的问题"翻译成"路由动作"。
- * 接口层不能直接 import router（router 依赖 store，store 依赖 api，
- * 会形成循环），所以由根组件在挂载时注册回调。
+ * 这里做两件事：
+ *
+ * 1. 用 `<el-config-provider>` 把 Element Plus 切到中文。按需引入之后
+ *    `app.use(ElementPlus, { locale })` 那条路没了，而 provider 会同时把配置
+ *    写进 Element Plus 的全局配置，连 ElMessageBox 这类脱离组件树的弹层也能读到。
+ * 2. 把"接口层发现的问题"翻译成"路由动作"。接口层不能直接 import router
+ *    （router 依赖 store，store 依赖 api，会形成循环），所以由根组件在挂载时注册回调。
  */
 const router = useRouter()
 const auth = useAuthStore()
@@ -39,13 +44,15 @@ onMounted(() => {
 </script>
 
 <template>
-  <!-- h-full 不能去掉：布局根节点的 h-full 参照的是这个 div，
-       它没有定高就会解析成 auto，el-main 的 overflow:auto 随之失效，
-       滚的变成整个页面（侧边栏与顶栏会一起被滚走）。 -->
-  <div class="flex h-full flex-col">
-    <a href="#main-content" class="skip-link">跳到主要内容</a>
-    <RouterView />
-  </div>
+  <el-config-provider :locale="zhCn">
+    <!-- h-full 不能去掉：布局根节点的 h-full 参照的是这个 div，
+         它没有定高就会解析成 auto，el-main 的 overflow:auto 随之失效，
+         滚的变成整个页面（侧边栏与顶栏会一起被滚走）。 -->
+    <div class="flex h-full flex-col">
+      <a href="#main-content" class="skip-link">跳到主要内容</a>
+      <RouterView />
+    </div>
+  </el-config-provider>
 </template>
 
 <style scoped>

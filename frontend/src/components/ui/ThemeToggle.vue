@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
+import { Monitor, Moon, Sunny } from '@element-plus/icons-vue'
 import { useThemeStore, type ThemePreference } from '@/stores/theme'
 
 const theme = useThemeStore()
 
 const current = computed<ThemePreference>(() => theme.preference)
 
-const OPTIONS: { value: ThemePreference; label: string; icon: string }[] = [
-  { value: 'light', label: '浅色', icon: 'Sunny' },
-  { value: 'dark', label: '深色', icon: 'Moon' },
-  { value: 'system', label: '跟随系统', icon: 'Monitor' },
+// 图标按需引入后没有全局注册表，存组件本身而不是名字。
+const OPTIONS: { value: ThemePreference; label: string; icon: Component }[] = [
+  { value: 'light', label: '浅色', icon: Sunny },
+  { value: 'dark', label: '深色', icon: Moon },
+  { value: 'system', label: '跟随系统', icon: Monitor },
 ]
 
 const activeLabel = computed(() => OPTIONS.find((o) => o.value === current.value)?.label ?? '')
-const activeIcon = computed(() => OPTIONS.find((o) => o.value === current.value)?.icon ?? 'Monitor')
+const activeIcon = computed(() => OPTIONS.find((o) => o.value === current.value)?.icon ?? Monitor)
 </script>
 
 <template>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Star, StarFilled } from '@element-plus/icons-vue'
 
 const props = withDefaults(
   defineProps<{
@@ -22,7 +23,7 @@ const label = computed(() => `难度 ${filled.value} / ${props.max}`)
       :size="size"
       :class="n <= filled ? 'text-ink-regular' : 'text-ink-subtle/35'"
     >
-      <component :is="n <= filled ? 'StarFilled' : 'Star'" />
+      <component :is="n <= filled ? StarFilled : Star" />
     </el-icon>
   </span>
 </template>

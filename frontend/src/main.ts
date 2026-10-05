@@ -1,10 +1,12 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
-import 'element-plus/dist/index.css'
+// ElMessage / ElMessageBox 这类**程序化** API 不在模板里出现，
+// 组件解析器（unplugin-vue-components）管不到它们，样式必须在入口显式引入。
+// 将来再用别的程序化 API（ElNotification 等），记得补一行对应的 style/css。
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
+
 import 'katex/dist/katex.min.css'
 import './styles/main.css'
 
@@ -17,14 +19,9 @@ const app = createApp(App)
 // 主题要在首屏渲染前落到 <html> 上，否则会闪一下浅色。
 applyInitialTheme()
 
-// 图标按需全局注册：Element Plus 的图标组件很多，
-// 逐个 import 到各页面反而更啰嗦，统一注册更省事。
-for (const [name, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(name, component)
-}
-
+// Element Plus 与图标都不再全量注册：组件与图标由构建插件按需引入，
+// 中文语言包由根组件的 <el-config-provider> 提供（见 App.vue）。
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus, { locale: zhCn })
 
 app.mount('#app')

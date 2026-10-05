@@ -1,7 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ChatDotRound,
+  Clock,
+  Collection,
+  DataBoard,
+  Delete,
+  Document,
+  EditPen,
+  Expand,
+  Finished,
+  Fold,
+  MagicStick,
+  PriceTag,
+  School,
+  Setting,
+  Share,
+  Tools,
+  User,
+} from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSubjectStore } from '@/stores/subject'
 import QuestionBasketButton from '@/components/QuestionBasketButton.vue'
@@ -18,7 +37,8 @@ const collapsed = ref(false)
 interface MenuItem {
   name: string
   title: string
-  icon: string
+  /** 直接存组件而不是图标名：图标按需引入后没有全局注册表，字符串解析不到。 */
+  icon: Component
   /** 需要的权限（在当前学科作用域内）。为空表示所有登录用户可见。 */
   permission?: Permission
   /** 仅管理员可见。 */
@@ -38,26 +58,26 @@ const groups: MenuGroup[] = [
   {
     title: '教学内容',
     items: [
-      { name: 'dashboard', title: '总览', icon: 'DataBoard' },
-      { name: 'questions', title: '题库', icon: 'Collection', permission: 'view_question' },
-      { name: 'papers', title: '试卷', icon: 'Document', permission: 'view_question' },
-      { name: 'recycle-bin', title: '回收站', icon: 'Delete', permission: 'view_question' },
-      { name: 'import', title: '智能录题', icon: 'MagicStick', permission: 'edit_question' },
-      { name: 'import-history', title: '导入历史', icon: 'Clock', permission: 'edit_question' },
-      { name: 'chat', title: 'AI 助手', icon: 'ChatDotRound', permission: 'view_question' },
-      { name: 'knowledge-points', title: '知识点', icon: 'Share', permission: 'view_question' },
-      { name: 'tags', title: '标签', icon: 'PriceTag', permission: 'view_question' },
+      { name: 'dashboard', title: '总览', icon: DataBoard },
+      { name: 'questions', title: '题库', icon: Collection, permission: 'view_question' },
+      { name: 'papers', title: '试卷', icon: Document, permission: 'view_question' },
+      { name: 'recycle-bin', title: '回收站', icon: Delete, permission: 'view_question' },
+      { name: 'import', title: '智能录题', icon: MagicStick, permission: 'edit_question' },
+      { name: 'import-history', title: '导入历史', icon: Clock, permission: 'edit_question' },
+      { name: 'chat', title: 'AI 助手', icon: ChatDotRound, permission: 'view_question' },
+      { name: 'knowledge-points', title: '知识点', icon: Share, permission: 'view_question' },
+      { name: 'tags', title: '标签', icon: PriceTag, permission: 'view_question' },
     ],
   },
   {
     title: '系统管理',
     items: [
-      { name: 'subjects', title: '学科管理', icon: 'School', admin: true },
-      { name: 'users', title: '用户管理', icon: 'User', admin: true },
-      { name: 'activity-logs', title: '操作日志', icon: 'Finished', admin: true },
-      { name: 'ai-settings', title: 'AI 设置', icon: 'Setting', admin: true },
-      { name: 'prompts', title: '提示词', icon: 'EditPen', admin: true },
-      { name: 'settings', title: '系统设置', icon: 'Tools', admin: true },
+      { name: 'subjects', title: '学科管理', icon: School, admin: true },
+      { name: 'users', title: '用户管理', icon: User, admin: true },
+      { name: 'activity-logs', title: '操作日志', icon: Finished, admin: true },
+      { name: 'ai-settings', title: 'AI 设置', icon: Setting, admin: true },
+      { name: 'prompts', title: '提示词', icon: EditPen, admin: true },
+      { name: 'settings', title: '系统设置', icon: Tools, admin: true },
     ],
   },
 ]
@@ -156,7 +176,7 @@ async function onLogout() {
         <div class="flex min-w-0 items-center gap-2">
           <el-button
             text
-            :icon="collapsed ? 'Expand' : 'Fold'"
+            :icon="collapsed ? Expand : Fold"
             :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
             @click="collapsed = !collapsed"
           />
