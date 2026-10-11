@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { chatApi, type ChatMessage, type ChatSession } from '@/api/ai'
+import { chatApi, uploadApi, type ChatMessage, type ChatSession } from '@/api/ai'
 import { ApiError } from '@/api/http'
 import { useSubjectStore } from '@/stores/subject'
 import {
@@ -9,6 +9,7 @@ import {
   answerClientToolFrame,
 } from '@/composables/useAiClientTools'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import MarkdownContent from '@/components/MarkdownContent.vue'
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 import { addUsage, stopNotice, usageNote, type RunUsage } from '@/lib/aiRun'
 
@@ -26,6 +27,7 @@ import { addUsage, stopNotice, usageNote, type RunUsage } from '@/lib/aiRun'
 interface Bubble {
   role: 'user' | 'assistant'
   content: string
+  images?: string[]
   /** 正在流式输出中。 */
   streaming?: boolean
   /** 工具调用记录，用于展示"助手正在做什么"。 */
@@ -45,6 +47,9 @@ const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<number | null>(null)
 const bubbles = ref<Bubble[]>([])
 const input = ref('')
+const pendingImages = ref<string[]>([])
+const uploadingImages = ref(false)
+const chatImageInput = ref<HTMLInputElement | null>(null)
 const sending = ref(false)
 const loadingHistory = ref(false)
 const scene = ref('')
@@ -108,6 +113,7 @@ async function openSession(session: ChatSession) {
       .map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
+        images: m.images ?? [],
         tools: [],
       }))
     await scrollToBottom()
@@ -144,7 +150,7 @@ async function scrollToBottom() {
 
 async function send() {
   const content = input.value.trim()
-  if (!content || sending.value) return
+  if ((!content && pendingImages.value.length === 0) || sending.value) return
   if (!canChat.value) {
     ElMessage.warning('请先选择学科')
     return
@@ -157,8 +163,10 @@ async function send() {
     sessionId = session.id
   }
 
-  bubbles.value.push({ role: 'user', content, tools: [] })
+  const outgoingImages = [...pendingImages.value]
+  bubbles.value.push({ role: 'user', content, images: outgoingImages, tools: [] })
   input.value = ''
+  pendingImages.value = []
   const assistant: Bubble = { role: 'assistant', content: '', streaming: true, tools: [] }
   bubbles.value.push(assistant)
   await scrollToBottom()
@@ -167,7 +175,7 @@ async function send() {
   controller = new AbortController()
 
   try {
-    await stream(sessionId, content, assistant)
+    await stream(sessionId, content, assistant, outgoingImages)
   } catch (error) {
     if ((error as Error).name === 'AbortError') {
       assistant.error = '已停止生成'
@@ -194,10 +202,11 @@ async function send() {
  * 两边各写一份迟早会在协议细节上分叉。
  * 这里只保留"这个页面怎么把帧画出来"。
  */
-async function stream(sessionId: number, content: string, assistant: Bubble) {
+async function stream(sessionId: number, content: string, assistant: Bubble, images: string[]) {
   await streamChatReply({
     sessionId,
     content,
+    images,
     scene: scene.value || undefined,
     signal: controller?.signal,
     onFrame: (frame) => {
@@ -262,6 +271,37 @@ function handleFrame(frame: ChatStreamFrame, assistant: Bubble) {
     default:
       break
   }
+}
+
+async function pickChatImages(event: Event) {
+  const target = event.target as HTMLInputElement
+  const files = Array.from(target.files ?? [])
+  target.value = ''
+  if (!files.length) return
+  const remaining = Math.max(0, 6 - pendingImages.value.length)
+  if (!remaining) {
+    ElMessage.warning('一次最多发送 6 张图片')
+    return
+  }
+  uploadingImages.value = true
+  try {
+    for (const file of files.slice(0, remaining)) {
+      const saved = await uploadApi.image(file)
+      pendingImages.value.push(saved.url)
+    }
+  } finally {
+    uploadingImages.value = false
+  }
+}
+
+function removePendingImage(index: number) {
+  pendingImages.value.splice(index, 1)
+}
+
+async function copyBubble(bubble: Bubble) {
+  if (!bubble.content) return
+  await navigator.clipboard.writeText(bubble.content)
+  ElMessage.success('已复制')
 }
 
 function stop() {
@@ -396,9 +436,18 @@ function formatTime(value: string): string {
               </div>
             </div>
 
-            <div v-if="bubble.content" class="whitespace-pre-wrap break-words text-sm">
-              {{ bubble.content }}
+            <div v-if="bubble.images?.length" class="mb-2 grid max-w-md grid-cols-2 gap-1.5">
+              <el-image
+                v-for="image in bubble.images"
+                :key="image"
+                :src="image"
+                fit="cover"
+                :preview-src-list="bubble.images"
+                class="max-h-56 rounded border border-hairline"
+              />
             </div>
+
+            <MarkdownContent v-if="bubble.content" :content="bubble.content" />
 
             <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-ink-subtle">
               <el-icon class="is-loading"><Loading /></el-icon>
@@ -406,6 +455,10 @@ function formatTime(value: string): string {
             </div>
 
             <div v-if="bubble.error" class="mt-1 text-xs text-danger-text">{{ bubble.error }}</div>
+
+            <div v-if="bubble.content" class="mt-1.5 flex justify-end">
+              <el-button text size="small" aria-label="复制消息" @click="copyBubble(bubble)">复制</el-button>
+            </div>
 
             <!-- 收尾信息：为什么停、花了多少 tokens。正常收尾时两行都不出现。 -->
             <div
@@ -420,6 +473,20 @@ function formatTime(value: string): string {
       </div>
 
       <div class="mt-3 border-t border-hairline pt-3">
+        <div v-if="pendingImages.length" class="mb-2 flex flex-wrap gap-2">
+          <div v-for="(image, index) in pendingImages" :key="image" class="relative">
+            <img :src="image" alt="待发送图片" class="h-16 w-16 rounded border border-hairline object-cover" />
+            <el-button
+              circle
+              size="small"
+              class="!absolute -right-2 -top-2"
+              aria-label="移除待发送图片"
+              @click="removePendingImage(index)"
+            >
+              ×
+            </el-button>
+          </div>
+        </div>
         <el-input
           v-model="input"
           type="textarea"
@@ -430,8 +497,10 @@ function formatTime(value: string): string {
           @keydown="onKeydown"
         />
         <div class="mt-2 flex items-center gap-2">
+          <el-button :loading="uploadingImages" :disabled="sending" @click="chatImageInput?.click()">图片</el-button>
+          <input ref="chatImageInput" class="hidden" type="file" accept="image/*" multiple @change="pickChatImages" />
           <el-button v-if="sending" type="danger" plain @click="stop">停止生成</el-button>
-          <el-button v-else type="primary" :disabled="!input.trim()" @click="send">发送</el-button>
+          <el-button v-else type="primary" :disabled="!input.trim() && !pendingImages.length" @click="send">发送</el-button>
           <span class="text-xs text-ink-subtle">
             助手会调用工具查询与修改题库。改动<b>立即生效</b>，不会逐条征求同意；
             删除的题目在回收站里还能捞回来。

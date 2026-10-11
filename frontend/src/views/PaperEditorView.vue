@@ -38,6 +38,7 @@ import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/co
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import MarkdownContent from '@/components/MarkdownContent.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 
@@ -1373,9 +1374,7 @@ function isUsed(row: QuestionBrief): boolean {
                 </div>
               </div>
 
-              <div v-if="bubble.content" class="whitespace-pre-wrap break-words text-sm">
-                {{ bubble.content }}
-              </div>
+              <MarkdownContent v-if="bubble.content" :content="bubble.content" />
 
               <div v-if="bubble.streaming && !bubble.content" class="flex items-center gap-1 text-xs text-ink-subtle">
                 <el-icon class="is-loading"><Loading /></el-icon>
