@@ -27,6 +27,7 @@ func TestImportTaskRoutesRegister(t *testing.T) {
 	{
 		imports.POST("/extract", h.Extract)
 		imports.POST("/commit", h.Commit)
+		imports.POST("/paper-preview", h.PreviewPaper)
 		imports.GET("", h.ListTasks)
 
 		imports.POST("/:task_id/cancel", h.CancelTask)
@@ -44,6 +45,7 @@ func TestImportTaskRoutesRegister(t *testing.T) {
 		prefix:                         false,
 		prefix + "/extract":            false,
 		prefix + "/commit":             false,
+		prefix + "/paper-preview":      false,
 		prefix + "/queue-status":       false,
 		prefix + "/:task_id/cancel":    false,
 		prefix + "/:task_id/retry":     false,

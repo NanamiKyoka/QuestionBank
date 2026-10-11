@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   importTaskApi,
@@ -26,8 +26,10 @@ import { useSubjectStore } from '@/stores/subject'
  * 状态相关的判断（能不能重试、能不能放弃）全部由后端随任务一起下发，
  * 前端不复制状态机——两份规则必然漂移，漂移的表象是"按钮能点，点了报 409"。
  */
+const route = useRoute()
 const router = useRouter()
 const subject = useSubjectStore()
+const highlightTaskId = Number(route.query.task) || 0
 
 const loading = ref(false)
 const rows = ref<ImportTask[]>([])
@@ -257,6 +259,10 @@ function reviewTask(row: ImportTask) {
   void router.push({ name: 'import', query: { task: String(row.id) } })
 }
 
+function rowClassName({ row }: { row: ImportTask }): string {
+  return row.id === highlightTaskId ? 'bg-accent-soft' : ''
+}
+
 function statusTag(status: ImportTaskStatus): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   switch (status) {
     case 'completed':
@@ -349,7 +355,20 @@ function countText(row: ImportTask): string {
       </div>
 
       <TableSkeleton v-if="loading" :rows="6" :cols="6" />
-      <el-table v-else :data="rows" row-key="id" class="mt-3">
+      <el-alert
+        v-if="highlightTaskId"
+        type="info"
+        :closable="false"
+        :title="`正在查看试卷的来源导入批次 #${highlightTaskId}`"
+        class="mt-3"
+      />
+      <el-table
+        v-else
+        :data="rows"
+        row-key="id"
+        class="mt-3"
+        :row-class-name="rowClassName"
+      >
         <el-table-column label="导入内容" min-width="220">
           <template #default="{ row }">
             <div class="text-sm">{{ row.original_filename || '（未命名）' }}</div>

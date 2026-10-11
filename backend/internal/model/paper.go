@@ -57,6 +57,9 @@ type Paper struct {
 	// FinalizedVersion 最后一次定稿的版本号（0 表示从未定稿）。
 	FinalizedVersion int `gorm:"not null;default:0" json:"finalized_version"`
 
+	// ImportTaskID 由整卷导入创建时写回，用于从试卷反查来源导入批次。
+	ImportTaskID *uint `gorm:"index" json:"import_task_id,omitempty"`
+
 	CreatedBy uint `gorm:"not null;index" json:"created_by"`
 	UpdatedBy uint `json:"updated_by"`
 }

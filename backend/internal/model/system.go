@@ -82,10 +82,12 @@ type ImportTask struct {
 	SoftBase
 
 	SubjectID *uint `gorm:"index" json:"subject_id"`
-	UserID    uint  `gorm:"not null;index" json:"user_id"`
+	UserID    uint  `gorm:"not null;index;uniqueIndex:idx_import_user_idem,priority:2" json:"user_id"`
 
-	Source ImportSource     `gorm:"size:16;not null;index" json:"source"`
-	Status ImportTaskStatus `gorm:"size:16;not null;index:idx_import_status,priority:1" json:"status"`
+	Source ImportSource `gorm:"size:16;not null;index" json:"source"`
+	// IdempotencyKey 提交入库的幂等键；同一用户重复提交同一键只执行一次。
+	IdempotencyKey *string          `gorm:"size:64;uniqueIndex:idx_import_user_idem,priority:1" json:"-"`
+	Status         ImportTaskStatus `gorm:"size:16;not null;index:idx_import_status,priority:1" json:"status"`
 
 	// OriginalFilename 来源文件名。
 	//

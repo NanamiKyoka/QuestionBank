@@ -41,6 +41,27 @@ func (r *ImportTaskRepo) Get(ctx context.Context, id uint) (*model.ImportTask, e
 	return &t, nil
 }
 
+// GetByIdempotencyKey 按用户与幂等键读取提交任务。
+//
+// 不存在返回 (nil, nil)——调用方要做的是“有没有历史结果”，
+// ErrRecordNotFound 在这里不是业务错误。
+func (r *ImportTaskRepo) GetByIdempotencyKey(ctx context.Context, userID uint, key string) (*model.ImportTask, error) {
+	if key == "" {
+		return nil, nil
+	}
+	var task model.ImportTask
+	err := conn(ctx, r.db).
+		Where("user_id = ? AND idempotency_key = ?", userID, key).
+		First(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("读取幂等导入任务失败: %w", err)
+	}
+	return &task, nil
+}
+
 func (r *ImportTaskRepo) UpdateFields(ctx context.Context, id uint, fields map[string]any) error {
 	if len(fields) == 0 {
 		return nil

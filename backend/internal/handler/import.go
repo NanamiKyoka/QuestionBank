@@ -144,6 +144,28 @@ func (h *ImportHandler) Extract(c *gin.Context) {
 	response.OK(c, res)
 }
 
+// PreviewPaper POST /subjects/:subject_id/imports/paper-preview
+func (h *ImportHandler) PreviewPaper(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	subjectID, ok := parseID(c, "subject_id")
+	if !ok {
+		return
+	}
+	var req schema.PaperImportPreviewRequest
+	if !bind(c, &req) {
+		return
+	}
+	res, err := h.imports.PreviewPaperImport(c.Request.Context(), user, subjectID, &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
 // Commit POST /subjects/:subject_id/imports/commit
 func (h *ImportHandler) Commit(c *gin.Context) {
 	user, ok := middleware.MustUser(c)

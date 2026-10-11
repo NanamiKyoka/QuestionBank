@@ -134,6 +134,64 @@ func TestWholePaperImportRestoresHeadingsAndOrder(t *testing.T) {
 	if len(headingTexts) == 0 {
 		t.Fatal("卷上应当保留大题标题")
 	}
+	if detail.ImportTaskID == nil || *detail.ImportTaskID != commit.TaskID {
+		t.Fatalf("试卷未回填来源导入任务: got=%v want=%d", detail.ImportTaskID, commit.TaskID)
+	}
+}
+
+func TestPreviewPaperImportCountsUsableReferences(t *testing.T) {
+	fx := newImportFixture(t, realisticExtraction)
+	drafts := []importing.Draft{
+		{TempID: "q1", StemMarkdown: "甲", Stem: importing.MarkdownToRichDoc("甲")},
+		{TempID: "q2", StemMarkdown: "乙", Stem: importing.MarkdownToRichDoc("乙")},
+	}
+	res, err := fx.svc.PreviewPaperImport(context.Background(), fx.admin, fx.subject.ID, &schema.PaperImportPreviewRequest{
+		Drafts: drafts,
+		Outline: []importing.Outline{
+			{Kind: importing.OutlineHeading, Text: "一、选择题", Level: 1},
+			{Kind: importing.OutlineQuestion, DraftIndex: 0},
+			{Kind: importing.OutlineQuestion, DraftIndex: 0},
+			{Kind: importing.OutlineQuestion, DraftIndex: 9},
+		},
+	})
+	if err != nil {
+		t.Fatalf("预检失败: %v", err)
+	}
+	if !res.CanCreate || res.QuestionNodes != 1 || res.DuplicateReferences != 1 || res.MissingReferences != 1 {
+		t.Fatalf("预检计数不符: %+v", res)
+	}
+}
+
+func TestCommitIdempotencyKeyReplaysResult(t *testing.T) {
+	fx := newImportFixture(t, realisticExtraction)
+	ctx := context.Background()
+	fx.svc = fx.svc.WithPapers(NewPaperService(fx.repos))
+	payload := &schema.CommitRequest{
+		IdempotencyKey: "commit-once-1",
+		Drafts: []importing.Draft{{
+			StemMarkdown: "题干", Stem: importing.MarkdownToRichDoc("题干"),
+			QuestionType: model.QuestionTypeTrueFalse,
+			Answer:       model.AnswerSpec{Kind: "boolean", BoolAnswer: boolPtr(true)},
+		}},
+	}
+	first, err := fx.svc.Commit(ctx, fx.admin, fx.subject.ID, payload)
+	if err != nil {
+		t.Fatalf("首次提交失败: %v", err)
+	}
+	second, err := fx.svc.Commit(ctx, fx.admin, fx.subject.ID, payload)
+	if err != nil {
+		t.Fatalf("重放提交失败: %v", err)
+	}
+	if first.TaskID != second.TaskID || first.CreatedCount != second.CreatedCount || len(second.CreatedIDs) != 1 {
+		t.Fatalf("幂等键未回放首次结果: first=%+v second=%+v", first, second)
+	}
+	_, total, err := fx.repos.Questions.List(ctx, model.QuestionFilter{SubjectID: fx.subject.ID}, model.QuestionSort("created_desc"), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 {
+		t.Fatalf("幂等重放不应重复建题，实际 %d", total)
+	}
 }
 
 // 没开 SaveAsPaper 时绝不能凭空建卷：只想把题存进题库的用户

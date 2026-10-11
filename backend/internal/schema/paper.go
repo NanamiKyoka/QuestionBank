@@ -104,6 +104,7 @@ type PaperBrief struct {
 	// Revision 乐观锁版本号：客户端保存时原样回传。
 	Revision         int64 `json:"revision"`
 	FinalizedVersion int   `json:"finalized_version"`
+	ImportTaskID     *uint `json:"import_task_id,omitempty"`
 
 	CreatedBy uint      `json:"created_by"`
 	UpdatedBy uint      `json:"updated_by"`
@@ -127,6 +128,7 @@ func NewPaperBrief(p *model.Paper) PaperBrief {
 		ScoringEnabled:   p.ScoringEnabled,
 		Revision:         p.Revision,
 		FinalizedVersion: p.FinalizedVersion,
+		ImportTaskID:     p.ImportTaskID,
 		CreatedBy:        p.CreatedBy,
 		UpdatedBy:        p.UpdatedBy,
 		CreatedAt:        p.CreatedAt,

@@ -31,11 +31,63 @@ import (
 //     也不要出现一个引用失效的空块。
 //  3. 不编造版面。大纲里没有的标题、答题区一律不补。
 
+// PreviewPaperImport 在入库前检查整卷大纲，不写数据库。
+func (s *ImportService) PreviewPaperImport(ctx context.Context, user *model.User, subjectID uint, req *schema.PaperImportPreviewRequest) (*schema.PaperImportPreviewResponse, error) {
+	if err := authorize(user, model.PermEditQuestion, subjectID); err != nil {
+		return nil, err
+	}
+	if _, err := s.repos.Subjects.Get(ctx, subjectID); err != nil {
+		return nil, err
+	}
+	resp := &schema.PaperImportPreviewResponse{
+		DraftCount: len(req.Drafts),
+		Warnings:   []string{},
+	}
+	used := make(map[int]bool)
+	for _, item := range req.Outline {
+		resp.OutlineNodes++
+		if item.Kind != importing.OutlineQuestion {
+			continue
+		}
+		idx := item.DraftIndex
+		if idx < 0 || idx >= len(req.Drafts) {
+			resp.MissingReferences++
+			continue
+		}
+		if used[idx] {
+			resp.DuplicateReferences++
+			continue
+		}
+		used[idx] = true
+		resp.QuestionNodes++
+	}
+	if resp.MissingReferences > 0 {
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("大纲有 %d 处题目引用找不到对应草稿，建卷时会跳过", resp.MissingReferences))
+	}
+	if resp.DuplicateReferences > 0 {
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("大纲重复引用了 %d 道题，重复项会跳过", resp.DuplicateReferences))
+	}
+	warnedDrafts := 0
+	for _, draft := range req.Drafts {
+		if len(draft.Warnings) > 0 {
+			warnedDrafts++
+		}
+	}
+	if warnedDrafts > 0 {
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("%d 道草稿自身有识别告警，请先核对", warnedDrafts))
+	}
+	resp.CanCreate = resp.QuestionNodes > 0
+	if !resp.CanCreate {
+		resp.Warnings = append(resp.Warnings, "大纲中没有可用的题目，无法创建试卷")
+	}
+	return resp, nil
+}
+
 // paperFromImport 按大纲创建试卷。
 //
 // createdIDOf 按**草稿下标**给出题目 id：0 表示那道题入库失败。
 func (s *ImportService) paperFromImport(
-	ctx context.Context, user *model.User, subjectID uint,
+	ctx context.Context, user *model.User, subjectID uint, taskID uint,
 	req *schema.CommitRequest, createdIDOf []uint,
 ) (uint, error) {
 	if s.papers == nil {
@@ -74,6 +126,9 @@ func (s *ImportService) paperFromImport(
 		// 同样要清掉半成品：留一份空壳卷比不建更糟。
 		_ = s.papers.DeletePaper(ctx, user, detail.ID)
 		return 0, err
+	}
+	if err := s.papers.repos.Papers.UpdateFields(ctx, detail.ID, map[string]any{"import_task_id": taskID}); err != nil {
+		slog.Warn("回填试卷来源导入失败", "paper_id", detail.ID, "task_id", taskID, "error", err)
 	}
 	if len(dropped) > 0 {
 		slog.Warn("整卷导入时有题目未能进卷",

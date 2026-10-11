@@ -137,6 +137,7 @@ export interface PaperBrief {
   scoring_enabled: boolean
   revision: number
   finalized_version: number
+  import_task_id?: number | null
   created_by: number
   updated_by: number
   created_at: string

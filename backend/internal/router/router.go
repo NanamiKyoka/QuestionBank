@@ -398,6 +398,7 @@ func registerImportRoutes(g *gin.RouterGroup, d Deps) {
 	{
 		imports.POST("/extract", h.Extract)
 		imports.POST("/commit", h.Commit)
+		imports.POST("/paper-preview", h.PreviewPaper)
 		// upload 是静态路径，必须排在 :task_id 之前。
 		imports.POST("/upload", h.Upload)
 		// 批量排队：一次收多个文件，立刻返回 202。

@@ -162,6 +162,14 @@ const runMeta = ref<{
   warnings: string[]
 } | null>(null)
 const commitResult = ref<CommitResult | null>(null)
+const commitIdempotencyKey = ref('')
+
+function resetCommitKey() {
+  commitIdempotencyKey.value =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
 /**
  * 整卷导入：把这份卷子还原成可编辑的试卷。
@@ -661,6 +669,7 @@ async function extract() {
 }
 
 function acceptResult(result: ImportExtractResponse, quiet = false) {
+  resetCommitKey()
   drafts.value = result.drafts ?? []
   // 这批草稿来自刚跑完的同步抽取：服务端没有存根，离开就没了。
   draftsArePersisted.value = false
@@ -705,6 +714,7 @@ function acceptResult(result: ImportExtractResponse, quiet = false) {
 // ---- 草稿编辑 ----
 
 function toggleSelect(index: number) {
+  resetCommitKey()
   const next = new Set(selected.value)
   if (next.has(index)) next.delete(index)
   else next.add(index)
@@ -716,14 +726,17 @@ function isChecked(index: number): boolean {
 }
 
 function selectAll() {
+  resetCommitKey()
   selected.value = new Set(drafts.value.map((_, i) => i))
 }
 
 function selectNone() {
+  resetCommitKey()
   selected.value = new Set()
 }
 
 function selectWarningsOnly() {
+  resetCommitKey()
   selected.value = new Set(
     drafts.value.map((d, i) => (d.warnings?.length ? i : -1)).filter((i) => i >= 0),
   )
@@ -732,6 +745,7 @@ function selectWarningsOnly() {
 /** 应用草稿修改：整体替换那一项，其余原样不动。 */
 function applyDraftEdit(updated: ImportDraft) {
   if (editingIndex.value === null) return
+  resetCommitKey()
   drafts.value.splice(editingIndex.value, 1, updated)
 }
 
@@ -768,6 +782,7 @@ async function removeDraft(index: number) {
     }
   }
 
+  resetCommitKey()
   drafts.value.splice(index, 1)
   // 下标全部前移，勾选状态要跟着平移，否则会整体错位一位。
   const next = new Set<number>()
@@ -821,12 +836,13 @@ async function doCommit(auto: boolean) {
     const pickedIndexes = drafts.value
       .map((_, i) => i)
       .filter((i) => selected.value.has(i))
+    const pickedPosition = new Map(pickedIndexes.map((original, position) => [original, position]))
     const outline: ImportOutline[] = runMeta.value?.outline ?? []
     const remapped: ImportOutline[] = wholePaperEnabled.value
       ? outline
           .map((it: ImportOutline): ImportOutline => {
             if (it.kind !== 'question') return it
-            const picked = pickedIndexes[it.draft_index ?? -1]
+            const picked = pickedPosition.get(it.draft_index ?? -1)
             // 被取消勾选的题在这次提交里不存在，换成 -1 让后端跳过它，
             // 而不是把后面的题整体前移一位。
             return { ...it, draft_index: picked ?? -1 }
@@ -834,6 +850,25 @@ async function doCommit(auto: boolean) {
           .filter((it: ImportOutline) => it.kind !== 'question' || it.draft_index !== -1)
       : []
 
+    if (wholePaperEnabled.value) {
+      const preview = await importApi.previewPaper(subject.currentId, {
+        drafts: selectedDrafts.value,
+        outline: remapped,
+      })
+      if (!preview.can_create) {
+        ElMessage.warning(preview.warnings[0] || '当前大纲无法创建试卷')
+        return
+      }
+      if (preview.warnings.length) {
+        await ElMessageBox.confirm(
+          `${preview.warnings.join('；')}。仍要继续入库并创建试卷吗？`,
+          '整卷导入预检',
+          { type: 'warning', confirmButtonText: '继续', cancelButtonText: '返回检查' },
+        )
+      }
+    }
+
+    if (!commitIdempotencyKey.value) resetCommitKey()
     const result = await importApi.commit(subject.currentId, {
       drafts: selectedDrafts.value,
       default_tag_ids: defaults.default_tag_ids,
@@ -842,7 +877,9 @@ async function doCommit(auto: boolean) {
       save_as_paper: wholePaperEnabled.value,
       paper_title: wholePaperTitle.value.trim() || undefined,
       outline: remapped,
+      idempotency_key: commitIdempotencyKey.value,
     })
+    resetCommitKey()
     commitResult.value = result
 
     // 整卷导入失败**不影响题目入库**：题目此刻已经在库里了，

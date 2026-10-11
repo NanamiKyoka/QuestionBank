@@ -606,6 +606,11 @@ async function save(options: { silent?: boolean } = {}) {
   }
 }
 
+function goToImportSource() {
+  if (!paper.value?.import_task_id) return
+  void router.push({ name: 'import-history', query: { task: String(paper.value.import_task_id) } })
+}
+
 async function syncStaleQuestions() {
   if (!staleQuestions.value.length) return
   const result = await paperApi.syncQuestionNodes(paperId.value, staleQuestions.value)
@@ -1040,6 +1045,9 @@ function isUsed(row: QuestionBrief): boolean {
         </div>
 
         <div class="ml-auto flex items-center gap-2">
+          <el-button v-if="paper?.import_task_id" text @click="goToImportSource">
+            来源导入 #{{ paper.import_task_id }}
+          </el-button>
           <el-badge :value="pendingChange ? pendingChange.changes.length : 0" :hidden="!pendingChange" type="warning">
             <el-button @click="chatVisible = true">AI 助手</el-button>
           </el-badge>

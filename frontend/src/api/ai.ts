@@ -214,7 +214,22 @@ export interface CommitResult {
   paper_error?: string
 }
 
+export interface PaperImportPreview {
+  draft_count: number
+  question_nodes: number
+  outline_nodes: number
+  missing_references: number
+  duplicate_references: number
+  can_create: boolean
+  warnings: string[]
+}
+
 export const importApi = {
+  previewPaper: (
+    subjectId: number,
+    payload: { drafts: Draft[]; outline?: unknown[] },
+  ) => post<PaperImportPreview>(`/subjects/${subjectId}/imports/paper-preview`, payload),
+
   commit: (
     subjectId: number,
     payload: {
@@ -228,6 +243,7 @@ export const importApi = {
        */
       save_as_paper?: boolean
       paper_title?: string
+      idempotency_key?: string
       /** 版面大纲，draft_index 指向本次提交的 drafts 下标。 */
       outline?: {
         kind: 'heading' | 'rich_text' | 'question' | 'page_break' | 'answer_space' | 'degraded'

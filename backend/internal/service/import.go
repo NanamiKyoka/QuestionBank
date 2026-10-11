@@ -564,6 +564,20 @@ func humanizeIngestError(err error) string {
 	return "文件解析失败：" + msg
 }
 
+func commitReplay(task *model.ImportTask) (*schema.CommitResponse, error) {
+	if task.Status != model.ImportStatusCompleted && task.Status != model.ImportStatusFailed {
+		return nil, apperr.New(apperr.CodeConflict, "相同请求正在处理中，请稍后重试")
+	}
+	var resp schema.CommitResponse
+	if err := task.Result.Into(&resp); err != nil {
+		return nil, apperr.ErrInternal.WithCause(err)
+	}
+	if resp.TaskID == 0 {
+		resp.TaskID = task.ID
+	}
+	return &resp, nil
+}
+
 // Commit 把审核后的草稿写入题库。
 //
 // 关键设计：每一题都走 QuestionService.Create，而不是直接写库。
@@ -578,6 +592,16 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 	}
 	if _, err := s.repos.Subjects.Get(ctx, subjectID); err != nil {
 		return nil, err
+	}
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if idempotencyKey != "" {
+		existing, err := s.repos.ImportTasks.GetByIdempotencyKey(ctx, user.ID, idempotencyKey)
+		if err != nil {
+			return nil, apperr.ErrInternal.WithCause(err)
+		}
+		if existing != nil {
+			return commitReplay(existing)
+		}
 	}
 	if len(req.Drafts) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidParam, "没有需要入库的题目")
@@ -604,6 +628,10 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 	// 不只是为了"看得见"：题目入库后要回填 questions.import_task_id 做溯源，
 	// 而那道任务的 id 必须在建题**之前**就存在。
 	// 以前任务行是入库结束后才补的，于是题目永远挂不回它来自的那次导入。
+	var keyPtr *string
+	if idempotencyKey != "" {
+		keyPtr = &idempotencyKey
+	}
 	task := &model.ImportTask{
 		SubjectID:        &subjectID,
 		UserID:           user.ID,
@@ -613,8 +641,14 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 		Mode:             "commit",
 		TotalCount:       len(req.Drafts),
 		OriginalFilename: commitSourceLabel(req),
+		IdempotencyKey:   keyPtr,
 	}
 	if err := s.repos.ImportTasks.Create(ctx, task); err != nil {
+		if idempotencyKey != "" {
+			if existing, replayErr := s.repos.ImportTasks.GetByIdempotencyKey(ctx, user.ID, idempotencyKey); replayErr == nil && existing != nil {
+				return commitReplay(existing)
+			}
+		}
 		// 还没建任何题目，此刻失败就是整体失败，不需要"假装成功"。
 		return nil, apperr.ErrInternal.WithCause(err)
 	}
@@ -730,7 +764,7 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 	// 放在最后、且失败不影响题目：题目此刻已经落库并回传了 created_ids，
 	// 丢一份排版远比丢几十道题轻。所以失败只写进响应，不返回 error。
 	if req.SaveAsPaper {
-		paperID, err := s.paperFromImport(ctx, user, subjectID, req, createdIDOf)
+		paperID, err := s.paperFromImport(ctx, user, subjectID, task.ID, req, createdIDOf)
 		if err != nil {
 			resp.PaperError = err.Error()
 			slog.Warn("整卷导入建卷失败", "task_id", task.ID, "error", err)
@@ -739,7 +773,8 @@ func (s *ImportService) Commit(ctx context.Context, user *model.User, subjectID 
 		}
 	}
 
-	// 记录本次入库结果。
+	// 记录本次入库结果，同时供幂等重试直接回放。
+	task.Result = model.MustJSONOf(resp)
 	task.SavedCount = len(createdIDs)
 	task.FailedCount = len(failures)
 	if len(failures) > 0 && len(createdIDs) == 0 {

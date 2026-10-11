@@ -101,6 +101,26 @@ type CommitRequest struct {
 	PaperTitle string `json:"paper_title" binding:"omitempty,max=200"`
 	// Outline 版面大纲，draft_index 指向 Drafts 数组里的第几道题。
 	Outline []importing.Outline `json:"outline"`
+
+	// IdempotencyKey 同一次提交的重试键；相同键只落库一次。
+	IdempotencyKey string `json:"idempotency_key" binding:"omitempty,max=64"`
+}
+
+// PaperImportPreviewRequest 整卷导入预检请求。
+type PaperImportPreviewRequest struct {
+	Drafts  []importing.Draft   `json:"drafts" binding:"required,min=1,max=200"`
+	Outline []importing.Outline `json:"outline"`
+}
+
+// PaperImportPreviewResponse 整卷导入预检结果。
+type PaperImportPreviewResponse struct {
+	DraftCount          int      `json:"draft_count"`
+	QuestionNodes       int      `json:"question_nodes"`
+	OutlineNodes        int      `json:"outline_nodes"`
+	MissingReferences   int      `json:"missing_references"`
+	DuplicateReferences int      `json:"duplicate_references"`
+	CanCreate           bool     `json:"can_create"`
+	Warnings            []string `json:"warnings"`
 }
 
 // CommitFailure 单题入库失败。
