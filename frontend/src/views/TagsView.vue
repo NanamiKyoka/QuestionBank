@@ -6,6 +6,7 @@ import type { Tag, TagCategory } from '@/api/types'
 import { useSubjectStore } from '@/stores/subject'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import AdminImportDialog from '@/components/AdminImportDialog.vue'
 
 /** 未指定颜色时的兜底，跟随主题走而不是钉死一个十六进制值。 */
 const DEFAULT_TAG_COLOR = 'var(--qm-accent)'
@@ -23,6 +24,7 @@ const tagForm = reactive({ name: '', color: DEFAULT_TAG_COLOR, category_id: null
 
 const categoryDialog = ref(false)
 const categoryName = ref('')
+const importVisible = ref(false)
 
 const canManage = computed(() => subject.can('manage_subject'))
 
@@ -151,7 +153,19 @@ async function removeCategory(category: TagCategory) {
 
 <template>
   <div class="space-y-3">
-    <PageHeader title="标签" description="用标签给题目分组，同一标签可以在任意学科下复用。" />
+    <PageHeader title="标签" description="用标签给题目分组，同一标签可以在任意学科下复用。">
+      <template #actions>
+        <el-button v-if="canManage && subject.currentId" @click="importVisible = true">批量导入</el-button>
+      </template>
+    </PageHeader>
+
+    <AdminImportDialog
+      v-if="subject.currentId"
+      v-model="importVisible"
+      kind="tags"
+      :subject-id="subject.currentId"
+      @imported="load"
+    />
 
     <div class="flex gap-3">
     <!-- 分类侧栏 -->

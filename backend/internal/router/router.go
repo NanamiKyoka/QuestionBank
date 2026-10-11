@@ -44,6 +44,7 @@ type Deps struct {
 	Settings        *service.SettingsService
 	Prompts         *service.PromptService
 	Uploads         *service.UploadService
+	AdminImports    *service.AdminImportService
 	Media           *storage.Local
 }
 
@@ -229,10 +230,14 @@ func registerSubjectRoutes(g *gin.RouterGroup, d Deps) {
 
 func registerKnowledgePointRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewKnowledgePointHandler(d.KnowledgePoints)
+	admin := handler.NewAdminImportHandler(d.AdminImports)
 
 	// 列表与新建挂在学科下；按 id 的操作放在顶层，避免与 /subjects 的通配符冲突。
 	g.GET("/subjects/:subject_id/knowledge-points", middleware.RequireAuth(), h.Tree)
 	g.POST("/subjects/:subject_id/knowledge-points", middleware.RequireAuth(), h.Create)
+	g.GET("/subjects/:subject_id/knowledge-points/import-template", middleware.RequireAuth(), admin.KnowledgePointTemplate)
+	g.GET("/subjects/:subject_id/knowledge-points/import-preflight", middleware.RequireAuth(), admin.KnowledgePointPreflight)
+	g.POST("/subjects/:subject_id/knowledge-points/import", middleware.RequireAuth(), admin.ImportKnowledgePoints)
 
 	kps := g.Group("/knowledge-points")
 	kps.Use(middleware.RequireAuth())
@@ -245,6 +250,7 @@ func registerKnowledgePointRoutes(g *gin.RouterGroup, d Deps) {
 
 func registerTagRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewTagHandler(d.Tags)
+	admin := handler.NewAdminImportHandler(d.AdminImports)
 
 	g.GET("/subjects/:subject_id/tag-categories", middleware.RequireAuth(), h.ListCategories)
 	g.POST("/subjects/:subject_id/tag-categories", middleware.RequireAuth(), h.CreateCategory)
@@ -258,6 +264,8 @@ func registerTagRoutes(g *gin.RouterGroup, d Deps) {
 
 	g.GET("/subjects/:subject_id/tags", middleware.RequireAuth(), h.List)
 	g.POST("/subjects/:subject_id/tags", middleware.RequireAuth(), h.Create)
+	g.GET("/subjects/:subject_id/tags/import-template", middleware.RequireAuth(), admin.TagTemplate)
+	g.POST("/subjects/:subject_id/tags/import", middleware.RequireAuth(), admin.ImportTags)
 
 	tags := g.Group("/tags")
 	tags.Use(middleware.RequireAuth())
@@ -297,6 +305,7 @@ func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
 
 func registerUserRoutes(g *gin.RouterGroup, d Deps) {
 	h := handler.NewUserHandler(d.Users)
+	admin := handler.NewAdminImportHandler(d.AdminImports)
 
 	// 权限自查询挂在 /auth/me 下，既语义正确，也避免与 /users/:id 的
 	// 通配符在同一层冲突。
@@ -307,6 +316,8 @@ func registerUserRoutes(g *gin.RouterGroup, d Deps) {
 	{
 		users.GET("", h.List)
 		users.POST("", h.Create)
+		users.GET("/import-template", admin.UserTemplate)
+		users.POST("/import", admin.ImportUsers)
 		users.GET("/:id", h.Get)
 		users.PUT("/:id", h.Update)
 		users.DELETE("/:id", h.Delete)

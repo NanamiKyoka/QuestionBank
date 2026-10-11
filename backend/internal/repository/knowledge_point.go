@@ -114,6 +114,19 @@ func (r *KnowledgePointRepo) UnlinkQuestions(ctx context.Context, ids []uint) er
 		Delete(&model.QuestionKnowledgePoint{}).Error
 }
 
+// CountAffectedQuestions 统计与该学科知识点关联的去重题目数。
+func (r *KnowledgePointRepo) CountAffectedQuestions(ctx context.Context, subjectID uint) (int64, error) {
+	var total int64
+	err := conn(ctx, r.db).
+		Table("question_knowledge_points AS qkp").
+		Joins("JOIN knowledge_points AS kp ON kp.id = qkp.knowledge_point_id AND kp.deleted_at IS NULL").
+		Joins("JOIN questions AS q ON q.id = qkp.question_id AND q.deleted_at IS NULL").
+		Where("kp.subject_id = ? AND q.subject_id = ?", subjectID, subjectID).
+		Distinct("qkp.question_id").
+		Count(&total).Error
+	return total, err
+}
+
 // CountQuestionsByKP 统计每个知识点关联的题目数（已软删除的题目不计）。
 func (r *KnowledgePointRepo) CountQuestionsByKP(ctx context.Context, subjectID uint) (map[uint]int64, error) {
 	type row struct {

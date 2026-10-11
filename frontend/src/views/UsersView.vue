@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { subjectApi, userApi } from '@/api'
 import type { Subject, SubjectRole, User } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import AdminImportDialog from '@/components/AdminImportDialog.vue'
 import FilterBar from '@/components/ui/FilterBar.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -18,6 +19,7 @@ const subjects = ref<Subject[]>([])
 const query = reactive({ keyword: '', page: 1, page_size: 20 })
 
 const dialogVisible = ref(false)
+const importVisible = ref(false)
 const form = reactive({
   username: '',
   password: '',
@@ -148,6 +150,7 @@ function roleLabel(row: User): string {
   <div class="space-y-3">
     <PageHeader title="用户管理" description="创建账号并分配学科角色。角色决定该用户在本学科能看到什么、能改什么。">
       <template #actions>
+        <el-button @click="importVisible = true">批量导入</el-button>
         <el-button type="primary" @click="openCreate">
           <el-icon class="mr-1"><Plus /></el-icon>新建用户
         </el-button>
@@ -220,6 +223,8 @@ function roleLabel(row: User): string {
         />
       </div>
     </el-card>
+
+    <AdminImportDialog v-model="importVisible" kind="users" @imported="load" />
 
     <el-dialog v-model="dialogVisible" title="新建用户" width="500px">
       <el-form label-width="90px">

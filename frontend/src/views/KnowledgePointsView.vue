@@ -6,6 +6,7 @@ import type { KnowledgePoint } from '@/api/types'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
+import AdminImportDialog from '@/components/AdminImportDialog.vue'
 import { useSubjectStore } from '@/stores/subject'
 
 const subject = useSubjectStore()
@@ -24,6 +25,7 @@ const vectorStatus = ref<{
 const reindexing = ref(false)
 
 const dialogVisible = ref(false)
+const importVisible = ref(false)
 const editingId = ref<number | null>(null)
 const form = reactive({ name: '', description: '', parent_id: null as number | null })
 
@@ -166,9 +168,12 @@ async function reindex(force: boolean) {
       <template #header>
         <div class="flex items-center justify-between">
           <span class="text-sm font-medium">知识点树</span>
-          <el-button v-if="canManage" type="primary" size="small" @click="openCreate(null)">
-            <el-icon class="mr-1"><Plus /></el-icon>新建一级知识点
-          </el-button>
+          <div class="flex gap-2">
+            <el-button v-if="canManage && subject.currentId" size="small" @click="importVisible = true">批量导入</el-button>
+            <el-button v-if="canManage" type="primary" size="small" @click="openCreate(null)">
+              <el-icon class="mr-1"><Plus /></el-icon>新建一级知识点
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -205,6 +210,14 @@ async function reindex(force: boolean) {
         </template>
       </el-table>
     </el-card>
+
+    <AdminImportDialog
+      v-if="subject.currentId"
+      v-model="importVisible"
+      kind="knowledge_points"
+      :subject-id="subject.currentId"
+      @imported="load"
+    />
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑知识点' : '新建知识点'" width="480px">
       <el-form label-width="70px">

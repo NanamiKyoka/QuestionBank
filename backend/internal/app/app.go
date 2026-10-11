@@ -175,6 +175,12 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 	subjectSvc := service.NewSubjectService(repos)
 	tagSvc := service.NewTagService(repos)
 	paperSvc := service.NewPaperService(repos)
+	adminImportSvc := service.NewAdminImportService(repos)
+	adminImportSvc.SetIndexHook(func(subjectID uint, kpIDs []uint) {
+		for _, id := range kpIDs {
+			vectorSvc.IndexKnowledgePoint(context.Background(), subjectID, id)
+		}
+	})
 
 	app.Engine = router.New(router.Deps{
 		Config:          cfg,
@@ -214,9 +220,10 @@ func Build(ctx context.Context, opt Options) (*App, error) {
 		Settings:   service.NewSettingsService(repos),
 		// 提示词服务在构造时把自己注册为 importing 的模板来源，
 		// 因此"接口通"与"提示词真的读得到"不可能脱节。
-		Prompts: service.NewPromptService(repos),
-		Uploads: service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
-		Media:   mediaStore,
+		Prompts:      service.NewPromptService(repos),
+		Uploads:      service.NewUploadService(mediaStore, cfg.Storage.MaxUploadMB),
+		AdminImports: adminImportSvc,
+		Media:        mediaStore,
 	})
 
 	if opt.Addr != "" {
