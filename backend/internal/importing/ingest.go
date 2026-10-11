@@ -360,10 +360,12 @@ func safeArchiveName(name string) bool {
 
 // docx 内几个固定成员的路径。
 const (
-	docxDocumentPart  = "word/document.xml"
-	docxNumberingPart = "word/numbering.xml"
-	docxStylesPart    = "word/styles.xml"
-	docxMediaPrefix   = "word/media/"
+	docxDocumentPart      = "word/document.xml"
+	docxNumberingPart     = "word/numbering.xml"
+	docxStylesPart        = "word/styles.xml"
+	docxRelationshipsPart = "word/_rels/document.xml.rels"
+	docxFootnotesPart     = "word/footnotes.xml"
+	docxMediaPrefix       = "word/media/"
 )
 
 // DocxToMarkdown 把 .docx 的正文转成 Markdown。
@@ -379,10 +381,12 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 	}
 
 	var (
-		docPart   *zip.File
-		numbering []byte
-		styles    []byte
-		media     = map[string][]byte{}
+		docPart       *zip.File
+		numbering     []byte
+		styles        []byte
+		relationships []byte
+		footnotes     []byte
+		media         = map[string][]byte{}
 	)
 	for _, f := range zr.File {
 		switch {
@@ -392,6 +396,10 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 			numbering = readDocxPart(f)
 		case f.Name == docxStylesPart:
 			styles = readDocxPart(f)
+		case f.Name == docxRelationshipsPart:
+			relationships = readDocxPart(f)
+		case f.Name == docxFootnotesPart:
+			footnotes = readDocxPart(f)
 		case strings.HasPrefix(f.Name, docxMediaPrefix) && !strings.HasSuffix(f.Name, "/"):
 			rc, err := f.Open()
 			if err != nil {
@@ -416,7 +424,11 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 	p := &docxParser{
 		images:    images,
 		media:     media,
+		rels:      parseDocxRelationships(relationships),
+		footnotes: parseDocxFootnotes(footnotes),
 		warns:     &warns,
+		imageRefs: map[string]string{},
+		warned:    map[string]bool{},
 		numbering: newNumberingState(parseNumbering(numbering, styles)),
 	}
 	if err := p.parse(rc); err != nil {
@@ -439,34 +451,127 @@ func readDocxPart(f *zip.File) []byte {
 	return b
 }
 
+func parseDocxRelationships(data []byte) map[string]string {
+	out := map[string]string{}
+	if len(data) == 0 {
+		return out
+	}
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return out
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name.Local != "Relationship" {
+			continue
+		}
+		id := attrValue(start, "Id")
+		target := strings.ReplaceAll(attrValue(start, "Target"), "\\", "/")
+		if id == "" || target == "" || strings.Contains(target, "://") || attrValue(start, "TargetMode") == "External" {
+			continue
+		}
+		if !strings.HasPrefix(target, "word/") {
+			target = path.Join("word", strings.TrimPrefix(target, "/"))
+		}
+		out[id] = target
+	}
+	return out
+}
+
+func parseDocxFootnotes(data []byte) map[string]string {
+	out := map[string]string{}
+	if len(data) == 0 {
+		return out
+	}
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	var (
+		id      string
+		depth   int
+		inText  bool
+		builder strings.Builder
+	)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return out
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "footnote":
+				id = attrValue(t, "id")
+				depth = 1
+				builder.Reset()
+			case "t":
+				if depth > 0 {
+					inText = true
+				}
+			case "tab":
+				if depth > 0 {
+					builder.WriteString(" ")
+				}
+			case "br":
+				if depth > 0 {
+					builder.WriteString("\n")
+				}
+			}
+		case xml.CharData:
+			if depth > 0 && inText {
+				builder.WriteString(string(t))
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "t":
+				inText = false
+			case "footnote":
+				if depth > 0 {
+					text := strings.Join(strings.Fields(builder.String()), " ")
+					if text != "" {
+						out[id] = text
+					}
+				}
+				depth = 0
+			}
+		}
+	}
+	return out
+}
+
 // docxParser 逐 token 扫 document.xml。
 //
 // 刻意不解码成结构体再遍历：OOXML 的段落可以任意嵌套（表格里的单元格、
 // 文本框里的段落），递归结构体需要处理大量容错；顺着 token 流走反而稳。
+type docxTable struct {
+	rows [][]string
+	row  []string
+	cell strings.Builder
+}
+
 type docxParser struct {
 	images    ImageSaver
 	media     map[string][]byte
+	rels      map[string]string
+	footnotes map[string]string
 	warns     *[]string
 	numbering *numberingState
 
-	lines []string
-	// para 攒当前段落：Word 会把一句话拆成很多个 run，逐 token 直接写会把
-	// 一段话劈成几十行。这里的做法是段落结束时才落一行。
-	para strings.Builder
-	// inTable 表示正在表格里；此时段落文本进 cellBuf 而不是 lines。
-	inTable bool
-	rowBuf  []string
-	cellBuf strings.Builder
+	lines     []string
+	para      strings.Builder
+	tables    []*docxTable
+	imageRefs map[string]string
+	warned    map[string]bool
 
-	// ---- 当前段落的编号属性（w:pPr） ----
-	// styleID 段落样式：编号常常挂在样式上，段落自己反而只挂个 pStyle。
-	styleID string
-	// numID/ilvl 是段落自己声明的；hasNumPr 区分"声明了 numId=0"
-	// （显式取消编号）和"什么都没声明"（要回落到样式上的那个）。
-	numID    string
-	ilvl     int
-	hasNumPr bool
-	// numPr 只在 w:pPr 里才是段落编号，用深度计数把它与别处的同名元素分开。
+	styleID    string
+	numID      string
+	ilvl       int
+	hasNumPr   bool
 	depthPPr   int
 	depthNumPr int
 }
@@ -485,11 +590,124 @@ func (p *docxParser) flushPara() {
 	if prefix != "" {
 		s = prefix + s
 	}
-	if p.inTable {
-		p.cellBuf.WriteString(s)
+	if table := p.currentTable(); table != nil {
+		table.cell.WriteString(s)
 		return
 	}
 	p.lines = append(p.lines, s)
+}
+
+func (p *docxParser) currentTable() *docxTable {
+	if len(p.tables) == 0 {
+		return nil
+	}
+	return p.tables[len(p.tables)-1]
+}
+
+func (p *docxParser) startTable() {
+	p.tables = append(p.tables, &docxTable{})
+}
+
+func (p *docxParser) startRow() {
+	if table := p.currentTable(); table != nil {
+		table.row = nil
+	}
+}
+
+func (p *docxParser) startCell() {
+	if table := p.currentTable(); table != nil {
+		table.cell.Reset()
+	}
+}
+
+func (p *docxParser) endCell() {
+	if table := p.currentTable(); table != nil {
+		table.row = append(table.row, table.cell.String())
+		table.cell.Reset()
+	}
+}
+
+func (p *docxParser) endRow() {
+	table := p.currentTable()
+	if table == nil {
+		return
+	}
+	cells := make([]string, 0, len(table.row))
+	for _, cell := range table.row {
+		cells = append(cells, strings.TrimSpace(cell))
+	}
+	table.row = nil
+	if len(cells) == 0 || strings.TrimSpace(strings.Join(cells, "")) == "" {
+		return
+	}
+	table.rows = append(table.rows, cells)
+}
+
+func (p *docxParser) endTable() {
+	if len(p.tables) == 0 {
+		return
+	}
+	table := p.tables[len(p.tables)-1]
+	p.tables = p.tables[:len(p.tables)-1]
+	lines := make([]string, 0, len(table.rows)*2)
+	for _, cells := range table.rows {
+		lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
+		lines = append(lines, "|"+strings.Repeat(" --- |", len(cells)))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	if parent := p.currentTable(); parent != nil {
+		parent.cell.WriteString("\n" + strings.Join(lines, "\n") + "\n")
+		return
+	}
+	p.lines = append(p.lines, lines...)
+}
+
+func (p *docxParser) warnOnce(key, message string) {
+	if p.warned == nil {
+		p.warned = map[string]bool{}
+	}
+	if p.warned[key] {
+		return
+	}
+	p.warned[key] = true
+	*p.warns = append(*p.warns, message)
+}
+
+func (p *docxParser) imageMarkdown(relID string) string {
+	if relID == "" {
+		return ""
+	}
+	if ref := p.imageRefs[relID]; ref != "" {
+		return ref
+	}
+	target := p.rels[relID]
+	data := p.media[target]
+	if len(data) == 0 {
+		p.warnOnce("image-missing:"+relID, "Word 中有图片未能读取，已跳过")
+		return ""
+	}
+	if p.images == nil {
+		p.warnOnce("image-saver", "当前运行环境不支持保存 Word 内嵌图片，图片已跳过")
+		return ""
+	}
+	url, err := p.images.Save(data, path.Base(target))
+	if err != nil {
+		p.warnOnce("image-save:"+relID, "Word 内嵌图片保存失败，图片已跳过")
+		return ""
+	}
+	ref := "![图片](" + url + ")"
+	p.imageRefs[relID] = ref
+	return ref
+}
+
+func (p *docxParser) footnoteMarkdown(id string) string {
+	text := strings.TrimSpace(p.footnotes[id])
+	if text == "" {
+		return "[脚注]"
+	}
+	return "[脚注：" + text + "]"
 }
 
 // currentNumbering 算出本段该带的编号前缀。
@@ -516,22 +734,6 @@ func (p *docxParser) resetParaNumbering() {
 	p.hasNumPr = false
 }
 
-// flushRow 把攒够的单元格收成一行管道表。
-func (p *docxParser) flushRow() {
-	cells := make([]string, 0, len(p.rowBuf))
-	for _, c := range p.rowBuf {
-		cells = append(cells, strings.TrimSpace(c))
-	}
-	p.rowBuf = nil
-	// 全空的行（Word 里常见）直接丢掉，否则会留下一堆 "|  |  |"。
-	if len(cells) == 0 || strings.TrimSpace(strings.Join(cells, "")) == "" {
-		return
-	}
-	p.lines = append(p.lines, "| "+strings.Join(cells, " | ")+" |")
-	// 第一行当表头，补一条分隔行，Markdown 才认得出这是表格。
-	p.lines = append(p.lines, "|"+strings.Repeat(" --- |", len(cells)))
-}
-
 func (p *docxParser) parse(r io.Reader) error {
 	dec := xml.NewDecoder(r)
 	// mathDepth>0 表示正在公式内部：w:t 仍是正文，m:t 才是公式内容。
@@ -556,11 +758,19 @@ func (p *docxParser) parse(r io.Reader) error {
 			case "p":
 				p.resetParaNumbering()
 			case "tbl":
-				p.inTable = true
+				p.startTable()
 			case "tr":
-				p.rowBuf = nil
+				p.startRow()
 			case "tc":
-				p.cellBuf.Reset()
+				p.startCell()
+			case "blip":
+				if !inMath {
+					p.para.WriteString(p.imageMarkdown(attrValue(t, "embed")))
+				}
+			case "footnoteReference":
+				if !inMath {
+					p.para.WriteString(p.footnoteMarkdown(attrValue(t, "id")))
+				}
 			case "pPr":
 				p.depthPPr++
 			case "numPr":
@@ -647,12 +857,11 @@ func (p *docxParser) parse(r io.Reader) error {
 			case "p":
 				p.flushPara()
 			case "tc":
-				p.rowBuf = append(p.rowBuf, p.cellBuf.String())
-				p.cellBuf.Reset()
+				p.endCell()
 			case "tr":
-				p.flushRow()
+				p.endRow()
 			case "tbl":
-				p.inTable = false
+				p.endTable()
 			case "br", "cr":
 				if !inMath {
 					p.para.WriteString("\n")
