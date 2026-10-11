@@ -46,6 +46,69 @@ export function insertBlank(editor: Editor | null | undefined): boolean {
   return editor.chain().focus().insertContent({ type: 'blank' }).run()
 }
 
+/** 撤销 / 重做。 */
+export function undo(editor: Editor | null | undefined): boolean {
+  return editor?.chain().focus().undo().run() ?? false
+}
+
+export function redo(editor: Editor | null | undefined): boolean {
+  return editor?.chain().focus().redo().run() ?? false
+}
+
+/** 设置段落样式：0 为正文，1-3 为标题。 */
+export function setParagraphStyle(editor: Editor | null | undefined, level: number): boolean {
+  if (!editor) return false
+  if (level === 0) return editor.chain().focus().setParagraph().run()
+  return editor.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 }).run()
+}
+
+/** 设置文本对齐。 */
+export function setAlignment(
+  editor: Editor | null | undefined,
+  align: 'left' | 'center' | 'right',
+): boolean {
+  return editor?.chain().focus().setTextAlign(align).run() ?? false
+}
+
+export type TableCommand =
+  | 'insert'
+  | 'addRowBefore'
+  | 'addRowAfter'
+  | 'deleteRow'
+  | 'addColumnBefore'
+  | 'addColumnAfter'
+  | 'deleteColumn'
+  | 'mergeCells'
+  | 'splitCell'
+  | 'deleteTable'
+
+export function runTableCommand(editor: Editor | null | undefined, command: TableCommand): boolean {
+  if (!editor) return false
+  const chain = editor.chain().focus()
+  switch (command) {
+    case 'insert':
+      return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+    case 'addRowBefore':
+      return chain.addRowBefore().run()
+    case 'addRowAfter':
+      return chain.addRowAfter().run()
+    case 'deleteRow':
+      return chain.deleteRow().run()
+    case 'addColumnBefore':
+      return chain.addColumnBefore().run()
+    case 'addColumnAfter':
+      return chain.addColumnAfter().run()
+    case 'deleteColumn':
+      return chain.deleteColumn().run()
+    case 'mergeCells':
+      return chain.mergeCells().run()
+    case 'splitCell':
+      return chain.splitCell().run()
+    case 'deleteTable':
+      return chain.deleteTable().run()
+  }
+}
+
 /** 插入三行三列的表格（带表头）。 */
 export function insertTable(editor: Editor | null | undefined): boolean {
   if (!editor) return false

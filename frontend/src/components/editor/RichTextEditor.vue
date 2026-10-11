@@ -11,6 +11,7 @@ import TextAlign from '@tiptap/extension-text-align'
 // 不再需要分别安装 row / cell / header。
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
 import { Blank, BlockMath, InlineMath } from './mathNodes'
+import EditorFormatControls from './EditorFormatControls.vue'
 import {
   clearFormat as clearFormatMarks,
   insertBlank as insertBlankNode,
@@ -202,6 +203,10 @@ defineExpose({
           <el-icon><Bottom /></el-icon>
         </el-button>
       </el-button-group>
+
+      <el-divider direction="vertical" />
+
+      <EditorFormatControls :editor="editor" />
 
       <el-divider direction="vertical" />
 

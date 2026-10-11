@@ -513,6 +513,7 @@ function toggleAnswerModule() {
 function onCanvasUpdate(next: PaperNode[]) {
   nodes.value = next
   dirty.value = true
+  validationWarned = false
   scheduleAutoSave()
 }
 
@@ -564,6 +565,45 @@ function cancelAutoSave() {
 
 // ---- 保存 ----
 
+function contentHasText(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.some(contentHasText)
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if (record.type === 'text') return String(record.text ?? '').trim().length > 0
+    return contentHasText(record.content) || contentHasText(record.text)
+  }
+  return false
+}
+
+function saveIssues(): string[] {
+  const issues: string[] = []
+  const seenQuestions = new Set<number>()
+  for (const node of nodes.value) {
+    if (node.node_kind === 'reference') continue
+    if (node.node_type === 'question') {
+      const questionID = Number((node.content as { question_id?: number } | null)?.question_id ?? 0)
+      if (!questionID || !questions.value[questionID]) {
+        issues.push('存在未绑定有效题目的题目块')
+      } else if (seenQuestions.has(questionID)) {
+        issues.push(`题目 #${questionID} 在卷面上出现了多次`)
+      } else {
+        seenQuestions.add(questionID)
+      }
+    }
+    if (node.node_type === 'rich_text' || node.node_type === 'heading') {
+      if (!contentHasText(node.content)) issues.push('存在空白标题或说明块')
+    }
+    if (node.node_type === 'answer_space') {
+      const lines = Number((node.props as { lines?: number } | null)?.lines ?? 0)
+      if (lines < 1) issues.push('存在行数无效的答题区')
+    }
+  }
+  return [...new Set(issues)]
+}
+
+let validationWarned = false
+
 /** 转成提交结构：不带 position（服务端分配），不带服务端派生的 reference 节点。 */
 function toInputs(): NodeInput[] {
   return nodes.value.filter((n) => n.node_kind !== 'reference').map(toNodeInput)
@@ -573,6 +613,26 @@ async function save(options: { silent?: boolean } = {}) {
   if (!canEdit.value) {
     ElMessage.warning('你没有编辑这份试卷的权限')
     return false
+  }
+  const issues = saveIssues()
+  if (issues.length) {
+    cancelAutoSave()
+    if (options.silent) {
+      if (!validationWarned) {
+        validationWarned = true
+        ElMessage.warning(`暂未保存：${issues[0]}。请修正后再保存。`)
+      }
+      return false
+    }
+    try {
+      await ElMessageBox.confirm(
+        `${issues.join('；')}。仍要继续保存吗？`,
+        '保存前检查',
+        { type: 'warning', confirmButtonText: '仍然保存', cancelButtonText: '返回修正' },
+      )
+    } catch {
+      return false
+    }
   }
   // 手动保存要掐掉已经排上的自动保存：否则保存完成后 1.5 秒又来一次，
   // 白白多一轮请求，还会把 revision 又推一格。

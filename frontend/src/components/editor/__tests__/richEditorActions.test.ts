@@ -21,7 +21,12 @@ import {
   insertImage,
   insertInlineMath,
   insertTable,
+  redo,
+  runTableCommand,
   selectionInRichBlock,
+  setAlignment,
+  setParagraphStyle,
+  undo,
 } from '../richEditorActions'
 import { plainToRichDoc } from '@/lib/richdoc'
 import type { NodeType, PaperNode } from '@/api/paper'
@@ -268,5 +273,28 @@ describe('selectionInRichBlock', () => {
   it('编辑器为 null 时为假而不是抛错', () => {
     expect(selectionInRichBlock(null)).toBe(false)
     expect(selectionInRichBlock(undefined)).toBe(false)
+  })
+})
+
+
+describe('段落与表格工具栏动作', () => {
+  it('切换标题与对齐方式', () => {
+    const e = mount(richPaper())
+    selectInside(e, 't')
+    expect(setParagraphStyle(e, 1)).toBe(true)
+    expect(e.isActive('heading', { level: 1 })).toBe(true)
+    expect(setAlignment(e, 'center')).toBe(true)
+    expect(e.isActive({ textAlign: 'center' })).toBe(true)
+  })
+
+  it('插入表格并可通过撤销移除', () => {
+    const e = mount(richPaper())
+    selectInside(e, 't')
+    expect(runTableCommand(e, 'insert')).toBe(true)
+    expect(hasNode(e, 'table')).toBe(true)
+    expect(undo(e)).toBe(true)
+    expect(hasNode(e, 'table')).toBe(false)
+    expect(redo(e)).toBe(true)
+    expect(hasNode(e, 'table')).toBe(true)
   })
 })

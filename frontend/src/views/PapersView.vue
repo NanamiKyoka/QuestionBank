@@ -16,6 +16,7 @@ const loading = ref(false)
 const rows = ref<PaperBrief[]>([])
 const total = ref(0)
 const folders = ref<PaperFolder[]>([])
+const collapsedFolders = ref(new Set<number>())
 
 const query = reactive({
   keyword: '',
@@ -96,12 +97,21 @@ const flatFolders = computed(() => {
   const walk = (list: PaperFolder[], depth: number) => {
     for (const folder of list) {
       out.push({ folder, depth })
-      if (folder.children?.length) walk(folder.children, depth + 1)
+      if (folder.children?.length && !collapsedFolders.value.has(folder.id)) {
+        walk(folder.children, depth + 1)
+      }
     }
   }
   walk(folders.value, 0)
   return out
 })
+
+function toggleFolder(id: number) {
+  const next = new Set(collapsedFolders.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collapsedFolders.value = next
+}
 
 function findFolder(id: number): PaperFolder | null {
   for (const item of flatFolders.value) {
@@ -390,6 +400,17 @@ function formatTime(value: string): string {
         :style="{ paddingLeft: `${8 + item.depth * 12}px` }"
         @click="pickFolder(item.folder.id)"
       >
+        <el-icon
+          v-if="item.folder.children?.length"
+          class="mr-1 cursor-pointer text-ink-subtle"
+          role="button"
+          :aria-label="collapsedFolders.has(item.folder.id) ? '展开目录' : '折叠目录'"
+          @click.stop="toggleFolder(item.folder.id)"
+        >
+          <ArrowRight v-if="collapsedFolders.has(item.folder.id)" />
+          <ArrowDown v-else />
+        </el-icon>
+        <span v-else class="mr-1 w-4" />
         <el-icon class="mr-1 text-ink-subtle"><Folder /></el-icon>
         <span class="flex-1 truncate">{{ item.folder.name }}</span>
         <span class="text-xs text-ink-subtle">{{ item.folder.paper_count }}</span>

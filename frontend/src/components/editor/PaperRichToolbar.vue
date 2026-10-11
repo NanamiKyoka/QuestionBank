@@ -11,6 +11,7 @@ import {
   uploadAndInsertImage,
 } from './richEditorActions'
 import { useEditorTick } from './paper-node-views/canvasState'
+import EditorFormatControls from './EditorFormatControls.vue'
 
 /**
  * 画布上富文本块的工具栏。
@@ -111,6 +112,10 @@ async function pickImage(event: Event) {
         <el-icon><Bottom /></el-icon>
       </el-button>
     </el-button-group>
+
+    <el-divider direction="vertical" />
+
+    <EditorFormatControls :editor="editor" />
 
     <el-divider direction="vertical" />
 
