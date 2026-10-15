@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
+	"github.com/NanamiKyoka/questionmind/internal/model"
 )
 
 // 临时 id 带空白是模型常见的输出习惯；两边都带一个空格时，
@@ -106,5 +107,19 @@ func TestNormalizeFindsSourceNumberAfterMaterialHeading(t *testing.T) {
 	}, ModeRecord)
 	if drafts[0].SourceNumber != 15 {
 		t.Fatalf("应识别材料标题后的原卷题号 15，实际 %d", drafts[0].SourceNumber)
+	}
+}
+
+func TestNormalizeRefinesSentenceBreakQuestion(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{{
+		TempID:       "q10",
+		QuestionType: "multiple_choice",
+		Stem:         "材料二画波浪线的部分有三处需要断句，请将相应位置的答案标号涂黑。",
+	}}, ModeRecord)
+	if drafts[0].QuestionType != model.QuestionTypeFillBlank {
+		t.Fatalf("断句题应归为填空题，实际 %s", drafts[0].QuestionType)
+	}
+	if !containsWarning(drafts[0].Warnings, "断句题") {
+		t.Fatalf("应提示题型已修正，实际 %v", drafts[0].Warnings)
 	}
 }

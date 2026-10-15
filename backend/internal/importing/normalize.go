@@ -185,6 +185,13 @@ func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
 		normalized = []model.Option{}
 	}
 	d.Options = normalized
+	if (qtype == model.QuestionTypeSingleChoice || qtype == model.QuestionTypeMultipleChoice) &&
+		len(normalized) == 0 && isSentenceBreakQuestion(d.StemMarkdown) {
+		qtype = model.QuestionTypeFillBlank
+		d.Warnings = append(d.Warnings, "断句题未提供选项，题型已按填空题处理")
+	}
+	d.QuestionType = qtype
+	d.TypeLabel = qtype.Label()
 
 	// 4) 题干与解析转富文本。
 	d.Stem = MarkdownToRichDoc(d.StemMarkdown)
@@ -315,6 +322,10 @@ func inferQuestionType(stem string, opts []model.Option, answerRaw string) model
 	// 其余一律按解答题处理：这是最安全的兜底——
 	// 判成填空/选择一旦错了会导致答案错位，判成解答只是少了个自动判分。
 	return model.QuestionTypeEssay
+}
+
+func isSentenceBreakQuestion(stem string) bool {
+	return strings.Contains(stem, "断句") || strings.Contains(stem, "标号涂黑")
 }
 
 func normalizeDifficulty(v int) int {
