@@ -180,9 +180,11 @@ type QuestionFilter struct {
 	// Keyword 会在题干纯文本中做模糊匹配。
 	Keyword string
 	// Type / Status / Difficulty 为空/0 表示不过滤。
-	Type       QuestionType
-	Status     QuestionStatus
-	Difficulty int
+	Type          QuestionType
+	Status        QuestionStatus
+	Difficulty    int
+	DifficultyMin int
+	DifficultyMax int
 
 	// KnowledgePointIDs 由 service 解析后的知识点 id 集合
 	// （含子树的展开结果），repository 只按集合过滤。

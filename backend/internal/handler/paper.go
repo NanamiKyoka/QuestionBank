@@ -13,11 +13,12 @@ import (
 
 // PaperHandler 组卷相关接口。
 type PaperHandler struct {
-	papers *service.PaperService
+	papers    *service.PaperService
+	questions *service.QuestionService
 }
 
-func NewPaperHandler(papers *service.PaperService) *PaperHandler {
-	return &PaperHandler{papers: papers}
+func NewPaperHandler(papers *service.PaperService, questions *service.QuestionService) *PaperHandler {
+	return &PaperHandler{papers: papers, questions: questions}
 }
 
 // ---- 目录 ----
@@ -282,6 +283,28 @@ func (h *PaperHandler) ReplaceNodes(c *gin.Context) {
 		return
 	}
 	res, err := h.papers.ReplaceNodes(c.Request.Context(), user, id, &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
+// PreviewPlan POST /subjects/:subject_id/paper-plans/preview
+func (h *PaperHandler) PreviewPlan(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	subjectID, ok := parseID(c, "subject_id")
+	if !ok {
+		return
+	}
+	var req schema.PaperPlanRequest
+	if !bind(c, &req) {
+		return
+	}
+	res, err := h.questions.PlanQuestions(c.Request.Context(), user, subjectID, &req)
 	if err != nil {
 		response.Fail(c, err)
 		return

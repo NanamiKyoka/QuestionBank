@@ -23,10 +23,12 @@ func NewQuestionHandler(questions *service.QuestionService) *QuestionHandler {
 // questionListQuery 列表查询参数。
 // knowledge_point_ids / tag_ids 支持重复参数（?knowledge_point_ids=1&knowledge_point_ids=2），gin 会绑定为切片。
 type questionListQuery struct {
-	Keyword    string `form:"keyword"`
-	Type       string `form:"type"`
-	Status     string `form:"status"`
-	Difficulty int    `form:"difficulty"`
+	Keyword       string `form:"keyword"`
+	Type          string `form:"type"`
+	Status        string `form:"status"`
+	Difficulty    int    `form:"difficulty"`
+	DifficultyMin int    `form:"difficulty_min"`
+	DifficultyMax int    `form:"difficulty_max"`
 
 	// KnowledgePointIDs 多选。KnowledgePointID 是它的单值别名，
 	// 两个都留着是为了不破坏已有的调用方（导出、AI 工具、参考实现照搬的脚本）。
@@ -82,6 +84,8 @@ func (h *QuestionHandler) List(c *gin.Context) {
 		Type:              model.QuestionType(q.Type),
 		Status:            model.QuestionStatus(q.Status),
 		Difficulty:        q.Difficulty,
+		DifficultyMin:     q.DifficultyMin,
+		DifficultyMax:     q.DifficultyMax,
 		KnowledgePointIDs: q.knowledgePointIDs(),
 		IncludeSub:        q.IncludeSub,
 		TagIDs:            q.TagIDs,

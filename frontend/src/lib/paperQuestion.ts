@@ -57,6 +57,36 @@ export function createQuestionNode(id: string, questionID: number, contentRevisi
   }
 }
 
+export function appendQuestionNodes(
+  before: PaperNode[],
+  questionIDs: number[],
+  projections: Record<number, PaperQuestionProjection>,
+  nextID: () => string,
+): PaperNode[] {
+  const roots = before
+    .filter((node) => node.parent_id === null && node.node_kind !== 'reference')
+    .slice()
+    .sort((a, b) => a.position - b.position)
+  const moduleIndex = roots.findIndex((node) => node.node_type === 'question_details')
+  const at = moduleIndex >= 0 ? moduleIndex : roots.length
+  const taken = new Set(before.map((node) => node.id))
+  const additions: PaperNode[] = []
+  for (const id of questionIDs) {
+    const projection = projections[id]
+    if (!projection) continue
+    let nodeID = nextID()
+    while (taken.has(nodeID)) nodeID = nextID()
+    taken.add(nodeID)
+    additions.push(createQuestionNode(nodeID, id, projection.content_revision))
+  }
+  const top = [...roots.slice(0, at), ...additions, ...roots.slice(at)]
+  const topIDs = new Set(top.map((node) => node.id))
+  return [
+    ...top.map((node, index) => ({ ...node, position: index })),
+    ...before.filter((node) => node.parent_id !== null && !topIDs.has(node.id)),
+  ]
+}
+
 export async function loadPaperQuestionProjections(
   ids: number[],
 ): Promise<Record<number, PaperQuestionProjection>> {

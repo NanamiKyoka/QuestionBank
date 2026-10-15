@@ -1,5 +1,5 @@
 import { ApiError, del, downloadFile, get, post, put, type PageResult } from './http'
-import type { RichDoc } from './types'
+import type { QuestionBrief, RichDoc } from './types'
 
 /**
  * 组卷相关的类型与接口。
@@ -273,6 +273,29 @@ export interface PaperVersionDetail {
   snapshot: PaperSnapshot
 }
 
+export interface PaperPlanRequest {
+  count: number
+  question_type?: string
+  difficulty_min?: number
+  difficulty_max?: number
+  knowledge_point_ids?: number[]
+  include_sub_knowledge?: boolean
+  tag_ids?: number[]
+  source?: string
+  exclude_question_ids?: number[]
+  seed?: number
+}
+
+export interface PaperPlanResult {
+  requested: number
+  available: number
+  selected: number
+  missing: number
+  items: QuestionBrief[]
+  difficulty_counts: Record<number, number>
+  warnings: string[]
+}
+
 /** 追加题目的结果。 */
 export interface AppendQuestionsResult {
   paper_id: number
@@ -382,6 +405,8 @@ async function appendQuestions(
 }
 
 export const paperApi = {
+  previewPlan: (subjectId: number, payload: PaperPlanRequest) =>
+    post<PaperPlanResult>(`/subjects/${subjectId}/paper-plans/preview`, payload),
   // ---- 目录 ----
   folderTree: (subjectId: number) =>
     get<PaperFolder[]>(`/subjects/${subjectId}/paper-folders`),

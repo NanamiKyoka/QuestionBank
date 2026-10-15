@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/http'
-import { questionApi } from '@/api'
+import { knowledgePointApi, questionApi, tagApi } from '@/api'
 import { chatApi } from '@/api/ai'
 import {
   paperApi,
@@ -16,8 +16,9 @@ import {
   type QuestionRef,
   type ModuleContent,
   type PaperQuestionProjection,
+  type PaperPlanResult,
 } from '@/api/paper'
-import type { QuestionBrief } from '@/api/types'
+import type { KnowledgePoint, QuestionBrief, Tag } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
 import CompositionNumberingPanel from '@/components/CompositionNumberingPanel.vue'
 import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
@@ -35,7 +36,7 @@ import {
 import { abandonInflightClientTools, answerClientToolFrame } from '@/composables/useAiClientTools'
 import { streamChatReply, type ChatStreamFrame } from '@/composables/useChatStream'
 import { addUsage, stopNotice, usageNote, type RunUsage } from '@/lib/aiRun'
-import { usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
+import { diffPaperNodes, usePaperAiTools, type PaperAiHost, type PendingPaperChange } from '@/composables/usePaperAiTools'
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
 import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -43,6 +44,7 @@ import MarkdownContent from '@/components/MarkdownContent.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
 import {
+  appendQuestionNodes,
   createQuestionNode,
   loadPaperQuestionProjections,
   mergeQuestionProjections,
@@ -84,14 +86,37 @@ const pickerRows = ref<QuestionBrief[]>([])
 const pickerTotal = ref(0)
 const pickerSelected = ref<QuestionBrief[]>([])
 const addingQuestions = ref(false)
+const pickerFiltersVisible = ref(false)
+const pickerKnowledgePoints = ref<KnowledgePoint[]>([])
+const pickerTags = ref<Tag[]>([])
+let pickerOptionsSubjectID: number | null = null
 const pickerQuery = reactive({
   keyword: '',
   type: '',
   status: 'published' as string,
+  difficulty_min: undefined as number | undefined,
+  difficulty_max: undefined as number | undefined,
+  knowledge_point_ids: [] as number[],
+  tag_ids: [] as number[],
+  include_sub_knowledge: true,
   page: 1,
   page_size: 10,
 })
 const pickerHasMore = computed(() => pickerRows.value.length < pickerTotal.value)
+
+const planVisible = ref(false)
+const planLoading = ref(false)
+const planResult = ref<PaperPlanResult | null>(null)
+const planForm = reactive({
+  count: 5,
+  question_type: '',
+  difficulty_min: 1 as number | undefined,
+  difficulty_max: 5 as number | undefined,
+  knowledge_point_ids: [] as number[],
+  tag_ids: [] as number[],
+  include_sub_knowledge: true,
+  source: '',
+})
 
 // ---- 节点属性契约 ----
 
@@ -1040,12 +1065,40 @@ async function exportPaper(format: 'docx' | 'latex', versionNo?: number) {
 
 // ---- 题目选择器 ----
 
+async function loadPickerOptions() {
+  const subjectID = paper.value?.subject_id
+  if (!subjectID || pickerOptionsSubjectID === subjectID) return
+  const [knowledgePoints, tags] = await Promise.all([
+    knowledgePointApi.tree(subjectID),
+    tagApi.list(subjectID),
+  ])
+  pickerKnowledgePoints.value = knowledgePoints
+  pickerTags.value = tags
+  pickerOptionsSubjectID = subjectID
+}
+
 function openPicker() {
   pickerVisible.value = true
   pickerSelected.value = []
-  pickerQuery.page = 1
   pickerRows.value = []
+  pickerQuery.page = 1
+  void loadPickerOptions()
   void searchPicker()
+}
+
+function applyPickerSearch() {
+  pickerQuery.page = 1
+  void searchPicker()
+}
+
+function resetPickerFilters() {
+  pickerQuery.type = ''
+  pickerQuery.difficulty_min = undefined
+  pickerQuery.difficulty_max = undefined
+  pickerQuery.knowledge_point_ids = []
+  pickerQuery.tag_ids = []
+  pickerQuery.include_sub_knowledge = true
+  applyPickerSearch()
 }
 
 async function searchPicker() {
@@ -1056,7 +1109,11 @@ async function searchPicker() {
       keyword: pickerQuery.keyword,
       type: (pickerQuery.type || '') as never,
       status: (pickerQuery.status || '') as never,
-      // 已发布的题才能入卷：把草稿编进正式试卷没有意义。
+      difficulty_min: pickerQuery.difficulty_min,
+      difficulty_max: pickerQuery.difficulty_max,
+      knowledge_point_ids: pickerQuery.knowledge_point_ids,
+      include_sub_knowledge: pickerQuery.include_sub_knowledge,
+      tag_ids: pickerQuery.tag_ids,
       root_only: true,
       page: pickerQuery.page,
       page_size: pickerQuery.page_size,
@@ -1071,6 +1128,68 @@ async function searchPicker() {
 function loadMorePicker() {
   pickerQuery.page += 1
   void searchPicker()
+}
+
+function openPlan() {
+  if (pendingChange.value) {
+    ElMessage.warning('请先处理当前待确认的改动')
+    return
+  }
+  planResult.value = null
+  planVisible.value = true
+  void loadPickerOptions()
+}
+
+async function previewPlan() {
+  if (!paper.value || planLoading.value) return
+  planLoading.value = true
+  try {
+    planResult.value = await paperApi.previewPlan(paper.value.subject_id, {
+      count: planForm.count,
+      question_type: planForm.question_type || undefined,
+      difficulty_min: planForm.difficulty_min,
+      difficulty_max: planForm.difficulty_max,
+      knowledge_point_ids: planForm.knowledge_point_ids,
+      include_sub_knowledge: planForm.include_sub_knowledge,
+      tag_ids: planForm.tag_ids,
+      source: planForm.source,
+      exclude_question_ids: [...usedQuestionIds.value],
+    })
+  } finally {
+    planLoading.value = false
+  }
+}
+
+async function stagePlanResult() {
+  const result = planResult.value
+  if (!paper.value || !result?.items.length) return
+  const ids = result.items.map((item) => item.id)
+  const projections = await loadPaperQuestionProjections(ids)
+  const available = ids.filter((id) => projections[id])
+  if (!available.length) {
+    ElMessage.error('预选题目已不可用，请重新生成')
+    return
+  }
+  const next = appendQuestionNodes(nodes.value, available, projections, newID)
+  const changes = diffPaperNodes(nodes.value, next, { ...questions.value, ...projections })
+  if (!changes.length) {
+    ElMessage.warning('没有产生可添加的题目')
+    return
+  }
+  pendingChange.value = {
+    tool: 'paper_plan',
+    summary: `智能补题：加入 ${available.length} 道题`,
+    nodes: next,
+    changes,
+    projections,
+  }
+  planVisible.value = false
+  planResult.value = null
+}
+
+async function rerollPlan() {
+  planForm.count = planResult.value?.requested || planForm.count
+  await previewPlan()
 }
 
 function togglePick(row: QuestionBrief) {
@@ -1194,9 +1313,13 @@ function isUsed(row: QuestionBrief): boolean {
         <template #header>
           <div class="flex items-center justify-between">
             <span class="text-sm font-medium">从题库选题</span>
-            <el-button text size="small" aria-label="从题库添加题目" @click="openPicker">
-              <el-icon><Plus /></el-icon>
-            </el-button>
+            <div class="flex items-center gap-1">
+              <el-button text size="small" @click="openPlan">智能补题</el-button>
+              <el-button text size="small" @click="pickerFiltersVisible = !pickerFiltersVisible">筛选</el-button>
+              <el-button text size="small" aria-label="从题库添加题目" @click="openPicker">
+                <el-icon><Plus /></el-icon>
+              </el-button>
+            </div>
           </div>
         </template>
 
@@ -1206,10 +1329,27 @@ function isUsed(row: QuestionBrief): boolean {
           clearable
           size="small"
           class="mb-2"
-          @keyup.enter="pickerQuery.page = 1; searchPicker()"
+          @keyup.enter="applyPickerSearch"
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
+
+        <div v-if="pickerFiltersVisible" class="mb-2 grid grid-cols-2 gap-2">
+          <el-select v-model="pickerQuery.type" placeholder="题型" clearable size="small" class="col-span-2" @change="applyPickerSearch">
+            <el-option label="单选题" value="single_choice" />
+            <el-option label="多选题" value="multiple_choice" />
+            <el-option label="判断题" value="true_false" />
+            <el-option label="填空题" value="fill_blank" />
+            <el-option label="解答题" value="essay" />
+          </el-select>
+          <el-select v-model="pickerQuery.difficulty_min" placeholder="最低难度" clearable size="small" @change="applyPickerSearch">
+            <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+          </el-select>
+          <el-select v-model="pickerQuery.difficulty_max" placeholder="最高难度" clearable size="small" @change="applyPickerSearch">
+            <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+          </el-select>
+          <el-button size="small" class="col-span-2" @click="resetPickerFilters">重置筛选</el-button>
+        </div>
 
         <div v-loading="pickerLoading" class="max-h-[420px] overflow-y-auto">
           <div
@@ -1226,6 +1366,13 @@ function isUsed(row: QuestionBrief): boolean {
                 compact
                 class="stem-clamp-1 flex-1"
               />
+            </div>
+            <div class="mt-1 flex flex-wrap items-center gap-1">
+              <el-tag size="small" effect="plain">{{ row.question_type_label }}</el-tag>
+              <DifficultyStars :level="row.difficulty" />
+              <el-tag v-for="kp in row.knowledge_points.slice(0, 2)" :key="kp.id" size="small" effect="plain">
+                {{ kp.name }}
+              </el-tag>
             </div>
           </div>
 
@@ -1355,22 +1502,145 @@ function isUsed(row: QuestionBrief): boolean {
       :title="paper?.title ?? ''"
     />
 
+    <el-dialog v-model="planVisible" title="智能补题" width="760px">
+      <div class="grid grid-cols-2 gap-3">
+        <el-form-item label="数量">
+          <el-input-number v-model="planForm.count" :min="1" :max="100" class="w-full" />
+        </el-form-item>
+        <el-form-item label="题型">
+          <el-select v-model="planForm.question_type" clearable class="w-full">
+            <el-option label="单选题" value="single_choice" />
+            <el-option label="多选题" value="multiple_choice" />
+            <el-option label="判断题" value="true_false" />
+            <el-option label="填空题" value="fill_blank" />
+            <el-option label="解答题" value="essay" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="最低难度">
+          <el-select v-model="planForm.difficulty_min" clearable class="w-full">
+            <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="最高难度">
+          <el-select v-model="planForm.difficulty_max" clearable class="w-full">
+            <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="知识点">
+          <el-tree-select
+            v-model="planForm.knowledge_point_ids"
+            :data="pickerKnowledgePoints"
+            :props="{ label: 'name', children: 'children' }"
+            node-key="id"
+            multiple
+            check-strictly
+            clearable
+            class="w-full"
+          />
+        </el-form-item>
+        <el-form-item label="标签">
+          <el-select v-model="planForm.tag_ids" multiple clearable collapse-tags class="w-full">
+            <el-option v-for="tag in pickerTags" :key="tag.id" :label="tag.name" :value="tag.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="来源">
+          <el-input v-model="planForm.source" placeholder="可留空" />
+        </el-form-item>
+        <el-form-item label="知识点范围">
+          <el-checkbox v-model="planForm.include_sub_knowledge">包含子知识点</el-checkbox>
+        </el-form-item>
+      </div>
+
+      <el-alert
+        v-if="planResult"
+        :type="planResult.missing > 0 ? 'warning' : 'success'"
+        :closable="false"
+        show-icon
+        class="mb-3"
+      >
+        <template #title>
+          需要 {{ planResult.requested }} 道，选中 {{ planResult.selected }} 道，题库候选 {{ planResult.available }} 道
+        </template>
+        <div v-if="planResult.warnings.length" class="mt-1 text-xs">
+          {{ planResult.warnings.join('；') }}
+        </div>
+      </el-alert>
+
+      <div v-if="planResult?.items.length" class="max-h-72 overflow-y-auto rounded border border-hairline">
+        <div v-for="item in planResult.items" :key="item.id" class="border-b border-hairline p-2 last:border-b-0">
+          <div class="flex items-center gap-2">
+            <el-tag size="small" effect="plain">{{ item.question_type_label }}</el-tag>
+            <DifficultyStars :level="item.difficulty" />
+            <span class="text-xs text-ink-subtle">#{{ item.id }}</span>
+          </div>
+          <RichContent :doc="item.stem_doc" compact class="mt-1 text-sm" />
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="planVisible = false">取消</el-button>
+        <el-button v-if="planResult?.items.length" @click="rerollPlan">重新生成</el-button>
+        <el-button type="primary" :loading="planLoading" @click="previewPlan">
+          {{ planResult ? '按当前条件重选' : '生成预选' }}
+        </el-button>
+        <el-button
+          type="success"
+          :disabled="!planResult?.items.length"
+          @click="stagePlanResult"
+        >
+          预览并加入
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 大选择器 -->
-    <el-dialog v-model="pickerVisible" title="从题库选题" width="760px">
-      <div class="mb-3 flex items-center gap-2">
+    <el-dialog v-model="pickerVisible" title="从题库选题" width="860px">
+      <div class="mb-3 flex flex-wrap items-center gap-2">
         <el-input
           v-model="pickerQuery.keyword"
           placeholder="搜索题干"
-          class="w-64"
-          @keyup.enter="pickerQuery.page = 1; searchPicker()"
+          class="w-56"
+          @keyup.enter="applyPickerSearch"
         >
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
-        <el-select v-model="pickerQuery.status" placeholder="状态" clearable class="w-32" @change="pickerQuery.page = 1; searchPicker()">
+        <el-select v-model="pickerQuery.status" placeholder="状态" clearable class="w-28" @change="applyPickerSearch">
           <el-option label="已发布" value="published" />
           <el-option label="待审核" value="pending" />
         </el-select>
-        <el-button type="primary" @click="pickerQuery.page = 1; searchPicker()">搜索</el-button>
+        <el-select v-model="pickerQuery.type" placeholder="题型" clearable class="w-28" @change="applyPickerSearch">
+          <el-option label="单选题" value="single_choice" />
+          <el-option label="多选题" value="multiple_choice" />
+          <el-option label="判断题" value="true_false" />
+          <el-option label="填空题" value="fill_blank" />
+          <el-option label="解答题" value="essay" />
+        </el-select>
+        <el-select v-model="pickerQuery.difficulty_min" placeholder="最低难度" clearable class="w-28" @change="applyPickerSearch">
+          <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+        </el-select>
+        <el-select v-model="pickerQuery.difficulty_max" placeholder="最高难度" clearable class="w-28" @change="applyPickerSearch">
+          <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+        </el-select>
+      </div>
+      <div class="mb-3 grid grid-cols-2 gap-2">
+        <el-tree-select
+          v-model="pickerQuery.knowledge_point_ids"
+          :data="pickerKnowledgePoints"
+          :props="{ label: 'name', children: 'children' }"
+          node-key="id"
+          multiple
+          check-strictly
+          clearable
+          placeholder="知识点"
+          @change="applyPickerSearch"
+        />
+        <el-select v-model="pickerQuery.tag_ids" multiple clearable collapse-tags placeholder="标签" @change="applyPickerSearch">
+          <el-option v-for="tag in pickerTags" :key="tag.id" :label="tag.name" :value="tag.id" />
+        </el-select>
+        <div class="col-span-2 flex items-center justify-between">
+          <el-checkbox v-model="pickerQuery.include_sub_knowledge" @change="applyPickerSearch">包含子知识点</el-checkbox>
+          <el-button text size="small" @click="resetPickerFilters">重置筛选</el-button>
+        </div>
       </div>
 
       <TableSkeleton v-if="pickerLoading" :rows="6" :cols="6" />
@@ -1388,9 +1658,15 @@ function isUsed(row: QuestionBrief): boolean {
         <el-table-column label="题干" min-width="320">
           <template #default="{ row }">
             <RichContent :doc="row.stem_doc" compact class="stem-clamp text-sm" />
-            <div class="mt-0.5 flex gap-1">
+            <div class="mt-0.5 flex flex-wrap gap-1">
               <el-tag v-if="isUsed(row)" size="small" type="info" effect="plain">已入卷</el-tag>
               <el-tag size="small" effect="plain">{{ row.question_type_label }}</el-tag>
+              <el-tag v-for="kp in row.knowledge_points.slice(0, 3)" :key="kp.id" size="small" effect="plain">
+                {{ kp.name }}
+              </el-tag>
+              <el-tag v-for="tag in row.tags.slice(0, 3)" :key="tag.id" size="small" effect="plain">
+                {{ tag.name }}
+              </el-tag>
             </div>
           </template>
         </el-table-column>

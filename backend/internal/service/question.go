@@ -19,10 +19,12 @@ func NewQuestionService(repos *Repos) *QuestionService { return &QuestionService
 
 // ListQuery 列表查询参数（HTTP 层绑定后传入）。
 type ListQuery struct {
-	Keyword    string
-	Type       model.QuestionType
-	Status     model.QuestionStatus
-	Difficulty int
+	Keyword       string
+	Type          model.QuestionType
+	Status        model.QuestionStatus
+	Difficulty    int
+	DifficultyMin int
+	DifficultyMax int
 
 	// KnowledgePointIDs 支持多选（?knowledge_point_ids=1&knowledge_point_ids=2）。
 	// 仓储层本来就是按集合过滤的，多选只是把 HTTP 层的单值绑定补齐。
@@ -58,6 +60,8 @@ func (s *QuestionService) List(ctx context.Context, user *model.User, subjectID 
 		Type:              q.Type,
 		Status:            q.Status,
 		Difficulty:        q.Difficulty,
+		DifficultyMin:     q.DifficultyMin,
+		DifficultyMax:     q.DifficultyMax,
 		TagIDs:            q.TagIDs,
 		TagMatch:          q.TagMatch,
 		CreatedBy:         q.CreatedBy,

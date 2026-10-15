@@ -293,6 +293,8 @@ export interface QuestionQuery {
   type?: QuestionType | ''
   status?: QuestionStatus | ''
   difficulty?: number | null
+  difficulty_min?: number | null
+  difficulty_max?: number | null
   /**
    * 知识点多选。后端接受重复的 `knowledge_point_ids` 参数，
    * 单值的 `knowledge_point_id` 仍作为别名保留给老调用方。

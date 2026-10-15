@@ -327,13 +327,14 @@ func registerUserRoutes(g *gin.RouterGroup, d Deps) {
 }
 
 func registerPaperRoutes(g *gin.RouterGroup, d Deps) {
-	h := handler.NewPaperHandler(d.Papers)
+	h := handler.NewPaperHandler(d.Papers, d.Questions)
 
 	// 目录与试卷列表挂在学科下；按 id 的操作放在 /papers 顶层。
 	g.GET("/subjects/:subject_id/paper-folders", middleware.RequireAuth(), h.FolderTree)
 	g.POST("/subjects/:subject_id/paper-folders", middleware.RequireAuth(), h.CreateFolder)
 	g.GET("/subjects/:subject_id/papers", middleware.RequireAuth(), h.List)
 	g.POST("/subjects/:subject_id/papers", middleware.RequireAuth(), h.Create)
+	g.POST("/subjects/:subject_id/paper-plans/preview", middleware.RequireAuth(), h.PreviewPlan)
 
 	folders := g.Group("/paper-folders")
 	folders.Use(middleware.RequireAuth())

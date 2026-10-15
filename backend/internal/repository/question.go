@@ -216,6 +216,13 @@ func (r *QuestionRepo) buildQuery(ctx context.Context, f model.QuestionFilter) *
 	}
 	if f.Difficulty > 0 {
 		q = q.Where("questions.difficulty = ?", f.Difficulty)
+	} else {
+		if f.DifficultyMin > 0 {
+			q = q.Where("questions.difficulty >= ?", f.DifficultyMin)
+		}
+		if f.DifficultyMax > 0 {
+			q = q.Where("questions.difficulty <= ?", f.DifficultyMax)
+		}
 	}
 	if f.CreatedBy > 0 {
 		q = q.Where("questions.created_by = ?", f.CreatedBy)
