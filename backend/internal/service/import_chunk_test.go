@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
@@ -84,9 +85,9 @@ func TestAssignSourceNumbersUsesChunkRange(t *testing.T) {
 
 func TestPageQuestionRangesAlignToPages(t *testing.T) {
 	ranges := pageQuestionRanges([]string{
-		"1. 甲\n2. 乙\n10. 癸",
-		"11. 甲\n12. 乙\n17. 庚",
-		"18. 甲\n19. 乙",
+		"8. 辛\n2. 乙\n1. 甲\n10. 癸",
+		"17. 庚\n11. 甲\n12. 乙",
+		"19. 乙\n18. 甲",
 	}, 3)
 	if ranges[0].from != 1 || ranges[0].to != 10 {
 		t.Fatalf("第 1 页题号范围错误: %+v", ranges[0])
@@ -96,5 +97,38 @@ func TestPageQuestionRangesAlignToPages(t *testing.T) {
 	}
 	if got := rangeForPages(ranges, 0, 2); got.from != 1 || got.to != 17 {
 		t.Fatalf("两页合并题号范围错误: %+v", got)
+	}
+}
+
+func TestRepairOrphanSubquestionsCreatesMother(t *testing.T) {
+	questions := []ai.ExtractedQuestion{
+		{TempID: "q18", SourceNumber: 18, Stem: "18. 椭圆题"},
+		{TempID: "o1", SourceNumber: 18, Stem: "19(1) 求函数的最大值"},
+		{TempID: "o2", SourceNumber: 18, Stem: "19(2) 证明存在 y"},
+		{TempID: "o3", SourceNumber: 18, Stem: "19(3) 求 b 的最小值"},
+	}
+	got := repairOrphanSubquestions(questions, "18. 椭圆题\n19. 已知函数 f(x)=5cos x−cos5x\n(1) 求最大值\n(2) 证明\n", questionRange{from: 18, to: 18})
+	if len(got) != 5 {
+		t.Fatalf("母题应被插入，实际节点 %d", len(got))
+	}
+	parent := got[1]
+	if parent.TempID != "auto-q19" || parent.SourceNumber != 19 || !strings.Contains(parent.Stem, "5cos") {
+		t.Fatalf("自动母题错误: %+v", parent)
+	}
+	for i := 2; i < len(got); i++ {
+		if got[i].ParentTempID != parent.TempID {
+			t.Fatalf("孤立小题未挂到母题: %+v", got[i])
+		}
+	}
+}
+
+func TestFillPageRangeFallbackUsesPreviousPageAndRootCount(t *testing.T) {
+	got := fillPageRangeFallback(questionRange{}, questionRange{from: 1, to: 16}, 3)
+	if got.from != 17 || got.to != 19 {
+		t.Fatalf("缺页文本层时应回退到 17~19，实际 %+v", got)
+	}
+	got = fillPageRangeFallback(questionRange{from: 17, to: 18}, questionRange{}, 3)
+	if got.from != 17 || got.to != 19 {
+		t.Fatalf("页文本层上限偏小时应扩展到 17~19，实际 %+v", got)
 	}
 }

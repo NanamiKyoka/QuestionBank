@@ -1527,13 +1527,38 @@ func pageQuestionRanges(pageTexts []string, pageCount int) []questionRange {
 			if err != nil || n <= 0 {
 				continue
 			}
-			if out[i].from == 0 {
+			if out[i].from == 0 || n < out[i].from {
 				out[i].from = n
 			}
-			out[i].to = n
+			if n > out[i].to {
+				out[i].to = n
+			}
 		}
 	}
 	return out
+}
+
+func fillPageRangeFallback(r, prev questionRange, roots int) questionRange {
+	if r.from == 0 && prev.to > 0 {
+		r.from = prev.to + 1
+	}
+	if r.from > 0 && roots > 0 {
+		minTo := r.from + roots - 1
+		if r.to < minTo {
+			r.to = minTo
+		}
+	}
+	return r
+}
+
+func countRootQuestions(questions []ai.ExtractedQuestion) int {
+	n := 0
+	for i := range questions {
+		if questions[i].ParentTempID == "" {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *ImportService) attachPageFigures(pageData string, questions []ai.ExtractedQuestion) []string {
@@ -1572,6 +1597,107 @@ func appendUnique(base []string, extra ...string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+var subQuestionStartPattern = regexp.MustCompile(`^\s*(?:\d{1,3}\s*)?[（(]\s*(\d+)\s*[）)]`)
+
+func repairOrphanSubquestions(questions []ai.ExtractedQuestion, pageText string, r questionRange) []ai.ExtractedQuestion {
+	rootIndexes := make([]int, 0, len(questions))
+	for i := range questions {
+		if questions[i].ParentTempID == "" {
+			rootIndexes = append(rootIndexes, i)
+		}
+	}
+	for pos := 0; pos < len(rootIndexes); {
+		startPos := pos
+		group := []int{}
+		expect := 1
+		for pos < len(rootIndexes) {
+			idx := rootIndexes[pos]
+			m := subQuestionStartPattern.FindStringSubmatch(questions[idx].Stem)
+			if m == nil {
+				break
+			}
+			n, err := strconv.Atoi(m[1])
+			if err != nil || n != expect {
+				break
+			}
+			group = append(group, idx)
+			expect++
+			pos++
+		}
+		if len(group) < 2 {
+			pos = startPos + 1
+			continue
+		}
+
+		source := 0
+		for i := group[0] - 1; i >= 0; i-- {
+			if questions[i].ParentTempID == "" && questions[i].SourceNumber > 0 {
+				source = questions[i].SourceNumber + 1
+				break
+			}
+		}
+		if source <= 0 && r.from > 0 {
+			source = r.from
+		}
+		if source <= 0 {
+			source = questions[group[0]].SourceNumber
+		}
+		parentID := fmt.Sprintf("auto-q%d", source)
+		parentStem := questionStemFromPage(pageText, source)
+		if parentStem == "" {
+			parentStem = fmt.Sprintf("第%d题", source)
+		}
+		parent := ai.ExtractedQuestion{
+			TempID:       parentID,
+			SourceNumber: source,
+			QuestionType: "essay",
+			Stem:         parentStem,
+			Warnings:     []string{"母题公共题干由页面内容自动补齐，请核对"},
+		}
+		for _, idx := range group {
+			questions[idx].ParentTempID = parentID
+			questions[idx].SourceNumber = source
+		}
+		out := make([]ai.ExtractedQuestion, 0, len(questions)+1)
+		out = append(out, questions[:group[0]]...)
+		out = append(out, parent)
+		out = append(out, questions[group[0]:]...)
+		return repairOrphanSubquestions(out, pageText, r)
+	}
+	return questions
+}
+
+func questionStemFromPage(pageText string, number int) string {
+	if number <= 0 || strings.TrimSpace(pageText) == "" {
+		return ""
+	}
+	lines := strings.Split(pageText, "\n")
+	start := -1
+	prefix := regexp.MustCompile(`^\s*` + strconv.Itoa(number) + `\s*[.、．]\s*`)
+	for i, line := range lines {
+		if prefix.MatchString(strings.TrimSpace(line)) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if pageQuestionNumberPattern.MatchString(line) || subQuestionStartPattern.MatchString(line) {
+			end = i
+			break
+		}
+	}
+	text := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	if text == "" {
+		return fmt.Sprintf("第%d题", number)
+	}
+	return text
 }
 
 func rangeForPages(ranges []questionRange, index, perCall int) questionRange {
@@ -1643,6 +1769,11 @@ func (s *ImportService) extractPageBatches(
 			results[i], errs[i] = s.callPages(ctx, call, batches[i], answerData, answerCount, 0)
 			if errs[i] == nil {
 				r := rangeForPages(ranges, i, perCall)
+				prev := questionRange{}
+				if i > 0 {
+					prev = ranges[i-1]
+				}
+				r = fillPageRangeFallback(r, prev, countRootQuestions(results[i]))
 				assignSourceNumbersByRange(results[i], r.from, r.to)
 			}
 		}(i)
@@ -1659,6 +1790,11 @@ func (s *ImportService) extractPageBatches(
 			continue
 		}
 		if len(batches[i]) == 1 {
+			pageText := ""
+			if i < len(pageTexts) {
+				pageText = pageTexts[i]
+			}
+			results[i] = repairOrphanSubquestions(results[i], pageText, rangeForPages(ranges, i, perCall))
 			warnings = append(warnings, s.attachPageFigures(batches[i][0], results[i])...)
 		}
 		merged = append(merged, reidentify(len(merged), results[i])...)
