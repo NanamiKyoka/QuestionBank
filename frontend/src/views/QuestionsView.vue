@@ -28,6 +28,7 @@ import DifficultyStars from '@/components/ui/DifficultyStars.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
+import { useBackgroundTaskStore } from '@/stores/backgroundTasks'
 
 const route = useRoute()
 const router = useRouter()
@@ -281,84 +282,54 @@ async function onSaved(saved: QuestionDetail) {
 
 // ---- AI 解题 ----
 
-/**
- * 解题进度。
- *
- * 逐题循环是刻意的（见后端 schema.SolveRequest）：每道题各自落库，
- * 中途关页只丢没做到的那几道。代价是 N 次往返，所以进度必须可见——
- * 一个转了三分钟却不知道走到哪儿的圈，用户只会以为系统死了。
- */
-const solving = reactive({
-  active: false,
-  total: 0,
-  done: 0,
-  /** 用户点了停止：手头这道照常跑完，剩下的不再开始。 */
-  stopping: false,
-  /** 因为停止而没轮到的题数，收尾时要如实说出来。 */
-  skippedByStop: 0,
-  /** 纯文本回退（题干为空时用 #id 顶上）。 */
-  current: '',
-  /** 当前题的富文本题干，进度条上渲染它而不是 LaTeX 源码。 */
-  currentDoc: null as unknown,
-})
-
-/** 本次解题的结果清单，用于如实报告"哪几道没成"。 */
-const solveReport = ref<
-  { id: number; stem: string; doc: unknown; status: string; message: string }[]
->([])
+const background = useBackgroundTaskStore()
 
 /**
- * 停止批量解题。
- *
- * 只在两道题**之间**生效：正在跑的那一题照常跑完并落库。中途掐断请求
- * 会让服务端照样把答案写进去，而这边记不上账——进度条与题库从此对不上。
+ * 解题状态住在全局 store 里。页面组件只负责启动与展示，
+ * 因此切到其他页面再回来时，进度和本轮结果仍在。
  */
+const solveRun = computed(() => background.solveFor(subject.currentId))
+const solveActive = computed(() => solveRun.value?.status === 'processing')
+const solveReport = computed(() => solveRun.value?.report ?? [])
+
+/** 停止批量解题：只在两道题之间生效，手头这道照常跑完并落库。 */
 function stopSolve() {
-  if (solving.active) solving.stopping = true
+  const subjectId = subject.currentId
+  if (subjectId) background.requestStopSolve(subjectId)
 }
 
 /** 逐题调用；单题与批量共用同一条路径，行为不会两样。 */
-async function runSolve(rows: QuestionBrief[], overwrite: boolean) {
-  solving.active = true
-  solving.total = rows.length
-  solving.done = 0
-  solving.current = ''
-  try {
-    for (let i = 0; i < rows.length; i++) {
-      if (solving.stopping) {
-        solving.skippedByStop += rows.length - i
-        break
-      }
-      const row = rows[i]
-      solving.current = row.stem_text || `#${row.id}`
-      solving.currentDoc = row.stem_doc ?? null
-      try {
-        const res = await questionApi.solve(row.id, overwrite)
-        solveReport.value.push({
-          id: row.id,
-          stem: row.stem_text || `#${row.id}`,
-          doc: row.stem_doc,
-          status: res.status,
-          message: res.message || (res.answered_text ? `答案：${res.answered_text}` : ''),
-        })
-      } catch (err) {
-        // 服务端返回的错误（没配模型、没权限）已经由 http 层弹过提示，
-        // 这里只把它记进清单，让循环能继续走完剩下的题。
-        solveReport.value.push({
-          id: row.id,
-          stem: row.stem_text || `#${row.id}`,
-          doc: row.stem_doc,
-          status: 'failed',
-          message: err instanceof Error ? err.message : '请求失败',
-        })
-      } finally {
-        solving.done += 1
-      }
+async function runSolve(subjectId: number, rows: QuestionBrief[], overwrite: boolean) {
+  for (let i = 0; i < rows.length; i++) {
+    const run = background.solveFor(subjectId)
+    if (!run || run.status !== 'processing') break
+    if (run.stopping) {
+      background.addSkippedByStop(subjectId, rows.length - i)
+      break
     }
-  } finally {
-    solving.active = false
-    solving.current = ''
-    solving.currentDoc = null
+
+    const row = rows[i]
+    background.setSolveCurrent(subjectId, row.stem_text || `#${row.id}`, row.stem_doc ?? null)
+    try {
+      const res = await questionApi.solve(row.id, overwrite)
+      background.recordSolveResult(subjectId, {
+        id: row.id,
+        stem: row.stem_text || `#${row.id}`,
+        doc: row.stem_doc,
+        status: res.status,
+        message: res.message || (res.answered_text ? `答案：${res.answered_text}` : ''),
+      })
+    } catch (err) {
+      // 服务端返回的错误（没配模型、没权限）已经由 http 层弹过提示，
+      // 这里只把它记进清单，让循环能继续走完剩下的题。
+      background.recordSolveResult(subjectId, {
+        id: row.id,
+        stem: row.stem_text || `#${row.id}`,
+        doc: row.stem_doc,
+        status: 'failed',
+        message: err instanceof Error ? err.message : '请求失败',
+      })
+    }
   }
 }
 
@@ -367,23 +338,24 @@ async function runSolve(rows: QuestionBrief[], overwrite: boolean) {
  *
  * 两遍走法：先按"不覆盖"跑一遍，把已有答案的题目原样保下来；
  * 服务端如实回报有哪些被跳过，再由用户决定要不要覆盖。
- * 直接默认覆盖的话，一次误点就能把人工核对过的答案换成模型输出，
- * 而这件事在界面上是不可见的。
  */
 async function solveQuestions(targets: QuestionBrief[]) {
-  if (!targets.length || solving.active) return
-  solveReport.value = []
-  solving.stopping = false
-  solving.skippedByStop = 0
-  await runSolve(targets, false)
+  const subjectId = subject.currentId
+  if (!subjectId || !targets.length || solveActive.value) return
 
+  background.beginSolve(subjectId, targets.length)
+  await runSolve(subjectId, targets, false)
+
+  const run = background.solveFor(subjectId)
+  if (!run) return
   // 用户已经喊停：既不再问"要不要覆盖"，也不要有第二趟。
-  if (solving.stopping) {
-    await finishSolve()
+  if (run.stopping) {
+    background.finishSolve(subjectId, 'cancelled')
+    await finishSolve(subjectId)
     return
   }
 
-  const skipped = solveReport.value.filter((r) => r.status === 'skipped')
+  const skipped = run.report.filter((r) => r.status === 'skipped')
   if (skipped.length) {
     try {
       await ElMessageBox.confirm(
@@ -392,33 +364,42 @@ async function solveQuestions(targets: QuestionBrief[]) {
         { type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '保持原样' },
       )
     } catch {
-      // 选择"保持原样"：跳过就是结果，不必再问一次。
-      await finishSolve()
+      background.finishSolve(subjectId)
+      await finishSolve(subjectId)
       return
     }
     const ids = new Set(skipped.map((r) => r.id))
-    solveReport.value = solveReport.value.filter((r) => !ids.has(r.id))
+    background.removeSolveResults(subjectId, ids)
     await runSolve(
+      subjectId,
       targets.filter((t) => ids.has(t.id)),
       true,
     )
   }
-  await finishSolve()
+
+  background.finishSolve(subjectId)
+  await finishSolve(subjectId)
 }
 
 /** 收尾：刷新列表、同步打开着的详情，并把结果说清楚。 */
-async function finishSolve() {
-  const solved = solveReport.value.filter((r) => r.status === 'solved').length
-  const failed = solveReport.value.filter((r) => r.status === 'failed')
-  const kept = solveReport.value.filter((r) => r.status === 'skipped').length
-  const stopped = solving.skippedByStop
+async function finishSolve(subjectId: number) {
+  const run = background.solveFor(subjectId)
+  if (!run) return
+  const report = run.report
+  const solved = report.filter((r) => r.status === 'solved').length
+  const failed = report.filter((r) => r.status === 'failed')
+  const kept = report.filter((r) => r.status === 'skipped').length
+  const stopped = run.skippedByStop
 
-  await load()
-  if (detail.value && solveReport.value.some((r) => r.id === detail.value?.id)) {
-    await openDetail(detail.value.id)
+  // 用户可能已经切到别的页面：旧组件没必要继续刷新一份看不见的列表。
+  if (subject.currentId === subjectId) {
+    await load()
+    if (detail.value && report.some((r) => r.id === detail.value?.id)) {
+      await openDetail(detail.value.id)
+    }
   }
 
-  if (!solveReport.value.length) {
+  if (!report.length) {
     if (stopped) ElMessage.info(`已停止解题，剩余 ${stopped} 道未处理`)
     return
   }
@@ -427,12 +408,18 @@ async function finishSolve() {
   if (failed.length) parts.push(`${failed.length} 道未成功`)
   if (stopped) parts.push(`${stopped} 道未处理`)
   if (failed.length) {
-    ElMessage.warning(parts.join('，') + '，详见下方清单')
+    ElMessage.warning(parts.join('，') + '，详见题库页的解题清单')
   } else if (stopped) {
     ElMessage.warning(parts.join('，'))
   } else {
     ElMessage.success(parts.join('，'))
   }
+}
+
+/** 关闭本轮结果清单；关闭不影响已经写入题库的答案。 */
+function clearSolveReport() {
+  const subjectId = subject.currentId
+  if (subjectId && !solveActive.value) background.clearSolve(subjectId)
 }
 
 /** 列表按钮的解题入口：每次只解当前这一行。 */
@@ -904,7 +891,7 @@ function pad(n: number): string {
       <div v-if="selection.length" class="mt-2 flex flex-wrap items-center gap-2 border-t border-hairline pt-2">
         <span class="text-sm text-ink-muted">已选 {{ selection.length }} 项</span>
         <template v-if="canEdit">
-          <el-button size="small" type="primary" plain :loading="solving.active" @click="solveSelected">
+          <el-button size="small" type="primary" plain :loading="solveActive" @click="solveSelected">
             AI 解题（{{ selection.length }} 道）
           </el-button>
           <el-button size="small" @click="batchReview('submit')">批量提交审核</el-button>
@@ -932,47 +919,47 @@ function pad(n: number): string {
     </el-card>
 
     <!-- AI 解题：进度与结果 -->
-    <el-card v-if="solving.active || solveReport.length" shadow="never" class="mb-3">
+    <el-card v-if="solveActive || solveReport.length" shadow="never" class="mb-3">
       <template #header>
         <div class="flex items-center gap-2">
           <span class="text-sm font-medium">AI 解题</span>
-          <el-tag v-if="solving.active" size="small" type="primary" effect="plain">
-            {{ solving.done }}/{{ solving.total }}
+          <el-tag v-if="solveActive" size="small" type="primary" effect="plain">
+            {{ solveRun?.done ?? 0 }}/{{ solveRun?.total ?? 0 }}
           </el-tag>
           <el-button
-            v-if="!solving.active"
+            v-if="!solveActive"
             text
             size="small"
             class="ml-auto"
-            @click="solveReport = []"
+            @click="clearSolveReport"
           >
             关闭
           </el-button>
         </div>
       </template>
 
-      <div v-if="solving.active" class="text-xs text-ink-muted">
+      <div v-if="solveActive" class="text-xs text-ink-muted">
         <div class="flex items-center gap-2">
           <el-progress
             class="min-w-0 flex-1"
-            :percentage="solving.total ? Math.round((solving.done / solving.total) * 100) : 0"
+            :percentage="solveRun?.total ? Math.round((solveRun.done / solveRun.total) * 100) : 0"
             :stroke-width="10"
           />
-          <el-button size="small" :disabled="solving.stopping" @click="stopSolve">
-            {{ solving.stopping ? '正在收尾…' : '停止' }}
+          <el-button size="small" :disabled="solveRun?.stopping" @click="stopSolve">
+            {{ solveRun?.stopping ? '正在收尾…' : '停止' }}
           </el-button>
         </div>
         <div class="mt-1">
           正在解题：
           <RichContent
-            v-if="solving.currentDoc"
-            :doc="solving.currentDoc"
+            v-if="solveRun?.currentDoc"
+            :doc="solveRun.currentDoc"
             compact
             class="stem-clamp-1 inline"
           />
-          <span v-else>{{ solving.current || '准备中' }}</span>
+          <span v-else>{{ solveRun?.current || '准备中' }}</span>
           。每道题各自落库，可以中途离开。
-          <span v-if="solving.stopping">已请求停止，跑完手头这道就收工。</span>
+          <span v-if="solveRun?.stopping">已请求停止，跑完手头这道就收工。</span>
         </div>
       </div>
 
@@ -981,8 +968,8 @@ function pad(n: number): string {
           已写入 {{ solveReport.filter((r) => r.status === 'solved').length }} 道；
           保持原答案 {{ solveReport.filter((r) => r.status === 'skipped').length }} 道；
           未成功 {{ solveReport.filter((r) => r.status === 'failed').length }} 道<template
-            v-if="solving.skippedByStop"
-            >；未处理 {{ solving.skippedByStop }} 道</template
+            v-if="solveRun?.skippedByStop"
+            >；未处理 {{ solveRun?.skippedByStop ?? 0 }} 道</template
           >。
         </div>
         <div
@@ -1103,7 +1090,7 @@ function pad(n: number): string {
                   text
                   size="small"
                   type="primary"
-                  :disabled="solving.active"
+                  :disabled="solveActive"
                   @click="solveRow(row)"
                 >
                   解题

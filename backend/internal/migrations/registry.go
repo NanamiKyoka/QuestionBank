@@ -17,6 +17,7 @@ import (
 var all = []Migration{
 	baseline,
 	modelCapabilities,
+	importTaskIdempotency,
 }
 
 // All 返回迁移表的一份副本。
@@ -97,6 +98,45 @@ var modelCapabilities = Migration{
 	},
 
 	NoDownReason: "",
+}
+
+// importTaskIdempotency 为既有库补上提交幂等所需的列与唯一索引。
+//
+// v1 基线是在幂等键上线前冻结的，v2 只改了 AI 模型能力列。因此已经执行过
+// v1/v2 的数据库不会因为模型里新增 IdempotencyKey 而自动补列，而“仅录题”
+// 的成功路径会自动提交：提交请求一旦带上 idempotency_key，查询就报
+// “no such column”，前端只看到笼统的请求失败。
+//
+// 这里用 Migrator 先判断再加，而不是写 ALTER TABLE：
+//   - 空库由 v1 基线直接建出完整字段，v3 必须成为空操作；
+//   - 老库缺的是列，MySQL 与 SQLite 的 ALTER 语法又不相同；
+//   - 手工修复过的库可能只有列没有唯一索引，索引也要校验一次。
+var importTaskIdempotency = Migration{
+	Version: 3,
+	Name:    "import_task_idempotency_key",
+
+	Body: `为 import_tasks 补齐 idempotency_key 列与 (user_id, idempotency_key) 唯一索引。
+空库基线已含该结构，本迁移应成为空操作；v1/v2 老库则在这里补齐，
+避免“仅录题”自动入库时因列缺失返回 500。`,
+
+	Tables: []string{"import_tasks"},
+
+	NoDownReason: "幂等键在回滚期间产生的重复提交无法安全辨认；删除该列会让后续重试重新具备重复入库风险。",
+
+	Up: func(ctx context.Context, db *gorm.DB) error {
+		const field = "IdempotencyKey"
+		if !db.Migrator().HasColumn(&model.ImportTask{}, field) {
+			if err := db.Migrator().AddColumn(&model.ImportTask{}, field); err != nil {
+				return fmt.Errorf("补充 import_tasks.%s 失败: %w", field, err)
+			}
+		}
+		if !db.Migrator().HasIndex(&model.ImportTask{}, "idx_import_user_idem") {
+			if err := db.Migrator().CreateIndex(&model.ImportTask{}, "idx_import_user_idem"); err != nil {
+				return fmt.Errorf("建立 import_tasks 幂等唯一索引失败: %w", err)
+			}
+		}
+		return nil
+	},
 }
 
 // verifyBaselineTables 核对基线承诺的表确实都在。

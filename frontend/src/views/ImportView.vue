@@ -21,6 +21,7 @@ import ImportDraftEditDialog from '@/components/ImportDraftEditDialog.vue'
 import ImportFileDropzone from '@/components/ImportFileDropzone.vue'
 import ImportParseOptions from '@/components/ImportParseOptions.vue'
 import { useSubjectStore } from '@/stores/subject'
+import { useBackgroundTaskStore } from '@/stores/backgroundTasks'
 import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
@@ -39,9 +40,9 @@ import PageHeader from '@/components/ui/PageHeader.vue'
 const router = useRouter()
 const route = useRoute()
 const subject = useSubjectStore()
+const background = useBackgroundTaskStore()
 
 const tab = ref<'file' | 'text' | 'image'>('file')
-const loading = ref(false)
 const committing = ref(false)
 
 /**
@@ -52,12 +53,12 @@ const committing = ref(false)
  */
 const extractAbort = ref<AbortController | null>(null)
 
-/** 已等待秒数：转圈没有时间感，计时才能把"慢"和"卡死"区分开。 */
-const elapsed = ref(0)
-let elapsedTimer: ReturnType<typeof setInterval> | null = null
+/** 当前学科的识别任务。它住在跨页面 store 里，离开页面不会把它清掉。 */
+const importRun = computed(() => background.importFor(subject.currentId))
+const loading = computed(() => importRun.value?.status === 'processing')
 
 const elapsedLabel = computed(() => {
-  const s = elapsed.value
+  const s = importRun.value?.elapsedSec ?? 0
   if (s < 60) return `${s} 秒`
   return `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒`
 })
@@ -254,40 +255,38 @@ onMounted(async () => {
   await loadFromRoute()
 })
 
-// ---- 取消与离开拦截 ----
+// ---- 取消与后台续跑 ----
 
 /** 中止进行中的识别：请求断开，结果不再回传，本次不产生任何草稿。 */
 function cancelExtract() {
+  const subjectId = subject.currentId
+  if (subjectId) background.cancelImportRequest(subjectId)
   extractAbort.value?.abort()
 }
 
-/** 收掉句柄与计时：请求回来（或被取消）之后就不再算"进行中"。 */
-function endExtract() {
+/** 后台任务条上的任务名。 */
+function importTaskLabel(): string {
+  if (tab.value === 'file' && form.file) return form.file.name
+  if (tab.value === 'image') return `图片识别（${form.images.length} 张）`
+  return '粘贴文本'
+}
+
+/** 收掉本次页面的请求句柄；后台状态由 store 负责延续。 */
+function endExtract(subjectId: number) {
   extractAbort.value = null
-  if (elapsedTimer) {
-    clearInterval(elapsedTimer)
-    elapsedTimer = null
-  }
+  background.clearImportAbort(subjectId)
 }
 
 /**
- * 识别进行中离开页面要拦一下。
- *
- * 站内跳转和刷新不同——它是可以被准确告知代价的。说清楚"这次识别作废"，
- * 比一句没人能验证的"请不要关闭页面"有用得多。
+ * 切到其他页面时保留请求。任务进度已经写入全局 store，
+ * 这里只提示一次，让用户知道回来还能看到。
  */
-onBeforeRouteLeave(async () => {
-  if (!extractAbort.value) return true
-  try {
-    await ElMessageBox.confirm(
-      '正在识别中，离开会中断本次操作，已识别的内容不会保留。',
-      '识别尚未完成',
-      { type: 'warning', confirmButtonText: '中断并离开', cancelButtonText: '留在这里' },
-    )
-  } catch {
-    return false
+onBeforeRouteLeave(() => {
+  // 页面组件可以卸载，但请求和状态已经交给全局任务层。
+  // 这里不再中止；用户切到题库、总览等页面后仍能看到进度。
+  if (loading.value) {
+    ElMessage.info('识别会在后台继续，完成后可在导入历史查看')
   }
-  cancelExtract()
   return true
 })
 
@@ -301,8 +300,8 @@ function onBeforeUnload(event: BeforeUnloadEvent) {
 onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
-  cancelExtract()
-  if (elapsedTimer) clearInterval(elapsedTimer)
+  // 刻意不调用 cancelExtract：离开页面不是取消识别。
+  // 请求闭包会继续更新全局任务状态，返回页面时即可恢复展示。
 })
 
 // 同步抽取的草稿只活在这一页，不入库就等于白抽——离开前要说一声。
@@ -323,16 +322,11 @@ async function loadFromRoute() {
   const raw = route.query.task
   const id = Number(Array.isArray(raw) ? raw[0] : raw)
   if (!Number.isFinite(id) || id <= 0 || !subject.currentId) return
-  loading.value = true
-  try {
-    acceptResult(await importTaskApi.drafts(subject.currentId, id))
-    // 服务端存着这次任务的草稿：离开也不会丢，不值得拦。
-    draftsArePersisted.value = true
-    // 用 replace 清掉地址栏里的 task，否则刷新会再拉一次。
-    void router.replace({ name: 'import' })
-  } finally {
-    loading.value = false
-  }
+  acceptResult(await importTaskApi.drafts(subject.currentId, id))
+  // 服务端存着这次任务的草稿：离开也不会丢，不值得拦。
+  draftsArePersisted.value = true
+  // 用 replace 清掉地址栏里的 task，否则刷新会再拉一次。
+  void router.replace({ name: 'import' })
 }
 
 const loaded = ref(false)
@@ -594,7 +588,8 @@ const submitLabel = computed(() => {
 })
 
 async function extract() {
-  if (!subject.currentId) {
+  const subjectId = subject.currentId
+  if (!subjectId) {
     ElMessage.warning('请先选择学科')
     return
   }
@@ -614,18 +609,15 @@ async function extract() {
   const controller = new AbortController()
   extractAbort.value = controller
   const signal = controller.signal
-  loading.value = true
-  elapsed.value = 0
-  elapsedTimer = setInterval(() => {
-    elapsed.value += 1
-  }, 1000)
   commitResult.value = null
   const auto = form.mode === 'record' && autoCommit.value
+  background.beginImport(subjectId, importTaskLabel(), auto)
+  background.setImportAbort(subjectId, controller)
   try {
     const result =
       tab.value === 'file' && form.file
         ? await importTaskApi.upload(
-            subject.currentId,
+            subjectId,
             {
               file: form.file,
               method: form.method,
@@ -637,7 +629,7 @@ async function extract() {
             { signal },
           )
         : await importTaskApi.extract(
-            subject.currentId,
+            subjectId,
             {
               content: tab.value === 'text' ? form.content : '',
               images: tab.value === 'image' ? form.images : undefined,
@@ -647,24 +639,26 @@ async function extract() {
             },
             { signal },
           )
+    background.completeImport(subjectId, result.task_id, result.total)
     // 请求已经回来了：接下来是入库，那一步不该再显示"取消"。
-    endExtract()
+    endExtract(subjectId)
     // 自动入库时要吞掉"识别出 N 道题"这句：它读起来像"完事了"，
     // 而真正的结果紧接着由入库那一步给出。两句一起弹只会让人以为重复执行了。
     acceptResult(result, auto)
     if (auto && drafts.value.length) {
-      await doCommit(true)
+      await doCommit(true, subjectId)
     }
   } catch (err) {
     // 取消不是失败：交代清楚"什么都没留下"，也不把它抛成未处理的 rejection。
     if (err instanceof ApiError && err.isCancelled) {
+      background.cancelImport(subjectId)
       ElMessage.info('已取消识别，本次没有产生草稿')
       return
     }
+    background.failImport(subjectId, err instanceof Error ? err.message : '请求失败')
     throw err
   } finally {
-    loading.value = false
-    endExtract()
+    endExtract(subjectId)
   }
 }
 
@@ -822,8 +816,8 @@ function commit() {
  * 用户在自动流程里没有点过任何按钮，成功提示必须自己说清
  * "题现在在哪、下一步去哪儿"，否则"已入库 8 道题"这行字出现得毫无上下文。
  */
-async function doCommit(auto: boolean) {
-  if (!subject.currentId) return
+async function doCommit(auto: boolean, subjectId = subject.currentId) {
+  if (!subjectId) return
   if (selectedDrafts.value.length === 0) {
     ElMessage.warning('请至少选择一道题')
     return
@@ -851,7 +845,7 @@ async function doCommit(auto: boolean) {
       : []
 
     if (wholePaperEnabled.value) {
-      const preview = await importApi.previewPaper(subject.currentId, {
+      const preview = await importApi.previewPaper(subjectId, {
         drafts: selectedDrafts.value,
         outline: remapped,
       })
@@ -869,7 +863,7 @@ async function doCommit(auto: boolean) {
     }
 
     if (!commitIdempotencyKey.value) resetCommitKey()
-    const result = await importApi.commit(subject.currentId, {
+    const result = await importApi.commit(subjectId, {
       drafts: selectedDrafts.value,
       default_tag_ids: defaults.default_tag_ids,
       default_knowledge_point_ids: defaults.default_knowledge_point_ids,
@@ -942,6 +936,10 @@ function goToQuestions() {
   void router.push({ name: 'questions' })
 }
 
+function goToImportHistory() {
+  void router.push({ name: 'import-history' })
+}
+
 /** 打开整卷导入建出来的那份试卷，直接进编辑台。 */
 function goToPaper(paperId: number) {
   void router.push({ name: 'paper-editor', params: { id: String(paperId) } })
@@ -954,6 +952,46 @@ function goToPaper(paperId: number) {
       title="智能录题"
       description="上传试卷文件、截图或直接粘贴文本，模型识别题型与选项后逐题确认再入库。"
     />
+
+    <el-alert
+      v-if="loading"
+      type="info"
+      :closable="false"
+      show-icon
+      class="mb-3"
+      :title="`正在处理：${importRun?.label || '智能录题'}`"
+    >
+      <template #default>
+        已等待 {{ elapsedLabel }}。切换到其他页面不会中断识别；返回本页后仍会显示进度。
+        刷新或关闭浏览器会中断当前请求，完成后的记录可在导入历史中查看。
+      </template>
+    </el-alert>
+
+    <el-alert
+      v-else-if="importRun && !drafts.length && importRun.status !== 'processing'"
+      :type="importRun.status === 'completed' ? 'success' : importRun.status === 'failed' ? 'error' : 'info'"
+      show-icon
+      class="mb-3"
+      :title="
+        importRun.status === 'completed'
+          ? `上次识别已完成：${importRun.total ?? 0} 道`
+          : importRun.status === 'failed'
+            ? '上次识别失败'
+            : '上次识别已取消'
+      "
+      @close="background.clearImport(subject.currentId ?? 0)"
+    >
+      <template #default>
+        <template v-if="importRun.status === 'completed'">
+          切换页面没有中断识别；草稿已保存在服务端，可在导入历史中继续审核。
+          <el-button text type="primary" size="small" @click="goToImportHistory">查看导入历史 →</el-button>
+        </template>
+        <template v-else-if="importRun.status === 'failed'">
+          {{ importRun.error || '请求失败，请查看导入历史中的具体原因。' }}
+        </template>
+        <template v-else>本次没有产生草稿。</template>
+      </template>
+    </el-alert>
 
     <el-alert v-if="!canEdit" type="warning" :closable="false" show-icon>
       <template #title>你在当前学科没有录入权限</template>
@@ -1177,20 +1215,20 @@ function goToPaper(paperId: number) {
         <el-button
           type="primary"
           :loading="loading"
-          :disabled="!canEdit || !subject.currentId"
+          :disabled="!canEdit || !subject.currentId || loading"
           @click="extract"
         >
           <el-icon class="mr-1"><MagicStick /></el-icon>
           {{ submitLabel }}
         </el-button>
-        <el-button v-if="extractAbort" @click="cancelExtract">取消识别</el-button>
-        <span v-if="extractAbort" class="text-xs text-ink-subtle">
+        <el-button v-if="loading" @click="cancelExtract">取消识别</el-button>
+        <span v-if="loading" class="text-xs text-ink-subtle">
           {{ pdfIsSlow
             ? 'PDF 正在逐页渲染并交给模型识别，通常要几分钟。'
             : '正在解析，大文件可能需要几分钟。' }}
-          已等待 {{ elapsedLabel }}，随时可以取消。
+          已等待 {{ elapsedLabel }}；切换页面不会中断，也可以随时取消。
         </span>
-        <span v-else-if="!loading && submitHint" class="text-xs text-ink-subtle">{{ submitHint }}</span>
+        <span v-else-if="submitHint" class="text-xs text-ink-subtle">{{ submitHint }}</span>
       </div>
     </el-card>
 

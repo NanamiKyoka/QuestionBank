@@ -85,6 +85,47 @@ func TestUpIsIdempotent(t *testing.T) {
 	}
 }
 
+// v1/v2 老库缺幂等键列时，v3 必须补列与唯一索引。
+//
+// 这条回归对应真实故障：“仅录题”会自动提交，提交查询带上 idempotency_key
+// 后直接报 no such column；完整抽取不自动入库，所以只有该模式必现。
+func TestImportTaskIdempotencyMigrationRepairsV2Database(t *testing.T) {
+	gdb := newDB(t)
+	r, err := NewRunner(gdb)
+	if err != nil {
+		t.Fatalf("构造 runner 失败: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := r.Up(ctx, 2); err != nil {
+		t.Fatalf("先推进到 v2 失败: %v", err)
+	}
+	if !gdb.Migrator().HasColumn(&model.ImportTask{}, "IdempotencyKey") {
+		t.Fatal("前置条件错误：测试库应已有幂等键列")
+	}
+
+	// 模拟幂等键上线前已经完成 v1/v2 的旧库。
+	if err := gdb.Exec("DROP INDEX IF EXISTS idx_import_user_idem").Error; err != nil {
+		t.Fatalf("删除测试索引失败: %v", err)
+	}
+	if err := gdb.Exec("ALTER TABLE import_tasks DROP COLUMN idempotency_key").Error; err != nil {
+		t.Fatalf("删除测试列失败: %v", err)
+	}
+
+	applied, err := r.Up(ctx, 0)
+	if err != nil {
+		t.Fatalf("v3 修复旧库失败: %v", err)
+	}
+	if len(applied) != 1 || applied[0].Version != 3 {
+		t.Fatalf("应只执行 v3，实际 %+v", applied)
+	}
+	if !gdb.Migrator().HasColumn(&model.ImportTask{}, "IdempotencyKey") {
+		t.Fatal("v3 后应存在幂等键列")
+	}
+	if !gdb.Migrator().HasIndex(&model.ImportTask{}, "idx_import_user_idem") {
+		t.Fatal("v3 后应存在幂等唯一索引")
+	}
+}
+
 // 既有部署的库已经被裸 AutoMigrate 建过表，缺的是账本。
 // 这时必须**基线化**而不是去 CREATE TABLE 撞车。
 func TestUpBaselinesAnAlreadyAutoMigratedDatabase(t *testing.T) {

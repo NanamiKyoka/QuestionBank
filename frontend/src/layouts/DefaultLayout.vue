@@ -23,6 +23,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSubjectStore } from '@/stores/subject'
+import BackgroundTasksBar from '@/components/BackgroundTasksBar.vue'
 import QuestionBasketButton from '@/components/QuestionBasketButton.vue'
 import ThemeToggle from '@/components/ui/ThemeToggle.vue'
 import type { Permission } from '@/api/types'
@@ -232,6 +233,7 @@ async function onLogout() {
       </el-header>
 
       <el-main id="main-content" class="min-h-0 bg-surface-sunken">
+        <BackgroundTasksBar />
         <RouterView v-if="!subject.loading" />
         <div v-else class="flex h-full items-center justify-center">
           <el-icon class="is-loading" :size="28"><Loading /></el-icon>
