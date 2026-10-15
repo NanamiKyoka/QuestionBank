@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NanamiKyoka/questionmind/internal/ai"
 	"github.com/NanamiKyoka/questionmind/internal/infra/storage"
+	"github.com/NanamiKyoka/questionmind/internal/visionprep"
 )
 
 // 上传接口给的是 /media/xxx.jpg 这种**本服务自己的**相对路径，
@@ -164,4 +166,29 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func TestAttachPageFiguresSavesCrop(t *testing.T) {
+	dir := t.TempDir()
+	store := storage.NewLocal(dir, "/media")
+	dataURL, err := visionprep.ToDataURL(fakeJPEG(t, 100, 80))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &ImportService{storage: store}
+	questions := []ai.ExtractedQuestion{{
+		TempID:    "q15",
+		Stem:      "如图",
+		FigureBox: []float64{0.2, 0.2, 0.5, 0.5},
+	}}
+	warnings := svc.attachPageFigures(dataURL, questions)
+	if len(warnings) != 0 {
+		t.Fatalf("裁剪不应失败: %v", warnings)
+	}
+	if len(questions[0].FigureRefs) != 1 {
+		t.Fatalf("题图未挂载: %+v", questions[0])
+	}
+	if !store.Exists(questions[0].FigureRefs[0]) {
+		t.Fatalf("题图未落盘: %s", questions[0].FigureRefs[0])
+	}
 }

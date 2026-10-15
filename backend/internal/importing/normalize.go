@@ -39,8 +39,9 @@ type Draft struct {
 	StemMarkdown string     `json:"stem_markdown"`
 	StemText     string     `json:"stem_text"`
 
-	Options []model.Option   `json:"options"`
-	Answer  model.AnswerSpec `json:"answer"`
+	Options    []model.Option   `json:"options"`
+	FigureRefs []string         `json:"figure_refs,omitempty"`
+	Answer     model.AnswerSpec `json:"answer"`
 
 	Analysis model.JSON `json:"analysis"`
 	Solution model.JSON `json:"solution"`
@@ -132,7 +133,38 @@ func linkParents(drafts []Draft) {
 		if parent := drafts[parentIndex].SourceNumber; parent > 0 {
 			drafts[i].SourceNumber = parent
 		}
+		if len(drafts[parentIndex].FigureRefs) > 0 {
+			drafts[i].FigureRefs = appendUniqueStrings(drafts[i].FigureRefs, drafts[parentIndex].FigureRefs...)
+			applyFigureRefs(&drafts[i])
+		}
 	}
+}
+
+func appendUniqueStrings(base []string, extra ...string) []string {
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, s := range append(base, extra...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func applyFigureRefs(d *Draft) {
+	for _, ref := range d.FigureRefs {
+		if ref == "" || strings.Contains(d.StemMarkdown, ref) {
+			continue
+		}
+		if strings.TrimSpace(d.StemMarkdown) != "" {
+			d.StemMarkdown += "\n\n"
+		}
+		d.StemMarkdown += "![题图](" + ref + ")"
+	}
+	d.Stem = MarkdownToRichDoc(d.StemMarkdown)
+	d.StemText = plainTextOfRichDoc(d.Stem)
 }
 
 func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
@@ -151,6 +183,7 @@ func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
 		ParentTempID:    q.ParentTempID,
 		SourceNumber:    sourceNumber,
 		StemMarkdown:    strings.TrimSpace(q.Stem),
+		FigureRefs:      cleanStrings(q.FigureRefs),
 		Difficulty:      normalizeDifficulty(q.Difficulty),
 		KnowledgePoints: cleanStrings(q.KnowledgePoints),
 		Tags:            cleanStrings(q.Tags),
@@ -197,8 +230,7 @@ func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
 	d.TypeLabel = qtype.Label()
 
 	// 4) 题干与解析转富文本。
-	d.Stem = MarkdownToRichDoc(d.StemMarkdown)
-	d.StemText = plainTextOfRichDoc(d.Stem)
+	applyFigureRefs(&d)
 	d.Analysis = markdownOrNil(q.Analysis)
 
 	// 5) 答案：按题型解析。

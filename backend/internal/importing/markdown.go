@@ -33,6 +33,7 @@ const (
 	nodeTableCell   = "tableCell"
 	nodeTableHead   = "tableHeader"
 	nodeBlank       = "blank"
+	nodeImage       = "image"
 )
 
 // blankPattern 匹配连续 3 个及以上的下划线，视为一个填空位。
@@ -305,6 +306,16 @@ func parseInline(text string) []richNode {
 	runes := []rune(text)
 	for i := 0; i < len(runes); {
 		switch {
+		case strings.HasPrefix(string(runes[i:]), "!["):
+			if alt, src, end, ok := parseImageToken(runes, i); ok {
+				flush()
+				out = append(out, richNode{Type: nodeImage, Attrs: map[string]any{"src": src, "alt": alt}})
+				i = end
+				continue
+			}
+			buf.WriteRune(runes[i])
+			i++
+
 		case runes[i] == '$':
 			// 行内公式：匹配到下一个 $ 为止。
 			if end := indexRune(runes, i+1, '$'); end > i {
@@ -406,6 +417,26 @@ func splitBlanks(text string) []richNode {
 // CountBlanksInMarkdown 统计文本中的填空位数量，供归一化阶段校验答案个数。
 func CountBlanksInMarkdown(md string) int {
 	return len(blankPattern.FindAllString(md, -1))
+}
+
+func parseImageToken(runes []rune, start int) (alt, src string, end int, ok bool) {
+	if start+1 >= len(runes) || runes[start] != '!' || runes[start+1] != '[' {
+		return "", "", start, false
+	}
+	closeAlt := indexRune(runes, start+2, ']')
+	if closeAlt < 0 || closeAlt+1 >= len(runes) || runes[closeAlt+1] != '(' {
+		return "", "", start, false
+	}
+	closeSrc := indexRune(runes, closeAlt+2, ')')
+	if closeSrc < 0 {
+		return "", "", start, false
+	}
+	alt = strings.TrimSpace(string(runes[start+2 : closeAlt]))
+	src = strings.TrimSpace(string(runes[closeAlt+2 : closeSrc]))
+	if src == "" {
+		return "", "", start, false
+	}
+	return alt, src, closeSrc + 1, true
 }
 
 func indexRune(runes []rune, from int, target rune) int {

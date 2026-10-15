@@ -1536,6 +1536,44 @@ func pageQuestionRanges(pageTexts []string, pageCount int) []questionRange {
 	return out
 }
 
+func (s *ImportService) attachPageFigures(pageData string, questions []ai.ExtractedQuestion) []string {
+	if s.storage == nil || pageData == "" {
+		return nil
+	}
+	var warnings []string
+	for i := range questions {
+		q := &questions[i]
+		if q.ParentTempID != "" || len(q.FigureBox) < 4 {
+			continue
+		}
+		raw, err := visionprep.CropJPEG(pageData, q.FigureBox)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("题图裁剪失败：%v", err))
+			continue
+		}
+		saved, err := s.storage.Save(raw, "figure.jpg")
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("题图保存失败：%v", err))
+			continue
+		}
+		q.FigureRefs = appendUnique(q.FigureRefs, saved.URL)
+	}
+	return warnings
+}
+
+func appendUnique(base []string, extra ...string) []string {
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, s := range append(base, extra...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 func rangeForPages(ranges []questionRange, index, perCall int) questionRange {
 	if perCall <= 0 {
 		perCall = 1
@@ -1619,6 +1657,9 @@ func (s *ImportService) extractPageBatches(
 				i+1, len(batches), pageRangeLabel(i, perCall), humanizeAIError(errs[i])))
 			slog.Warn("PDF 页组抽取失败", "batch", i, "error", errs[i])
 			continue
+		}
+		if len(batches[i]) == 1 {
+			warnings = append(warnings, s.attachPageFigures(batches[i][0], results[i])...)
 		}
 		merged = append(merged, reidentify(len(merged), results[i])...)
 	}

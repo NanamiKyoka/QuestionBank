@@ -122,6 +122,8 @@ type ExtractedQuestion struct {
 	SourceNumber int               `json:"source_number,omitempty"`
 	Stem         string            `json:"stem"`
 	Options      []ExtractedOption `json:"options,omitempty"`
+	FigureBox    []float64         `json:"figure_box,omitempty"`
+	FigureRefs   []string          `json:"figure_refs,omitempty"`
 	Answer       string            `json:"answer,omitempty"`
 	Analysis     string            `json:"analysis,omitempty"`
 	Difficulty   int               `json:"difficulty,omitempty"`

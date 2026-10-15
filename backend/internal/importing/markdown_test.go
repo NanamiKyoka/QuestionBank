@@ -28,6 +28,8 @@ func renderDoc(raw model.JSON) string {
 				sb.WriteString("$" + attrStr(nodes[i].Attrs, "latex") + "$")
 			case nodeBlockMath:
 				sb.WriteString("$$" + attrStr(nodes[i].Attrs, "latex") + "$$")
+			case nodeImage:
+				sb.WriteString(attrStr(nodes[i].Attrs, "alt"))
 			default:
 				inline(nodes[i].Content)
 			}
@@ -260,5 +262,29 @@ func TestMarkdownDoesNotTreatDecimalsAsList(t *testing.T) {
 	got := renderDoc(MarkdownToRichDoc("圆周率约等于 3.14"))
 	if strings.Contains(got, "[item]") {
 		t.Fatalf("小数不应被识别为列表: %q", got)
+	}
+}
+
+func TestMarkdownConvertsImageToNode(t *testing.T) {
+	var doc richNode
+	if err := MarkdownToRichDoc("看图 ![函数图像](/media/f.png) 回答").Into(&doc); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	var walk func([]richNode)
+	walk = func(nodes []richNode) {
+		for _, n := range nodes {
+			if n.Type == nodeImage {
+				found = true
+				if attrStr(n.Attrs, "src") != "/media/f.png" || attrStr(n.Attrs, "alt") != "函数图像" {
+					t.Fatalf("图片节点属性错误: %+v", n.Attrs)
+				}
+			}
+			walk(n.Content)
+		}
+	}
+	walk(doc.Content)
+	if !found {
+		t.Fatal("Markdown 图片应转换为 image 节点")
 	}
 }

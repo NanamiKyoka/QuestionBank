@@ -135,3 +135,16 @@ func TestNormalizePrefersExplicitSourceNumber(t *testing.T) {
 		t.Fatalf("应优先使用分块回填的题号 15，实际 %d", drafts[0].SourceNumber)
 	}
 }
+
+func TestNormalizeChildInheritsParentFigures(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{
+		{TempID: "m15", QuestionType: "essay", Stem: "如图，在直三棱柱中。", FigureRefs: []string{"/media/figure.jpg"}},
+		{TempID: "c1", ParentTempID: "m15", QuestionType: "essay", Stem: "(1) 证明。"},
+	}, ModeRecord)
+	if len(drafts[0].FigureRefs) != 1 || len(drafts[1].FigureRefs) != 1 {
+		t.Fatalf("母题和子题都应保留题图引用: %+v / %+v", drafts[0].FigureRefs, drafts[1].FigureRefs)
+	}
+	if !strings.Contains(drafts[1].StemMarkdown, "/media/figure.jpg") {
+		t.Fatalf("子题题干未继承题图: %q", drafts[1].StemMarkdown)
+	}
+}
