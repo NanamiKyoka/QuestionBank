@@ -10,6 +10,8 @@ type Result struct {
 	Text string
 	// Pages 页数。
 	Pages int
+	// PageTexts 按页保留的正文，索引与 PDF 页码一致。
+	PageTexts []string
 	// Chars 有实际内容的字符数（去掉空白）。
 	Chars int
 	// Warnings 抽取过程中的提示。
@@ -40,9 +42,10 @@ func Extract(data []byte) (Result, error) {
 	}
 
 	var (
-		parts    []string
-		warnings []string
-		empty    int
+		parts     []string
+		pageTexts []string
+		warnings  []string
+		empty     int
 	)
 	for _, p := range pages {
 		text := pageText(runPage(doc, p))
@@ -51,6 +54,7 @@ func Extract(data []byte) (Result, error) {
 			empty++
 		}
 		parts = append(parts, text)
+		pageTexts = append(pageTexts, text)
 	}
 
 	if empty > 0 && empty == len(pages) {
@@ -61,10 +65,11 @@ func Extract(data []byte) (Result, error) {
 
 	joined := strings.Join(parts, "\n\n")
 	return Result{
-		Text:     joined,
-		Pages:    len(pages),
-		Chars:    countRunes(joined),
-		Warnings: warnings,
+		Text:      joined,
+		Pages:     len(pages),
+		PageTexts: pageTexts,
+		Chars:     countRunes(joined),
+		Warnings:  warnings,
 	}, nil
 }
 

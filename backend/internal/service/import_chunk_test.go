@@ -81,3 +81,20 @@ func TestAssignSourceNumbersUsesChunkRange(t *testing.T) {
 		t.Fatalf("子题不应单独占用题号，实际 %d", got[1].SourceNumber)
 	}
 }
+
+func TestPageQuestionRangesAlignToPages(t *testing.T) {
+	ranges := pageQuestionRanges([]string{
+		"1. 甲\n2. 乙\n10. 癸",
+		"11. 甲\n12. 乙\n17. 庚",
+		"18. 甲\n19. 乙",
+	}, 3)
+	if ranges[0].from != 1 || ranges[0].to != 10 {
+		t.Fatalf("第 1 页题号范围错误: %+v", ranges[0])
+	}
+	if got := rangeForPages(ranges, 1, 1); got.from != 11 || got.to != 17 {
+		t.Fatalf("第 2 页题号范围错误: %+v", got)
+	}
+	if got := rangeForPages(ranges, 0, 2); got.from != 1 || got.to != 17 {
+		t.Fatalf("两页合并题号范围错误: %+v", got)
+	}
+}

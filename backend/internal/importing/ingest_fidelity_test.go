@@ -15,12 +15,15 @@ func TestDocxPreservesEmbeddedImages(t *testing.T) {
 		docxMediaPrefix + "image1.png": "png-bytes",
 	})
 	saver := &countingSaver{}
-	got, warns, err := DocxToMarkdown(data, saver)
+	got, assets, warns, err := DocxToMarkdownWithAssets(data, saver)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(got, "![图片](/media/image1.png)") || saver.saved != 1 {
 		t.Fatalf("内嵌图片未保留: text=%q saved=%d warns=%v", got, saver.saved, warns)
+	}
+	if len(assets) != 1 || assets[0] != "/media/image1.png" {
+		t.Fatalf("内嵌图片未作为可发送资源返回: %v", assets)
 	}
 }
 

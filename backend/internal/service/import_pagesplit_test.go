@@ -66,7 +66,7 @@ func TestPageBatchesSplitByPage(t *testing.T) {
 	svc := &ImportService{}
 
 	got, warns, err := svc.extractPageBatches(
-		context.Background(), rec.call, pages(5), nil, 2, 0, nil)
+		context.Background(), rec.call, pages(5), nil, nil, 2, 0, nil)
 	if err != nil {
 		t.Fatalf("不应报错: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestPageBatchesReidentifyAcrossBatches(t *testing.T) {
 	svc := &ImportService{}
 
 	got, _, err := svc.extractPageBatches(
-		context.Background(), rec.call, pages(4), nil, 2, 0, nil)
+		context.Background(), rec.call, pages(4), nil, nil, 2, 0, nil)
 	if err != nil {
 		t.Fatalf("不应报错: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestPageBatchesAttachAnswerPagesToEveryCall(t *testing.T) {
 		return []ai.ExtractedQuestion{{TempID: "1", Stem: "x"}}, nil
 	}
 	_, _, err := svc.extractPageBatches(context.Background(), call,
-		pages(4), []string{"answer1", "answer2"}, 2, 2, nil)
+		pages(4), nil, []string{"answer1", "answer2"}, 2, 2, nil)
 	if err != nil {
 		t.Fatalf("不应报错: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestTruncatedBatchSplitsInHalf(t *testing.T) {
 	svc := &ImportService{}
 
 	got, _, err := svc.extractPageBatches(
-		context.Background(), rec.call, pages(3), nil, 3, 0, nil)
+		context.Background(), rec.call, pages(3), nil, nil, 3, 0, nil)
 	if err != nil {
 		t.Fatalf("拆半后应当成功: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestSinglePageTruncationSlicesTheImage(t *testing.T) {
 	}
 
 	got, _, err := svc.extractPageBatches(
-		context.Background(), call, []string{tallPageDataURL(t)}, nil, 1, 0, nil)
+		context.Background(), call, []string{tallPageDataURL(t)}, nil, nil, 1, 0, nil)
 	if err != nil {
 		t.Fatalf("切图后应当成功: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestTruncationAtSinglePageIsReported(t *testing.T) {
 	svc := &ImportService{}
 
 	_, _, err := svc.extractPageBatches(
-		context.Background(), rec.call, []string{"data:image/png;base64,!!not-base64!!"}, nil, 1, 0, nil)
+		context.Background(), rec.call, []string{"data:image/png;base64,!!not-base64!!"}, nil, nil, 1, 0, nil)
 	if err == nil {
 		t.Fatal("切图也失败时应当报错，而不是静默返回空结果")
 	}
@@ -226,7 +226,7 @@ func TestFailedBatchDoesNotDiscardOthers(t *testing.T) {
 	}
 
 	got, warns, err := svc.extractPageBatches(
-		context.Background(), call, pages(4), nil, 2, 0, nil)
+		context.Background(), call, pages(4), nil, nil, 2, 0, nil)
 	if err != nil {
 		t.Fatalf("部分失败不该整体报错: %v", err)
 	}

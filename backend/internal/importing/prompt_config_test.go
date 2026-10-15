@@ -445,3 +445,11 @@ func truncate(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+func TestBuildUserContentMentionsAssetImages(t *testing.T) {
+	got := BuildUserContent("题干见 ![图片](/media/a.png)", PromptOptions{
+		Mode:        ModeRecord,
+		AssetImages: 1,
+	})
+	mustContain(t, got, "文档内嵌图片", "保留图片引用")
+}

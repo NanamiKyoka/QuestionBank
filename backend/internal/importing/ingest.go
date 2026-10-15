@@ -50,6 +50,10 @@ type IngestResult struct {
 	// Warnings 摄取过程中的提示（如跳过了不支持的成员）。
 	Warnings []string
 
+	// PageTexts 与 PageImages 按页对齐的文本层内容；页图路径用来回填题号。
+	PageTexts []string
+	// AssetImages 文档内嵌图片的媒体地址（DOCX 等文本源）。
+	AssetImages []string
 	// PageImages 由 PDF 渲染出来的页图地址（已存入媒体库）。
 	//
 	// PDF 与其它格式的根本差别在这里：其它格式取到的是**文字**，
@@ -110,14 +114,15 @@ func Ingest(ctx context.Context, data []byte, filename string, images ImageSaver
 	case ext == ".pdf":
 		return ingestPDF(ctx, data, filename, images)
 	case ext == ".docx":
-		text, warn, err := DocxToMarkdown(data, images)
+		text, assets, warn, err := DocxToMarkdownWithAssets(data, images)
 		if err != nil {
 			return nil, err
 		}
 		return &IngestResult{
-			Docs:     []IngestedDoc{{Name: filename, Text: text}},
-			Files:    []string{filename},
-			Warnings: warn,
+			Docs:        []IngestedDoc{{Name: filename, Text: text}},
+			AssetImages: assets,
+			Files:       []string{filename},
+			Warnings:    warn,
 		}, nil
 	case ext == ".md" || ext == ".markdown" || ext == ".txt":
 		return &IngestResult{
@@ -190,8 +195,13 @@ func ingestPDF(ctx context.Context, data []byte, filename string, images ImageSa
 			if len(refs) > 0 {
 				warns = append(warns, fmt.Sprintf(
 					"PDF 已渲染为 %d 页图片交给模型识别（公式与几何图形按排版原样保留，比文字层准确得多）", len(refs)))
+				var pageTexts []string
+				if textRes, textErr := pdftext.Extract(data); textErr == nil {
+					pageTexts = textRes.PageTexts
+				}
 				return &IngestResult{
 					PageImages: refs,
+					PageTexts:  pageTexts,
 					Files:      []string{filename},
 					Warnings:   warns,
 				}, nil
@@ -375,9 +385,15 @@ const (
 // 不还原就只剩纯文本，按题号切题会整条失效。
 // 样式、批注、页眉页脚一概不取——录题只需要题目本身。
 func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
+	text, _, warns, err := DocxToMarkdownWithAssets(data, images)
+	return text, warns, err
+}
+
+// DocxToMarkdownWithAssets 在 DocxToMarkdown 基础上返回文档内嵌图片引用。
+func DocxToMarkdownWithAssets(data []byte, images ImageSaver) (string, []string, []string, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return "", nil, fmt.Errorf("Word 文档无法打开：%w", err)
+		return "", nil, nil, fmt.Errorf("Word 文档无法打开：%w", err)
 	}
 
 	var (
@@ -411,12 +427,12 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 		}
 	}
 	if docPart == nil {
-		return "", nil, fmt.Errorf("这不是一个 Word 文档（缺少 %s）", docxDocumentPart)
+		return "", nil, nil, fmt.Errorf("这不是一个 Word 文档（缺少 %s）", docxDocumentPart)
 	}
 
 	rc, err := docPart.Open()
 	if err != nil {
-		return "", nil, fmt.Errorf("Word 正文无法读取：%w", err)
+		return "", nil, nil, fmt.Errorf("Word 正文无法读取：%w", err)
 	}
 	defer rc.Close()
 
@@ -428,13 +444,14 @@ func DocxToMarkdown(data []byte, images ImageSaver) (string, []string, error) {
 		footnotes: parseDocxFootnotes(footnotes),
 		warns:     &warns,
 		imageRefs: map[string]string{},
+		assetSeen: map[string]bool{},
 		warned:    map[string]bool{},
 		numbering: newNumberingState(parseNumbering(numbering, styles)),
 	}
 	if err := p.parse(rc); err != nil {
-		return "", warns, fmt.Errorf("Word 正文解析失败：%w", err)
+		return "", nil, warns, fmt.Errorf("Word 正文解析失败：%w", err)
 	}
-	return p.out(), warns, nil
+	return p.out(), p.assets, warns, nil
 }
 
 // readDocxPart 读一个结构化部件，带上限兜底。
@@ -566,6 +583,8 @@ type docxParser struct {
 	para      strings.Builder
 	tables    []*docxTable
 	imageRefs map[string]string
+	assets    []string
+	assetSeen map[string]bool
 	warned    map[string]bool
 
 	styleID    string
@@ -699,6 +718,10 @@ func (p *docxParser) imageMarkdown(relID string) string {
 	}
 	ref := "![图片](" + url + ")"
 	p.imageRefs[relID] = ref
+	if !p.assetSeen[url] {
+		p.assetSeen[url] = true
+		p.assets = append(p.assets, url)
+	}
 	return ref
 }
 

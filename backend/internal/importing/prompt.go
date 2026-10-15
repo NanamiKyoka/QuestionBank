@@ -641,6 +641,8 @@ type PromptOptions struct {
 	// 有答案页时它只需要抄，比自己算快一个数量级。
 	// 仅 ModeExtract 会用到它：另两种模式不碰答案页。
 	AnswerImages int
+	// AssetImages 本次随材料提交的文档内嵌图片数量。
+	AssetImages int
 	// PageImages 本次随材料提交的**题目页**图片数量（PDF 渲染出来的页图）。
 	//
 	// 与 AnswerImages 必须分开：前者是"卷子长什么样"，要照着它识别题目；
@@ -746,6 +748,9 @@ func BuildUserContent(content string, opt PromptOptions) string {
 	if opt.PageImages > 0 {
 		b.WriteString(pageImagesHint(opt.PageImages))
 	}
+	if opt.AssetImages > 0 {
+		b.WriteString(assetImagesHint(opt.AssetImages))
+	}
 	return strings.TrimSpace(b.String())
 }
 
@@ -765,6 +770,16 @@ func pageImagesHint(n int) string {
 	b.WriteString("2. 题干、选项里的数字与公式必须与图上完全一致，公式写成 $...$（LaTeX）；\n")
 	b.WriteString("3. 题号、大题标题与题间说明文字用 outline 之外的文字原样带出，便于还原卷面；\n")
 	b.WriteString("4. 图上没有的题目不要编——宁可少抽，也不要凭空生成。\n")
+	return b.String()
+}
+
+// assetImagesHint 告诉模型文档内嵌图片与正文中的图片引用是对应的。
+func assetImagesHint(n int) string {
+	var b strings.Builder
+	b.WriteString("另外随本次材料附了 ")
+	b.WriteString(itoa(n))
+	b.WriteString(" 张文档内嵌图片，它们在正文中对应 ![图片](/media/...) 引用。\n")
+	b.WriteString("请结合图片内容理解题目，并在对应题干中原样保留图片引用；不要解释、删除或改写这些引用。")
 	return b.String()
 }
 

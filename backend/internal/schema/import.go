@@ -14,6 +14,10 @@ type ExtractRequest struct {
 	// Images 图片，形如 data:image/png;base64,xxx 。
 	// 支持多图：一道题可能配多张图。
 	Images []string `json:"images" binding:"max=10"`
+	// AssetImages 文档内嵌题目图片（DOCX 文本源）。
+	AssetImages []string `json:"asset_images,omitempty" binding:"max=50"`
+	// PageTexts 服务端内部使用：与 PageImages 对齐的 PDF 文本层。
+	PageTexts []string `json:"-"`
 	// PageImages 由 PDF 渲染出的页图地址。
 	//
 	// 与 Images 分开而不是混在一起是有意的：两者对模型的意义完全不同——

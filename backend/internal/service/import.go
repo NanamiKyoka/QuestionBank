@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,13 +132,16 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	}
 	// 页图（PDF 渲染出的题目页）与答案页一样都要求视觉模型，
 	// 所以"有没有图"这件事要把两者都算进去。
-	if content == "" && len(req.Images) == 0 && len(req.PageImages) == 0 {
+	if content == "" && len(req.Images) == 0 && len(req.PageImages) == 0 && len(req.AssetImages) == 0 {
 		return nil, apperr.New(apperr.CodeInvalidParam, "请提供待识别的文本或图片")
 	}
 	if err := validateImages(req.Images); err != nil {
 		return nil, err
 	}
 	if err := validateImages(req.PageImages); err != nil {
+		return nil, err
+	}
+	if err := validateImages(req.AssetImages); err != nil {
 		return nil, err
 	}
 
@@ -161,7 +166,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	var resolved *ResolvedModel
 	if method == importing.MethodAI {
 		modelType := model.AIModelText
-		if len(req.Images) > 0 || len(req.PageImages) > 0 {
+		if len(req.Images) > 0 || len(req.PageImages) > 0 || len(req.AssetImages) > 0 {
 			modelType = model.AIModelVision
 		}
 		r, err := s.aiConfig.Resolve(ctx, modelType)
@@ -203,7 +208,8 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 		// 混进这个计数会让提示词去"转写"题面，于是题目连同原答案一起被抽走。
 		AnswerImages: len(req.Images),
 		// 页图是题目页：告诉模型这是什么，否则它可能把 N 张图当成 N 道题。
-		PageImages: len(req.PageImages),
+		PageImages:  len(req.PageImages),
+		AssetImages: len(req.AssetImages),
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, extractTimeout)
@@ -251,7 +257,7 @@ func (s *ImportService) Extract(ctx context.Context, user *model.User, subjectID
 	} else {
 		// 页图与答案页分开传：前者按页切批，后者对整份卷子都要带。
 		extracted, chunkWarnings, err := s.extractWithModel(
-			callCtx, resolved, content, req.PageImages, req.Images, promptOpts)
+			callCtx, resolved, content, req.PageImages, req.PageTexts, req.Images, req.AssetImages, promptOpts)
 		elapsed := time.Since(started)
 
 		// 抽取失败也要留痕：用户会问"为什么没结果"。
@@ -396,11 +402,13 @@ func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID 
 	// res.Docs 是空的，取 [0] 会直接 panic。
 	if len(res.PageImages) > 0 {
 		resp, err := s.Extract(ctx, user, subjectID, &schema.ExtractRequest{
-			PageImages: res.PageImages,
-			Images:     answerImages,
-			Method:     method,
-			Mode:       mode,
-			Filename:   sourceLabel(name, len(source)),
+			PageImages:  res.PageImages,
+			PageTexts:   res.PageTexts,
+			AssetImages: res.AssetImages,
+			Images:      answerImages,
+			Method:      method,
+			Mode:        mode,
+			Filename:    sourceLabel(name, len(source)),
 		})
 		if err != nil {
 			return nil, err
@@ -429,11 +437,12 @@ func (s *ImportService) Upload(ctx context.Context, user *model.User, subjectID 
 	}
 
 	resp, err := s.Extract(ctx, user, subjectID, &schema.ExtractRequest{
-		Content:  content,
-		Images:   answerImages,
-		Method:   method,
-		Mode:     mode,
-		Filename: sourceLabel(name, len(source)),
+		Content:     content,
+		AssetImages: res.AssetImages,
+		Images:      answerImages,
+		Method:      method,
+		Mode:        mode,
+		Filename:    sourceLabel(name, len(source)),
 	})
 	if err != nil {
 		return nil, err
@@ -1364,7 +1373,7 @@ func (s *ImportService) extractWithModel(
 	ctx context.Context,
 	resolved *ResolvedModel,
 	content string,
-	pageImages, answerImages []string,
+	pageImages, pageTexts, answerImages, assetImages []string,
 	opts importing.PromptOptions,
 ) ([]ai.ExtractedQuestion, []string, error) {
 	// 图片必须先变成模型**真正拿得到**的形态再发出去。
@@ -1378,7 +1387,11 @@ func (s *ImportService) extractWithModel(
 	if err != nil {
 		return nil, nil, err
 	}
-	imgWarnings := append(append([]string(nil), pageWarn...), answerWarn...)
+	assetData, assetWarn, err := s.materializeImages(assetImages)
+	if err != nil {
+		return nil, nil, err
+	}
+	imgWarnings := append(append(append([]string(nil), pageWarn...), answerWarn...), assetWarn...)
 
 	// 每次调用都带上答案页：它是对**整份卷子**的一次性说明，
 	// 只给其中某几次调用等于告诉模型"这一段没有答案"。
@@ -1386,6 +1399,7 @@ func (s *ImportService) extractWithModel(
 		opts := opts
 		opts.PageImages = pageCount
 		opts.AnswerImages = answerCount
+		opts.AssetImages = len(assetData)
 		return resolved.Provider.ExtractQuestions(ctx, ai.ExtractRequest{
 			Model:  resolved.ModelName,
 			Prompt: importing.BuildSystemPrompt(opts),
@@ -1398,17 +1412,18 @@ func (s *ImportService) extractWithModel(
 
 	// ---- 页图路径：按页分批 ----
 	if len(pageData) > 0 {
-		return s.extractPageBatches(ctx, call, pageData, answerData, pagesPerCall, len(answerData), imgWarnings)
+		return s.extractPageBatches(ctx, call, pageData, answerData, pageTexts, pagesPerCall, len(answerData), imgWarnings)
 	}
 
 	// ---- 文本路径：按题数切块 ----
+	textImages := append(append([]string(nil), assetData...), answerData...)
 	chunks := importing.SplitForExtractionMode(content, 0, opts.Mode)
 	if len(chunks) <= 1 {
 		text := content
 		if len(chunks) == 1 {
 			text = chunks[0].Text
 		}
-		out, err := call(text, answerData, 0, len(answerData))
+		out, err := call(text, textImages, 0, len(answerData))
 		if len(chunks) == 1 {
 			assignSourceNumbers(chunks[0], out)
 		}
@@ -1431,7 +1446,7 @@ func (s *ImportService) extractWithModel(
 				return
 			}
 			defer func() { <-sem }()
-			results[i], errs[i] = call(chunks[i].Text, answerData, 0, len(answerData))
+			results[i], errs[i] = call(chunks[i].Text, textImages, 0, len(answerData))
 			if errs[i] == nil {
 				assignSourceNumbers(chunks[i], results[i])
 			}
@@ -1468,7 +1483,11 @@ func (s *ImportService) extractWithModel(
 }
 
 func assignSourceNumbers(chunk importing.Chunk, questions []ai.ExtractedQuestion) {
-	if chunk.QuestionFrom <= 0 || chunk.QuestionTo < chunk.QuestionFrom {
+	assignSourceNumbersByRange(questions, chunk.QuestionFrom, chunk.QuestionTo)
+}
+
+func assignSourceNumbersByRange(questions []ai.ExtractedQuestion, from, to int) {
+	if from <= 0 || to < from {
 		return
 	}
 	rootIndexes := make([]int, 0, len(questions))
@@ -1481,12 +1500,61 @@ func assignSourceNumbers(chunk importing.Chunk, questions []ai.ExtractedQuestion
 		return
 	}
 	for i, qIndex := range rootIndexes {
-		n := chunk.QuestionFrom + i
-		if n > chunk.QuestionTo {
-			n = chunk.QuestionTo
+		n := from + i
+		if n > to {
+			n = to
 		}
 		questions[qIndex].SourceNumber = n
 	}
+}
+
+var pageQuestionNumberPattern = regexp.MustCompile(`(?m)^\s*(\d{1,3})\s*[.、．]\s*\S`)
+
+type questionRange struct {
+	from int
+	to   int
+}
+
+func pageQuestionRanges(pageTexts []string, pageCount int) []questionRange {
+	if pageCount <= 0 {
+		return nil
+	}
+	out := make([]questionRange, pageCount)
+	for i := 0; i < pageCount && i < len(pageTexts); i++ {
+		matches := pageQuestionNumberPattern.FindAllStringSubmatch(pageTexts[i], -1)
+		for _, m := range matches {
+			n, err := strconv.Atoi(m[1])
+			if err != nil || n <= 0 {
+				continue
+			}
+			if out[i].from == 0 {
+				out[i].from = n
+			}
+			out[i].to = n
+		}
+	}
+	return out
+}
+
+func rangeForPages(ranges []questionRange, index, perCall int) questionRange {
+	if perCall <= 0 {
+		perCall = 1
+	}
+	var out questionRange
+	start := index * perCall
+	end := start + perCall
+	if end > len(ranges) {
+		end = len(ranges)
+	}
+	for i := start; i < end; i++ {
+		if ranges[i].from > 0 && out.from == 0 {
+			out.from = ranges[i].from
+		}
+		if ranges[i].to > 0 {
+			out.to = ranges[i].to
+		}
+	}
+	return out
 }
 
 // pageCall 一次页图调用的签名。
@@ -1508,7 +1576,7 @@ type pageCall func(text string, imgs []string, pageCount, answerCount int) ([]ai
 func (s *ImportService) extractPageBatches(
 	ctx context.Context,
 	call pageCall,
-	pageData, answerData []string,
+	pageData, answerData, pageTexts []string,
 	perCall, answerCount int,
 	warnings []string,
 ) ([]ai.ExtractedQuestion, []string, error) {
@@ -1517,6 +1585,7 @@ func (s *ImportService) extractPageBatches(
 	}
 	batches := chunkStrings(pageData, perCall)
 
+	ranges := pageQuestionRanges(pageTexts, len(pageData))
 	results := make([][]ai.ExtractedQuestion, len(batches))
 	errs := make([]error, len(batches))
 	var wg sync.WaitGroup
@@ -1534,6 +1603,10 @@ func (s *ImportService) extractPageBatches(
 			}
 			defer func() { <-sem }()
 			results[i], errs[i] = s.callPages(ctx, call, batches[i], answerData, answerCount, 0)
+			if errs[i] == nil {
+				r := rangeForPages(ranges, i, perCall)
+				assignSourceNumbersByRange(results[i], r.from, r.to)
+			}
 		}(i)
 	}
 	wg.Wait()
