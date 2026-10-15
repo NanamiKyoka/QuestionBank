@@ -273,6 +273,52 @@ export interface PaperVersionDetail {
   snapshot: PaperSnapshot
 }
 
+export interface PaperBlueprintSection {
+  key?: string
+  title?: string
+  count: number
+  question_type?: string
+  score?: number
+  difficulty_min?: number
+  difficulty_max?: number
+  difficulty_counts?: Record<number, number>
+  knowledge_point_ids?: number[]
+  include_sub_knowledge?: boolean
+  tag_ids?: number[]
+  source?: string
+}
+
+export interface PaperBlueprintRequest {
+  sections: PaperBlueprintSection[]
+  exclude_question_ids?: number[]
+  seed?: number
+}
+
+export interface PaperBlueprintItem extends QuestionBrief {
+  section_key: string
+  section_title: string
+  score: number
+  reason: string
+}
+
+export interface PaperBlueprintSectionResult {
+  key: string
+  title: string
+  requested: number
+  selected: number
+  missing: number
+  difficulty_counts: Record<number, number>
+}
+
+export interface PaperBlueprintResult {
+  requested: number
+  selected: number
+  missing: number
+  items: PaperBlueprintItem[]
+  sections: PaperBlueprintSectionResult[]
+  warnings: string[]
+}
+
 export interface PaperPlanRequest {
   count: number
   question_type?: string
@@ -407,6 +453,9 @@ async function appendQuestions(
 export const paperApi = {
   previewPlan: (subjectId: number, payload: PaperPlanRequest) =>
     post<PaperPlanResult>(`/subjects/${subjectId}/paper-plans/preview`, payload),
+
+  previewBlueprint: (subjectId: number, payload: PaperBlueprintRequest) =>
+    post<PaperBlueprintResult>(`/subjects/${subjectId}/paper-blueprints/preview`, payload),
   // ---- 目录 ----
   folderTree: (subjectId: number) =>
     get<PaperFolder[]>(`/subjects/${subjectId}/paper-folders`),

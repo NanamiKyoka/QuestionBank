@@ -17,6 +17,8 @@ import {
   type ModuleContent,
   type PaperQuestionProjection,
   type PaperPlanResult,
+  type PaperBlueprintResult,
+  type PaperBlueprintSection,
 } from '@/api/paper'
 import type { KnowledgePoint, QuestionBrief, Tag } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
@@ -107,6 +109,28 @@ const pickerHasMore = computed(() => pickerRows.value.length < pickerTotal.value
 const planVisible = ref(false)
 const planLoading = ref(false)
 const planResult = ref<PaperPlanResult | null>(null)
+
+const blueprintVisible = ref(false)
+const blueprintLoading = ref(false)
+const blueprintResult = ref<PaperBlueprintResult | null>(null)
+const blueprintSections = ref<PaperBlueprintSection[]>([])
+
+function newBlueprintSection(index: number): PaperBlueprintSection {
+  return {
+    key: globalThis.crypto?.randomUUID?.() ?? `section-${index + 1}`,
+    title: `第 ${index + 1} 组`,
+    count: 5,
+    question_type: '',
+    score: 0,
+    difficulty_min: 1,
+    difficulty_max: 5,
+    difficulty_counts: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+    knowledge_point_ids: [],
+    include_sub_knowledge: true,
+    tag_ids: [],
+    source: '',
+  }
+}
 const planForm = reactive({
   count: 5,
   question_type: '',
@@ -1192,6 +1216,81 @@ async function rerollPlan() {
   await previewPlan()
 }
 
+function openBlueprint() {
+  if (pendingChange.value) {
+    ElMessage.warning('请先处理当前待确认的改动')
+    return
+  }
+  if (!blueprintSections.value.length) blueprintSections.value = [newBlueprintSection(0)]
+  blueprintResult.value = null
+  blueprintVisible.value = true
+  void loadPickerOptions()
+}
+
+function addBlueprintSection() {
+  if (blueprintSections.value.length >= 10) return
+  blueprintSections.value.push(newBlueprintSection(blueprintSections.value.length))
+}
+
+function removeBlueprintSection(index: number) {
+  blueprintSections.value.splice(index, 1)
+}
+
+async function previewBlueprint() {
+  if (!paper.value || blueprintLoading.value) return
+  blueprintLoading.value = true
+  try {
+    blueprintResult.value = await paperApi.previewBlueprint(paper.value.subject_id, {
+      sections: blueprintSections.value.map((section) => ({
+        ...section,
+        count: Number(section.count) || 1,
+        score: Number(section.score) || 0,
+        knowledge_point_ids: section.knowledge_point_ids ?? [],
+        tag_ids: section.tag_ids ?? [],
+        difficulty_counts: section.difficulty_counts ?? {},
+      })),
+      exclude_question_ids: [...usedQuestionIds.value],
+    })
+  } finally {
+    blueprintLoading.value = false
+  }
+}
+
+async function stageBlueprintResult() {
+  const result = blueprintResult.value
+  if (!paper.value || !result?.items.length) return
+  const ids = result.items.map((item) => item.id)
+  const projections = await loadPaperQuestionProjections(ids)
+  const available = result.items.filter((item) => projections[item.id])
+  if (!available.length) {
+    ElMessage.error('蓝图预选题目已不可用，请重新生成')
+    return
+  }
+  const propsByQuestion: Record<number, Record<string, unknown>> = {}
+  for (const item of available) propsByQuestion[item.id] = item.score > 0 ? { score: item.score } : {}
+  const next = appendQuestionNodes(
+    nodes.value,
+    available.map((item) => item.id),
+    projections,
+    newID,
+    propsByQuestion,
+  )
+  const changes = diffPaperNodes(nodes.value, next, { ...questions.value, ...projections })
+  if (!changes.length) {
+    ElMessage.warning('没有产生可添加的题目')
+    return
+  }
+  pendingChange.value = {
+    tool: 'paper_blueprint',
+    summary: `命题蓝图：加入 ${available.length} 道题`,
+    nodes: next,
+    changes,
+    projections,
+  }
+  blueprintVisible.value = false
+  blueprintResult.value = null
+}
+
 function togglePick(row: QuestionBrief) {
   if (isUsed(row)) {
     ElMessage.warning('这道题已在试卷中')
@@ -1315,6 +1414,7 @@ function isUsed(row: QuestionBrief): boolean {
             <span class="text-sm font-medium">从题库选题</span>
             <div class="flex items-center gap-1">
               <el-button text size="small" @click="openPlan">智能补题</el-button>
+              <el-button text size="small" @click="openBlueprint">命题蓝图</el-button>
               <el-button text size="small" @click="pickerFiltersVisible = !pickerFiltersVisible">筛选</el-button>
               <el-button text size="small" aria-label="从题库添加题目" @click="openPicker">
                 <el-icon><Plus /></el-icon>
@@ -1502,7 +1602,147 @@ function isUsed(row: QuestionBrief): boolean {
       :title="paper?.title ?? ''"
     />
 
+    <el-dialog v-model="blueprintVisible" title="命题蓝图" width="920px">
+      <div class="mb-3 flex items-center justify-between">
+        <span class="text-sm text-ink-muted">按题型设置数量、分值、难度配额、知识点和标签。</span>
+        <el-button size="small" @click="addBlueprintSection">添加分组</el-button>
+      </div>
+
+      <el-form label-position="top" class="max-h-[55vh] overflow-y-auto pr-1">
+        <div
+          v-for="(section, index) in blueprintSections"
+          :key="section.key"
+          class="mb-3 rounded border border-hairline p-3"
+        >
+          <div class="mb-2 flex items-center gap-2">
+            <el-input v-model="section.title" placeholder="分组标题" class="w-48" />
+            <el-button
+              v-if="blueprintSections.length > 1"
+              text
+              type="danger"
+              size="small"
+              class="ml-auto"
+              @click="removeBlueprintSection(index)"
+            >
+              删除分组
+            </el-button>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <el-form-item label="数量">
+              <el-input-number v-model="section.count" :min="1" :max="100" class="w-full" />
+            </el-form-item>
+            <el-form-item label="题型">
+              <el-select v-model="section.question_type" clearable class="w-full">
+                <el-option label="单选题" value="single_choice" />
+                <el-option label="多选题" value="multiple_choice" />
+                <el-option label="判断题" value="true_false" />
+                <el-option label="填空题" value="fill_blank" />
+                <el-option label="解答题" value="essay" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="每题分值">
+              <el-input-number v-model="section.score" :min="0" :max="1000" :step="0.5" class="w-full" />
+            </el-form-item>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <el-form-item label="最低难度">
+              <el-select v-model="section.difficulty_min" class="w-full">
+                <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="最高难度">
+              <el-select v-model="section.difficulty_max" class="w-full">
+                <el-option v-for="n in 5" :key="n" :label="`难度 ${n}`" :value="n" />
+              </el-select>
+            </el-form-item>
+          </div>
+
+          <el-form-item label="难度配额">
+            <div class="grid grid-cols-5 gap-2">
+              <el-input-number
+                v-for="n in 5"
+                :key="n"
+                v-model="section.difficulty_counts![n]"
+                :min="0"
+                :max="section.count"
+                size="small"
+                class="w-full"
+              />
+            </div>
+          </el-form-item>
+
+          <div class="grid grid-cols-2 gap-2">
+            <el-form-item label="知识点">
+              <el-tree-select
+                v-model="section.knowledge_point_ids"
+                :data="pickerKnowledgePoints"
+                :props="{ label: 'name', children: 'children' }"
+                node-key="id"
+                multiple
+                check-strictly
+                clearable
+                class="w-full"
+              />
+            </el-form-item>
+            <el-form-item label="标签">
+              <el-select v-model="section.tag_ids" multiple clearable collapse-tags class="w-full">
+                <el-option v-for="tag in pickerTags" :key="tag.id" :label="tag.name" :value="tag.id" />
+              </el-select>
+            </el-form-item>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <el-form-item label="来源">
+              <el-input v-model="section.source" placeholder="可留空" />
+            </el-form-item>
+            <el-form-item label="知识点范围">
+              <el-checkbox v-model="section.include_sub_knowledge">包含子知识点</el-checkbox>
+            </el-form-item>
+          </div>
+        </div>
+      </el-form>
+
+      <el-alert
+        v-if="blueprintResult"
+        :type="blueprintResult.missing > 0 ? 'warning' : 'success'"
+        :closable="false"
+        show-icon
+        class="mb-3"
+      >
+        <template #title>
+          需要 {{ blueprintResult.requested }} 道，选中 {{ blueprintResult.selected }} 道，缺少 {{ blueprintResult.missing }} 道
+        </template>
+        <div v-if="blueprintResult.warnings.length" class="mt-1 text-xs">
+          {{ blueprintResult.warnings.join('；') }}
+        </div>
+      </el-alert>
+
+      <div v-if="blueprintResult?.items.length" class="max-h-72 overflow-y-auto rounded border border-hairline">
+        <div v-for="item in blueprintResult.items" :key="item.id" class="border-b border-hairline p-2 last:border-b-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <el-tag size="small" effect="plain">{{ item.section_title }}</el-tag>
+            <el-tag size="small" effect="plain">{{ item.question_type_label }}</el-tag>
+            <DifficultyStars :level="item.difficulty" />
+            <span v-if="item.score > 0" class="text-xs text-ink-subtle">{{ item.score }} 分</span>
+            <span class="text-xs text-ink-subtle">{{ item.reason }}</span>
+          </div>
+          <RichContent :doc="item.stem_doc" compact class="mt-1 text-sm" />
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="blueprintVisible = false">取消</el-button>
+        <el-button type="primary" :loading="blueprintLoading" @click="previewBlueprint">生成预选</el-button>
+        <el-button type="success" :disabled="!blueprintResult?.items.length" @click="stageBlueprintResult">
+          预览并加入
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="planVisible" title="智能补题" width="760px">
+      <el-form label-position="top">
       <div class="grid grid-cols-2 gap-3">
         <el-form-item label="数量">
           <el-input-number v-model="planForm.count" :min="1" :max="100" class="w-full" />
@@ -1550,6 +1790,7 @@ function isUsed(row: QuestionBrief): boolean {
           <el-checkbox v-model="planForm.include_sub_knowledge">包含子知识点</el-checkbox>
         </el-form-item>
       </div>
+      </el-form>
 
       <el-alert
         v-if="planResult"

@@ -335,6 +335,7 @@ func registerPaperRoutes(g *gin.RouterGroup, d Deps) {
 	g.GET("/subjects/:subject_id/papers", middleware.RequireAuth(), h.List)
 	g.POST("/subjects/:subject_id/papers", middleware.RequireAuth(), h.Create)
 	g.POST("/subjects/:subject_id/paper-plans/preview", middleware.RequireAuth(), h.PreviewPlan)
+	g.POST("/subjects/:subject_id/paper-blueprints/preview", middleware.RequireAuth(), h.PreviewBlueprint)
 
 	folders := g.Group("/paper-folders")
 	folders.Use(middleware.RequireAuth())

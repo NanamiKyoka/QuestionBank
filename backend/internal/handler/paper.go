@@ -312,6 +312,28 @@ func (h *PaperHandler) PreviewPlan(c *gin.Context) {
 	response.OK(c, res)
 }
 
+// PreviewBlueprint POST /subjects/:subject_id/paper-blueprints/preview
+func (h *PaperHandler) PreviewBlueprint(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	subjectID, ok := parseID(c, "subject_id")
+	if !ok {
+		return
+	}
+	var req schema.PaperBlueprintRequest
+	if !bind(c, &req) {
+		return
+	}
+	res, err := h.questions.PreviewBlueprint(c.Request.Context(), user, subjectID, &req)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
 // QuestionRevisions GET /papers/:id/question-revisions
 func (h *PaperHandler) QuestionRevisions(c *gin.Context) {
 	user, ok := middleware.MustUser(c)

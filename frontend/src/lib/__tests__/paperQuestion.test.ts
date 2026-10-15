@@ -11,6 +11,12 @@ describe('paperQuestion', () => {
     const node = createQuestionNode('node-1', 42, 7)
     expect(node.node_type).toBe('question')
     expect(node.content).toEqual({ question_id: 42, content_revision: 7 })
+    expect(node.props).toEqual({})
+  })
+
+  it('carries blueprint score into node props', () => {
+    const node = createQuestionNode('node-1', 42, 7, { score: 2.5 })
+    expect(node.props).toEqual({ score: 2.5 })
   })
 
   it('merges newly loaded projections without dropping existing ones', () => {

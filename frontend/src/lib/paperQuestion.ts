@@ -41,7 +41,12 @@ export function mergeQuestionProjections(
   return { ...existing, ...additions }
 }
 
-export function createQuestionNode(id: string, questionID: number, contentRevision: number): PaperNode {
+export function createQuestionNode(
+  id: string,
+  questionID: number,
+  contentRevision: number,
+  props: Record<string, unknown> = {},
+): PaperNode {
   const content: QuestionRef = { question_id: questionID, content_revision: contentRevision }
   return {
     id,
@@ -50,7 +55,7 @@ export function createQuestionNode(id: string, questionID: number, contentRevisi
     node_kind: 'block',
     node_type: 'question',
     content,
-    props: {},
+    props,
     schema_version: 1,
     source_question_node_id: null,
     anchor_before_node_id: null,
@@ -62,6 +67,7 @@ export function appendQuestionNodes(
   questionIDs: number[],
   projections: Record<number, PaperQuestionProjection>,
   nextID: () => string,
+  propsByQuestion: Record<number, Record<string, unknown>> = {},
 ): PaperNode[] {
   const roots = before
     .filter((node) => node.parent_id === null && node.node_kind !== 'reference')
@@ -77,7 +83,7 @@ export function appendQuestionNodes(
     let nodeID = nextID()
     while (taken.has(nodeID)) nodeID = nextID()
     taken.add(nodeID)
-    additions.push(createQuestionNode(nodeID, id, projection.content_revision))
+    additions.push(createQuestionNode(nodeID, id, projection.content_revision, propsByQuestion[id]))
   }
   const top = [...roots.slice(0, at), ...additions, ...roots.slice(at)]
   const topIDs = new Set(top.map((node) => node.id))
