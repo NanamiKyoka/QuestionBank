@@ -55,6 +55,7 @@ const emit = defineEmits<{
 }>()
 
 const state = createPaperCanvasState()
+let dragDom: HTMLElement | null = null
 
 /** 转换丢掉的节点，供父组件提示。 */
 const dropped = ref<{ id: string; type: string }[]>([])
@@ -165,8 +166,6 @@ function sameNodes(a: PaperNode[], b: PaperNode[]): boolean {
   if (a.length !== b.length) return false
   return JSON.stringify(a) === JSON.stringify(b)
 }
-
-let dragDom: HTMLElement | null = null
 
 function clearDropMarkers() {
   dragDom?.querySelectorAll('.qm-drop-before, .qm-drop-after').forEach((node) => {
