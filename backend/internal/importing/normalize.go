@@ -99,24 +99,38 @@ func Normalize(extracted []ai.ExtractedQuestion, mode Mode) []Draft {
 // 指向批次外的母题（模型只抽出了小问、没抽出母题）和自引用同理：入库时不可能
 // 建立父子关系，与其静默按独立题处理，不如在这里就明确告诉用户"这一组没保住"。
 func linkParents(drafts []Draft) {
-	ids := make(map[string]bool, len(drafts))
+	ids := make(map[string]int, len(drafts))
 	for i := range drafts {
 		drafts[i].TempID = strings.TrimSpace(drafts[i].TempID)
 		drafts[i].ParentTempID = strings.TrimSpace(drafts[i].ParentTempID)
 		if drafts[i].TempID != "" {
-			ids[drafts[i].TempID] = true
+			if _, exists := ids[drafts[i].TempID]; !exists {
+				ids[drafts[i].TempID] = i
+			}
 		}
 	}
 	for i := range drafts {
-		switch {
-		case drafts[i].ParentTempID == "":
-		case drafts[i].ParentTempID == drafts[i].TempID:
+		if drafts[i].ParentTempID == "" {
+			continue
+		}
+		if drafts[i].ParentTempID == drafts[i].TempID {
 			drafts[i].ParentTempID = ""
 			drafts[i].Warnings = append(drafts[i].Warnings, "母题引用指向自身，将作为独立题目导入")
-		case !ids[drafts[i].ParentTempID]:
+			continue
+		}
+		if _, ok := ids[drafts[i].ParentTempID]; !ok {
 			drafts[i].ParentTempID = ""
 			drafts[i].Warnings = append(drafts[i].Warnings,
 				"本次抽取结果中没有对应母题，该小问将作为独立题目导入")
+		}
+	}
+	for i := range drafts {
+		parentIndex, ok := ids[drafts[i].ParentTempID]
+		if !ok || parentIndex == i {
+			continue
+		}
+		if parent := drafts[parentIndex].SourceNumber; parent > 0 {
+			drafts[i].SourceNumber = parent
 		}
 	}
 }

@@ -596,14 +596,22 @@ func leadingInt(s string) int {
 	return n
 }
 
-// stemLeadingNumberPattern 题干正文开头的题号（"【题目】3. 下列……"）。
-// captureSourceNumber 取题干正文开头的题号。
+// embeddedQuestionNumberPattern 题干前置材料标题后的题号。
+var embeddedQuestionNumberPattern = regexp.MustCompile(`(?:^|[\s])([1-9]\d{0,2})\s*[.、．]\s*[^\d\s]`)
+
+// captureSourceNumber 取题干开头的题号；被材料标题包裹时继续向前找。
 func captureSourceNumber(stem string) int {
-	n, _, ok := splitLeadingNumber(stem)
-	if !ok {
-		return 0
+	if n, _, ok := splitLeadingNumber(stem); ok {
+		return n
 	}
-	return n
+	runes := []rune(stem)
+	if len(runes) > 300 {
+		stem = string(runes[:300])
+	}
+	if m := embeddedQuestionNumberPattern.FindStringSubmatch(stem); m != nil {
+		return leadingInt(m[1])
+	}
+	return 0
 }
 
 // ---- 题块 → 草稿 ----

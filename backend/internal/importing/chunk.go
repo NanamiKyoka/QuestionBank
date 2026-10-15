@@ -73,6 +73,9 @@ var (
 	//
 	// 不含"（1）"形式，理由见上。
 	questionStartRe = regexp.MustCompile(`^\s{0,8}\d{1,3}\s*[.、．]`)
+
+	// 阅读/材料组标题：一、阅读下的“（一）阅读 I”等。
+	groupStartRe = regexp.MustCompile(`^\s*[（(]\s*[一二三四五六七八九十]+\s*[）)]\s*(?:阅读|现代文阅读|文言文阅读|古代诗歌阅读|语言文字运用|写作)`)
 )
 
 // Chunk 是一段待抽取的内容，外加它所属的大题标题。
@@ -81,6 +84,8 @@ type Chunk struct {
 	Text string
 	// Heading 是本段所属的大题标题；空串表示没有。
 	Heading string
+	// Group 是本段所属的阅读/材料组标题；空串表示没有。
+	Group string
 	// Label 面向用户的短描述，用于失败时说明"缺了哪一段"。
 	Label string
 }
@@ -90,6 +95,10 @@ type Chunk struct {
 // targetChunks <= 0 表示由长度自行决定块数。返回的块保持原顺序，
 // 拼接起来覆盖全部内容（刻意丢弃的空行除外）。
 func SplitForExtraction(content string, targetChunks int) []Chunk {
+	return splitForExtraction(content, targetChunks)
+}
+
+func splitForExtraction(content string, targetChunks int) []Chunk {
 	lines := splitLines(content)
 	if len(lines) == 0 {
 		return nil
@@ -117,6 +126,8 @@ func SplitForExtraction(content string, targetChunks int) []Chunk {
 		// 生效的那个（块中途换标题是常事，但块头那一条才是上下文）。
 		heading      string
 		chunkHeading string
+		group        string
+		chunkGroup   string
 	)
 
 	flush := func() {
@@ -133,14 +144,31 @@ func SplitForExtraction(content string, targetChunks int) []Chunk {
 		if chunkHeading != "" {
 			text = "（本段属于：" + chunkHeading + "）\n" + body
 		}
-		out = append(out, Chunk{Text: text, Heading: chunkHeading, Label: DescribeChunk(body)})
+		if chunkGroup != "" && chunkGroup != chunkHeading {
+			text = "（本段材料组：" + chunkGroup + "）\n" + text
+		}
+		out = append(out, Chunk{Text: text, Heading: chunkHeading, Group: chunkGroup, Label: DescribeChunk(body)})
 		chunkHeading = ""
+		chunkGroup = ""
 	}
 
 	for _, line := range lines {
 		isSection := sectionStartRe.MatchString(line)
+		isGroup := groupStartRe.MatchString(line)
+		if (isSection || isGroup) && len(cur) > 0 && curQ > 0 {
+			flush()
+		}
 		if isSection {
 			heading = strings.TrimSpace(line)
+			if !isGroup {
+				group = ""
+			}
+		}
+		if isGroup {
+			group = strings.TrimSpace(line)
+			if curQ == 0 {
+				chunkGroup = group
+			}
 		}
 
 		// 切点：站在新题开头，且这一块已经够大了。
@@ -155,6 +183,7 @@ func SplitForExtraction(content string, targetChunks int) []Chunk {
 		}
 		if len(cur) == 0 {
 			chunkHeading = heading
+			chunkGroup = group
 		}
 		if startsQuestion {
 			curQ++
@@ -204,13 +233,9 @@ func DescribeChunk(body string) string {
 		if line == "" {
 			continue // 注释行、空行都跳过，继续找第一行真正的内容
 		}
-		if strings.HasPrefix(line, "（本段属于：") {
-			if i := strings.IndexRune(line, '）'); i >= 0 {
-				line = strings.TrimSpace(line[i+len("）"):])
-			}
-			if line == "" {
-				continue // 前缀本身就占了一整行，继续找下一行真正的内容
-			}
+		line = stripChunkPrefix(line)
+		if line == "" {
+			continue
 		}
 		if r := []rune(line); len(r) > maxChunkLabel {
 			return string(r[:maxChunkLabel]) + "…"
@@ -223,6 +248,18 @@ func DescribeChunk(body string) string {
 // maxChunkLabel 失败说明里显示多少字。
 // 再长就该进详情页看了——一整行塞进提示框会把真正的原因挤出去。
 const maxChunkLabel = 40
+
+func stripChunkPrefix(line string) string {
+	for _, prefix := range []string{"（本段属于：", "（本段材料组："} {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		if i := strings.IndexRune(line, '）'); i >= 0 {
+			line = strings.TrimSpace(line[i+len("）"):])
+		}
+	}
+	return line
+}
 
 // stripLeadingNoise 去掉一整行或行首的 HTML 注释。
 func stripLeadingNoise(s string) string {

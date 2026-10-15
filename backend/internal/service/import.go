@@ -1402,9 +1402,13 @@ func (s *ImportService) extractWithModel(
 	}
 
 	// ---- 文本路径：按题数切块 ----
-	chunks := importing.SplitForExtraction(content, 0)
+	chunks := importing.SplitForExtractionMode(content, 0, opts.Mode)
 	if len(chunks) <= 1 {
-		out, err := call(content, answerData, 0, len(answerData))
+		text := content
+		if len(chunks) == 1 {
+			text = chunks[0].Text
+		}
+		out, err := call(text, answerData, 0, len(answerData))
 		return out, imgWarnings, err
 	}
 

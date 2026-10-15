@@ -73,3 +73,38 @@ func containsWarning(warnings []string, substr string) bool {
 	}
 	return false
 }
+
+// 子题自己的编号通常是 (1)(2)，入库时应继承母题的原卷题号。
+func TestNormalizeChildInheritsParentSourceNumber(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{
+		{TempID: "m15", QuestionType: "essay", Stem: "15. 已知函数 f(x)。"},
+		{TempID: "c1", ParentTempID: "m15", QuestionType: "essay", Stem: "(1) 求 f(0)。"},
+		{TempID: "c2", ParentTempID: "m15", QuestionType: "essay", Stem: "(2) 证明 f(x) 单调递增。"},
+	}, ModeRecord)
+	if drafts[0].SourceNumber != 15 {
+		t.Fatalf("母题题号错误，实际 %d", drafts[0].SourceNumber)
+	}
+	for i := 1; i < len(drafts); i++ {
+		if drafts[i].SourceNumber != 15 {
+			t.Fatalf("子题应继承母题题号 15，实际 %d", drafts[i].SourceNumber)
+		}
+	}
+}
+
+// 材料标题在题号之前时，仍要按原卷题号而不是数组下标。
+func TestNormalizeFindsSourceNumberAfterMaterialHeading(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{
+		{
+			TempID:       "q15",
+			QuestionType: "single_choice",
+			Stem:         "阅读诗歌，完成下面小题。 风 司马光 15．下列对这首诗的理解和赏析，不正确的一项是（ ）",
+			Options: []ai.ExtractedOption{
+				{Label: "A", Content: "甲"},
+				{Label: "B", Content: "乙"},
+			},
+		},
+	}, ModeRecord)
+	if drafts[0].SourceNumber != 15 {
+		t.Fatalf("应识别材料标题后的原卷题号 15，实际 %d", drafts[0].SourceNumber)
+	}
+}
