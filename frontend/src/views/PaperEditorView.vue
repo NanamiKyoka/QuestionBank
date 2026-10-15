@@ -15,6 +15,7 @@ import {
   type PaperVersion,
   type QuestionRef,
   type ModuleContent,
+  type PaperQuestionProjection,
 } from '@/api/paper'
 import type { QuestionBrief } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
@@ -41,6 +42,11 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import MarkdownContent from '@/components/MarkdownContent.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { useSubjectStore } from '@/stores/subject'
+import {
+  createQuestionNode,
+  loadPaperQuestionProjections,
+  mergeQuestionProjections,
+} from '@/lib/paperQuestion'
 
 /**
  * 组卷工作台。
@@ -77,6 +83,7 @@ const pickerLoading = ref(false)
 const pickerRows = ref<QuestionBrief[]>([])
 const pickerTotal = ref(0)
 const pickerSelected = ref<QuestionBrief[]>([])
+const addingQuestions = ref(false)
 const pickerQuery = reactive({
   keyword: '',
   type: '',
@@ -385,29 +392,48 @@ function appendNode(input: Omit<NodeInput, 'position'>) {
   dirty.value = true
 }
 
-function addQuestions(rows: QuestionBrief[]) {
-  if (!rows.length) return
-  for (const row of rows) {
-    const content: QuestionRef = {
-      question_id: row.id,
-      // 记录入卷时的题目修订号，后续据此判断"题目已被改动"。
-      content_revision: (questions.value[row.id]?.content_revision ?? 0) || 0,
-    }
-    appendNode({
-      id: newID(),
-      parent_id: null,
-      node_kind: 'block',
-      node_type: 'question',
-      content,
-      props: {},
-      schema_version: 1,
-      source_question_node_id: null,
-      anchor_before_node_id: null,
-    })
+function applyQuestionProjections(projections: Record<number, PaperQuestionProjection>) {
+  if (!paper.value || Object.keys(projections).length === 0) return
+  paper.value = {
+    ...paper.value,
+    questions: mergeQuestionProjections(questions.value, projections),
   }
-  pickerVisible.value = false
-  pickerSelected.value = []
-  ElMessage.success(`已加入 ${rows.length} 道题，记得保存`)
+}
+
+async function addQuestions(rows: QuestionBrief[]) {
+  if (!rows.length || addingQuestions.value) return
+  const ids = [...new Set(rows.map((row) => row.id))]
+  const duplicateIDs = ids.filter((id) => usedQuestionIds.value.has(id))
+  if (duplicateIDs.length) {
+    ElMessage.warning(`有 ${duplicateIDs.length} 道题已在试卷中，请移除后重试`)
+    return
+  }
+
+  addingQuestions.value = true
+  try {
+    const projections = await loadPaperQuestionProjections(ids)
+    const availableRows = rows.filter((row) => projections[row.id])
+    if (availableRows.length === 0) {
+      ElMessage.error('所选题目已不可用，请刷新选择题库后重试')
+      return
+    }
+
+    applyQuestionProjections(projections)
+    for (const row of availableRows) {
+      appendNode(createQuestionNode(newID(), row.id, projections[row.id].content_revision))
+    }
+
+    const skipped = rows.length - availableRows.length
+    pickerVisible.value = false
+    pickerSelected.value = []
+    scheduleAutoSave()
+    if (skipped > 0) ElMessage.warning(`已加入 ${availableRows.length} 道题，另有 ${skipped} 道题不可用`)
+    else ElMessage.success(`已加入 ${availableRows.length} 道题`)
+  } catch (error) {
+    if (!(error instanceof ApiError)) ElMessage.error('加载题目失败，请稍后重试')
+  } finally {
+    addingQuestions.value = false
+  }
 }
 
 /**
@@ -1048,6 +1074,10 @@ function loadMorePicker() {
 }
 
 function togglePick(row: QuestionBrief) {
+  if (isUsed(row)) {
+    ElMessage.warning('这道题已在试卷中')
+    return
+  }
   const index = pickerSelected.value.findIndex((r) => r.id === row.id)
   if (index >= 0) pickerSelected.value.splice(index, 1)
   else pickerSelected.value.push(row)
@@ -1210,6 +1240,7 @@ function isUsed(row: QuestionBrief): boolean {
           type="primary"
           class="mt-2 w-full"
           :disabled="pickerSelected.length === 0"
+          :loading="addingQuestions"
           @click="addQuestions(pickerSelected)"
         >
           加入选中 {{ pickerSelected.length ? `(${pickerSelected.length})` : '' }}
@@ -1377,7 +1408,7 @@ function isUsed(row: QuestionBrief): boolean {
 
       <template #footer>
         <el-button @click="pickerVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="pickerSelected.length === 0" @click="addQuestions(pickerSelected)">
+        <el-button type="primary" :disabled="pickerSelected.length === 0" :loading="addingQuestions" @click="addQuestions(pickerSelected)">
           加入试卷（{{ pickerSelected.length }}）
         </el-button>
       </template>

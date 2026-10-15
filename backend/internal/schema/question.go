@@ -81,6 +81,11 @@ type QuestionBatchDeleteRequest struct {
 	IDs []uint `json:"ids" binding:"required,min=1,max=200"`
 }
 
+// QuestionBatchReadRequest 批量读取题目详情。
+type QuestionBatchReadRequest struct {
+	IDs []uint `json:"ids" binding:"required,min=1,max=100"`
+}
+
 // QuestionBatchUpdateRequest 批量改来源。
 type QuestionBatchUpdateRequest struct {
 	IDs    []uint `json:"ids" binding:"required,min=1,max=200"`

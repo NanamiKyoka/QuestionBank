@@ -288,6 +288,7 @@ func registerQuestionRoutes(g *gin.RouterGroup, d Deps) {
 	q.Use(middleware.RequireAuth())
 	{
 		q.POST("/batch-delete", h.BatchDelete)
+		q.POST("/batch-read", h.BatchRead)
 		q.POST("/batch-source", h.BatchUpdateSource)
 		q.POST("/batch-review", h.BatchReview)
 		q.GET("/:id", h.Get)

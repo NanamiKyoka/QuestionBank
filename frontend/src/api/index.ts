@@ -167,6 +167,7 @@ export const questionApi = {
     }),
 
   get: (id: number) => get<QuestionDetail>(`/questions/${id}`),
+  batchRead: (ids: number[]) => post<QuestionDetail[]>('/questions/batch-read', { ids }),
   create: (subjectId: number, payload: QuestionCreatePayload) =>
     post<QuestionDetail>(`/subjects/${subjectId}/questions`, payload),
   update: (id: number, payload: QuestionUpdatePayload) =>

@@ -17,9 +17,10 @@
  * 一旦这里出现"打开某页/读某文件"式的能力，就必须是固定枚举而不是模型给什么跳什么。
  */
 import { onBeforeUnmount, onMounted } from 'vue'
-import { http, type ApiEnvelope } from '@/api/http'
-import type { QuestionDetail } from '@/api/types'
 import type { PaperNode, PaperQuestionProjection, QuestionRef } from '@/api/paper'
+import { loadPaperQuestionProjections } from '@/lib/paperQuestion'
+
+export { toPaperProjection } from '@/lib/paperQuestion'
 import { plainToRichDoc, richDocToPlain } from '@/lib/richdoc'
 import { registerClientTool, unregisterClientTool } from './useAiClientTools'
 import type { ClientToolResult } from './useAiClientTools'
@@ -470,47 +471,6 @@ export function diffPaperNodes(
   return changes
 }
 
-// ---- 题目内容投影 ----
-
-function emptyRichDoc(): { type: 'doc'; content: unknown[] } {
-  return { type: 'doc', content: [] }
-}
-
-/**
- * 题目详情 → 卷内投影。
- *
- * 加进来的题还没落库，服务端不会把它放进 paper.questions，
- * 界面上就会显示"题目内容不可用"。这里先在前端补一份，
- * 让**预览**就能看到题目本身，而不是等到用户点保存再刷新。
- */
-export function toPaperProjection(detail: QuestionDetail): PaperQuestionProjection {
-  return {
-    id: detail.id,
-    question_type: detail.question_type,
-    question_type_label: detail.question_type_label,
-    difficulty: detail.difficulty,
-    stem: detail.stem,
-    options: (detail.options ?? []).map((o) => ({
-      id: o.id,
-      label: o.label,
-      content: o.content ?? emptyRichDoc(),
-    })),
-    answer: {
-      kind: detail.answer.kind,
-      correct: detail.answer.correct,
-      bool_answer: detail.answer.bool_answer,
-      blanks: detail.answer.blanks,
-      reference: detail.answer.reference ?? null,
-    },
-    analysis: detail.analysis,
-    solution: detail.solution,
-    summary: detail.summary,
-    stem_text: detail.stem_text,
-    content_revision: detail.content_revision,
-    stale: false,
-  }
-}
-
 // ---- 三个执行器 ----
 
 function fail(content: string): ClientToolResult {
@@ -556,7 +516,7 @@ export function usePaperAiTools(host: PaperAiHost): void {
 
     // 内容投影尽力而为：拉不到也不该让整批改动失败，
     // 那时节点照样能加，只是预览里显示不出题目正文。
-    const projections = await loadProjections(ids)
+    const projections = await loadPaperQuestionProjections(ids)
 
     const before = host.getNodes()
     const next = [...before]
@@ -693,35 +653,5 @@ function rebuildPositions(order: PaperNode[], all: PaperNode[]): PaperNode[] {
     if (node.parent_id === null) continue
     out.push(node)
   }
-  return out
-}
-
-/**
- * 拉一道题的详情，拉不到就返回 null。
- *
- * 绕开 questionApi 是为了**不弹错误提示**：一次加题最多 50 道，
- * 走全局错误分支的话，50 个红色 toast 会把界面糊满，而这里的失败
- * （题目刚被删、无权查看）本来就该安静降级——节点照样加进卷子，
- * 只是预览里显示不出正文。服务端 Prepare 已经校验过这些 id 存在且可见。
- * 401 仍然放行：凭证失效要走统一登出流程。
- */
-async function fetchQuestionDetail(id: number): Promise<QuestionDetail | null> {
-  try {
-    const response = await http.get(`/questions/${id}`, { validateStatus: (status) => status !== 401 })
-    const envelope = response.data as ApiEnvelope<QuestionDetail>
-    return envelope.code === 0 ? (envelope.data ?? null) : null
-  } catch {
-    return null
-  }
-}
-
-async function loadProjections(ids: number[]): Promise<Record<number, PaperQuestionProjection>> {
-  const out: Record<number, PaperQuestionProjection> = {}
-  await Promise.all(
-    ids.map(async (id) => {
-      const detail = await fetchQuestionDetail(id)
-      if (detail) out[id] = toPaperProjection(detail)
-    }),
-  )
   return out
 }

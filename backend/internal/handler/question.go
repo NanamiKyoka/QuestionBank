@@ -145,6 +145,24 @@ func (h *QuestionHandler) Get(c *gin.Context) {
 	response.OK(c, res)
 }
 
+// BatchRead POST /questions/batch-read
+func (h *QuestionHandler) BatchRead(c *gin.Context) {
+	user, ok := middleware.MustUser(c)
+	if !ok {
+		return
+	}
+	var req schema.QuestionBatchReadRequest
+	if !bind(c, &req) {
+		return
+	}
+	res, err := h.questions.BatchGet(c.Request.Context(), user, req.IDs)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, res)
+}
+
 // Update PUT /questions/:id
 func (h *QuestionHandler) Update(c *gin.Context) {
 	user, ok := middleware.MustUser(c)

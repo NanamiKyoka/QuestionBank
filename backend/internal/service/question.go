@@ -180,6 +180,31 @@ func (s *QuestionService) Get(ctx context.Context, user *model.User, id uint) (*
 	return s.buildDetail(ctx, user, q)
 }
 
+// BatchGet 按请求顺序读取可见的题目详情。
+func (s *QuestionService) BatchGet(ctx context.Context, user *model.User, ids []uint) ([]schema.QuestionDetail, error) {
+	seen := make(map[uint]struct{}, len(ids))
+	out := make([]schema.QuestionDetail, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+
+		detail, err := s.Get(ctx, user, id)
+		if err != nil {
+			if apperr.Is(err, apperr.CodeNotFound) || apperr.Is(err, apperr.CodeForbidden) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, *detail)
+	}
+	return out, nil
+}
+
 func (s *QuestionService) buildDetail(ctx context.Context, user *model.User, q *model.Question) (*schema.QuestionDetail, error) {
 	tags, err := s.repos.Questions.TagsForQuestions(ctx, []uint{q.ID})
 	if err != nil {
