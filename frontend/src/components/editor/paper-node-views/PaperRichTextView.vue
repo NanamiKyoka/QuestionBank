@@ -8,7 +8,7 @@ import { NodeViewContent, NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
  * 那会让这块内容脱离 ProseMirror 的文档，光标进去就乱。
  * 这里只负责外壳：一块可点可选的排版单元。
  */
-defineProps(nodeViewProps)
+const props = defineProps(nodeViewProps)
 </script>
 
 <template>
@@ -16,6 +16,8 @@ defineProps(nodeViewProps)
     class="qm-canvas-block qm-canvas-richtext"
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="rich_text"
+    :data-node-id="props.node.attrs.nodeId"
+    data-paper-block
   >
     <NodeViewContent class="qm-canvas-richtext__body" />
   </NodeViewWrapper>

@@ -8,7 +8,7 @@ import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
  * 整块 contenteditable=false：不这样的话光标会停进这个原子节点里，
  * 出现"删一下多出一个分页符"的错觉。
  */
-defineProps(nodeViewProps)
+const props = defineProps(nodeViewProps)
 </script>
 
 <template>
@@ -16,6 +16,8 @@ defineProps(nodeViewProps)
     class="qm-canvas-pagebreak"
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="page_break"
+    :data-node-id="props.node.attrs.nodeId"
+    data-paper-block
     contenteditable="false"
   >
     <div class="qm-canvas-pagebreak__rule" />

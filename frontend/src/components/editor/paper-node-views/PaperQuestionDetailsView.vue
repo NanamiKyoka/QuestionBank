@@ -45,6 +45,8 @@ function setTitle(next: string) {
     class="qm-canvas-module"
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="question_details"
+    :data-node-id="props.node.attrs.nodeId"
+    data-paper-block
   >
     <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-module__head" contenteditable="false">

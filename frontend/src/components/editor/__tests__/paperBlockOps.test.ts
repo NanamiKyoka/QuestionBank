@@ -17,6 +17,7 @@ import {
   canMoveTopLevelBlock,
   deleteTopLevelBlock,
   moveTopLevelBlock,
+  moveTopLevelBlockToIndex,
   topLevelCount,
   topLevelIndexOf,
 } from '../paperBlockOps'
@@ -227,6 +228,20 @@ describe('moveTopLevelBlock', () => {
     const e = mount([question('q', 0, 1), node('m', 'question_details', 1)])
     expect(moveTopLevelBlock(e, posOf(e, 'm'), -1)).toBe(true)
     expect(order(e)).toEqual(['m', 'q'])
+  })
+
+  it('把块拖到指定插入位置', () => {
+    const e = mount(threeBlocks())
+    expect(moveTopLevelBlockToIndex(e, posOf(e, 'a'), 2)).toBe(true)
+    expect(order(e)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('拖到文档末尾与拖到文档开头', () => {
+    const e = mount(threeBlocks())
+    expect(moveTopLevelBlockToIndex(e, posOf(e, 'a'), 3)).toBe(true)
+    expect(order(e)).toEqual(['b', 'c', 'a'])
+    expect(moveTopLevelBlockToIndex(e, posOf(e, 'a'), 0)).toBe(true)
+    expect(order(e)).toEqual(['a', 'b', 'c'])
   })
 })
 

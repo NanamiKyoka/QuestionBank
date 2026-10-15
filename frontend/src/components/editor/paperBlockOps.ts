@@ -60,6 +60,27 @@ export function moveTopLevelBlock(editor: Editor, pos: number, delta: number): b
   return true
 }
 
+/** 把顶层块移动到指定的插入下标。下标按移动前的文档计算，范围 0..childCount。 */
+export function moveTopLevelBlockToIndex(editor: Editor, pos: number, targetIndex: number): boolean {
+  const doc = editor.state.doc
+  const fromIndex = topLevelIndexOf(editor, pos)
+  if (fromIndex < 0) return false
+  const target = Math.min(Math.max(targetIndex, 0), doc.childCount)
+  const adjusted = target > fromIndex ? target - 1 : target
+  if (adjusted === fromIndex) return true
+
+  const children: PMNode[] = []
+  doc.forEach((child) => children.push(child))
+  const moving = children[fromIndex]
+  if (!moving) return false
+  children.splice(fromIndex, 1)
+  children.splice(adjusted, 0, moving)
+
+  const rebuilt = doc.type.create(doc.attrs, children, doc.marks)
+  editor.view.dispatch(editor.state.tr.replaceWith(0, doc.content.size, rebuilt.content))
+  return true
+}
+
 /**
  * 删除一个顶层块。
  *

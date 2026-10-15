@@ -26,6 +26,7 @@ export type NodeType =
   | 'answer_item'
 
 export type PaperScope = 'personal' | 'shared'
+export type ExportContent = 'all' | 'questions' | 'answers'
 export type PaperStatus = 'draft' | 'finalized' | 'archived'
 export type ModuleScope = 'all' | 'before'
 
@@ -571,16 +572,22 @@ export const paperApi = {
   appendQuestions,
 
   // ---- 导出 ----
-  exportPaper: (id: number, format: 'docx' | 'latex', title: string) =>
+  exportPaper: (id: number, format: 'docx' | 'latex', title: string, content: ExportContent = 'all') =>
     downloadFile(
       `/papers/${id}/export`,
-      { format },
+      { format, content },
       `${title}.${format === 'docx' ? 'docx' : 'tex'}`,
     ),
-  exportVersion: (id: number, versionNo: number, format: 'docx' | 'latex', title: string) =>
+  exportVersion: (
+    id: number,
+    versionNo: number,
+    format: 'docx' | 'latex',
+    title: string,
+    content: ExportContent = 'all',
+  ) =>
     downloadFile(
       `/papers/${id}/versions/${versionNo}/export`,
-      { format },
+      { format, content },
       `${title}-v${versionNo}.${format === 'docx' ? 'docx' : 'tex'}`,
     ),
 }

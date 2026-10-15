@@ -35,8 +35,12 @@ func (h *ExportHandler) ExportPaper(c *gin.Context) {
 	if !ok {
 		return
 	}
+	content, ok := parseContent(c)
+	if !ok {
+		return
+	}
 
-	res, err := h.exports.ExportPaper(c.Request.Context(), user, id, format)
+	res, err := h.exports.ExportPaper(c.Request.Context(), user, id, format, content)
 	if err != nil {
 		response.Fail(c, err)
 		return
@@ -62,8 +66,12 @@ func (h *ExportHandler) ExportVersion(c *gin.Context) {
 	if !ok {
 		return
 	}
+	content, ok := parseContent(c)
+	if !ok {
+		return
+	}
 
-	res, err := h.exports.ExportVersion(c.Request.Context(), user, id, int(versionNo), format)
+	res, err := h.exports.ExportVersion(c.Request.Context(), user, id, int(versionNo), format, content)
 	if err != nil {
 		response.Fail(c, err)
 		return
@@ -89,6 +97,20 @@ func parseFormat(c *gin.Context) (service.ExportFormat, bool) {
 //
 // 文件名同时给出 ASCII 回退与 RFC 5987 的 UTF-8 形式：
 // 中文标题直接放进 Content-Disposition 会被部分浏览器截断或乱码。
+func parseContent(c *gin.Context) (service.ExportContent, bool) {
+	raw := c.Query("content")
+	if raw == "" {
+		raw = string(service.ContentAll)
+	}
+	content := service.ExportContent(raw)
+	if !content.Valid() {
+		response.Fail(c, apperr.New(apperr.CodeInvalidParam,
+			"content 仅支持 all、questions 或 answers").WithDetail("content=%s", raw))
+		return "", false
+	}
+	return content, true
+}
+
 func writeDownload(c *gin.Context, res *service.ExportResult) {
 	ascii := "paper." + extensionOf(res.Filename)
 	utf8Name := url.PathEscape(res.Filename)

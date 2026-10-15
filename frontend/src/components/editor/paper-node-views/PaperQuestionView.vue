@@ -81,6 +81,8 @@ function setScore(next: number | undefined) {
     class="qm-canvas-question"
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="question"
+    :data-node-id="props.node.attrs.nodeId"
+    data-paper-block
   >
     <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-question__head" contenteditable="false">

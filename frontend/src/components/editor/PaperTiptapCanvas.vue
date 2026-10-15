@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
-import type { JSONContent } from '@tiptap/core'
+import type { Editor, JSONContent } from '@tiptap/core'
 import type { PaperNode, PaperQuestionProjection } from '@/api/paper'
 import { docToNodes, nodesToDoc } from '@/lib/paperDocument'
 import { displayNumbers, topLevelOf } from '@/lib/paperView'
 import { canvasViewExtensions } from './canvasViewExtensions'
 import PaperRichToolbar from './PaperRichToolbar.vue'
 import { createPaperCanvasState, installPaperCanvasState } from './paper-node-views/canvasState'
+import { moveTopLevelBlockToIndex } from './paperBlockOps'
 
 /**
  * 组卷画布：把整份试卷当成**一份 Tiptap 文档**来编辑。
@@ -99,9 +100,11 @@ function refreshNumbers(nodes: PaperNode[]) {
 // 编辑器实例是异步就绪的（useEditor 在挂载后才给实例），
 // 因此状态同步要同时挂在"实例就绪"和"props 变化"两个时机上。
 watch(editor, (instance) => {
+  detachDragHandlers()
   if (!instance) return
   syncState()
   refreshNumbers(props.nodes)
+  attachDragHandlers(instance)
 }, { immediate: true })
 
 watch(
@@ -148,6 +151,7 @@ watch(
     }
     refreshNumbers(nodes)
   },
+  { deep: true },
 )
 
 /**
@@ -162,7 +166,106 @@ function sameNodes(a: PaperNode[], b: PaperNode[]): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-onBeforeUnmount(() => editor.value?.destroy())
+let dragDom: HTMLElement | null = null
+
+function clearDropMarkers() {
+  dragDom?.querySelectorAll('.qm-drop-before, .qm-drop-after').forEach((node) => {
+    node.classList.remove('qm-drop-before', 'qm-drop-after')
+  })
+  state.dropIndex = null
+}
+
+function indexOfNodeID(instance: Editor, nodeID: string): number {
+  let found = -1
+  instance.state.doc.forEach((node, _offset, index) => {
+    if (found < 0 && node.attrs.nodeId === nodeID) found = index
+  })
+  return found
+}
+
+function posOfNodeID(instance: Editor, nodeID: string): number {
+  let found = -1
+  instance.state.doc.forEach((node, offset) => {
+    if (found < 0 && node.attrs.nodeId === nodeID) found = offset
+  })
+  return found
+}
+
+function onDragOver(event: DragEvent) {
+  const instance = editor.value
+  if (!instance || !state.dragNodeID) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+
+  const target = (event.target as HTMLElement | null)?.closest('[data-paper-block]') as HTMLElement | null
+  clearDropMarkers()
+  if (!target) {
+    state.dropIndex = instance.state.doc.childCount
+    return
+  }
+  const nodeID = target.dataset.nodeId ?? ''
+  const index = indexOfNodeID(instance, nodeID)
+  if (index < 0) return
+  const rect = target.getBoundingClientRect()
+  const after = event.clientY > rect.top + rect.height / 2
+  state.dropIndex = index + (after ? 1 : 0)
+  target.classList.add(after ? 'qm-drop-after' : 'qm-drop-before')
+}
+
+function onDrop(event: DragEvent) {
+  const instance = editor.value
+  const sourceID = state.dragNodeID
+  const targetIndex = state.dropIndex
+  if (!instance || !sourceID || targetIndex === null) {
+    clearDropMarkers()
+    return
+  }
+  event.preventDefault()
+  const sourcePos = posOfNodeID(instance, sourceID)
+  if (sourcePos >= 0) moveTopLevelBlockToIndex(instance, sourcePos, targetIndex)
+  clearDropMarkers()
+  state.dragNodeID = null
+  instance.view.dom.classList.remove('qm-canvas--dragging')
+  document.body.classList.remove('qm-canvas-dragging-body')
+}
+
+function onDragEnd() {
+  clearDropMarkers()
+  state.dragNodeID = null
+  editor.value?.view.dom.classList.remove('qm-canvas--dragging')
+  document.body.classList.remove('qm-canvas-dragging-body')
+}
+
+function onDragLeave(event: DragEvent) {
+  const related = event.relatedTarget as Node | null
+  if (related && dragDom?.contains(related)) return
+  clearDropMarkers()
+}
+
+function attachDragHandlers(instance: Editor) {
+  dragDom = instance.view.dom
+  dragDom.addEventListener('dragover', onDragOver)
+  dragDom.addEventListener('drop', onDrop)
+  dragDom.addEventListener('dragend', onDragEnd)
+  dragDom.addEventListener('dragleave', onDragLeave)
+}
+
+function detachDragHandlers() {
+  if (!dragDom) return
+  dragDom.removeEventListener('dragover', onDragOver)
+  dragDom.removeEventListener('drop', onDrop)
+  dragDom.removeEventListener('dragend', onDragEnd)
+  dragDom.removeEventListener('dragleave', onDragLeave)
+  clearDropMarkers()
+  state.dragNodeID = null
+  document.body.classList.remove('qm-canvas-dragging-body')
+  dragDom = null
+}
+
+onBeforeUnmount(() => {
+  detachDragHandlers()
+  editor.value?.destroy()
+})
 
 /** 空卷时显示引导，而不是一片什么都没有的空白。 */
 const isEmpty = computed(() => topLevelOf(props.nodes).length === 0)
@@ -212,5 +315,26 @@ defineExpose({
 .qm-canvas__content:focus-visible {
   outline: 2px solid var(--qm-accent-text);
   outline-offset: 3px;
+}
+:deep([data-paper-block]) {
+  position: relative;
+}
+:deep(.qm-drop-before::before),
+:deep(.qm-drop-after::after) {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--qm-accent-text);
+  pointer-events: none;
+  z-index: 8;
+}
+:deep(.qm-drop-before::before) {
+  top: -4px;
+}
+:deep(.qm-drop-after::after) {
+  bottom: -4px;
 }
 </style>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { paperApi, type PaperQuestionProjection, type PaperVersion, type PaperSnapshot, type SnapshotNode } from '@/api/paper'
+import { paperApi, type ExportContent, type PaperQuestionProjection, type PaperVersion, type PaperSnapshot, type SnapshotNode } from '@/api/paper'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import RichContent from '@/components/RichContent.vue'
 
@@ -25,6 +25,11 @@ const versionNo = computed(() => Number(route.params.versionNo))
 
 const loading = ref(false)
 const exporting = ref(false)
+const exportVisible = ref(false)
+const exportForm = ref<{ format: 'docx' | 'latex'; content: ExportContent }>({
+  format: 'docx',
+  content: 'all',
+})
 const notFound = ref(false)
 const version = ref<PaperVersion | null>(null)
 const snapshot = ref<PaperSnapshot | null>(null)
@@ -60,11 +65,18 @@ function formatTime(value: string): string {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString('zh-CN')
 }
 
-async function doExport(format: 'docx' | 'latex') {
+async function doExport() {
   if (!version.value) return
   exporting.value = true
   try {
-    await paperApi.exportVersion(paperId.value, versionNo.value, format, version.value.title)
+    await paperApi.exportVersion(
+      paperId.value,
+      versionNo.value,
+      exportForm.value.format,
+      version.value.title,
+      exportForm.value.content,
+    )
+    exportVisible.value = false
   } finally {
     exporting.value = false
   }
@@ -258,15 +270,7 @@ function itemNumberOf(item: SnapshotNode): string {
           </div>
         </div>
 
-        <el-dropdown :disabled="!version || exporting" @command="(f: 'docx' | 'latex') => doExport(f)">
-          <el-button :loading="exporting">导出<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="docx">Word (.docx)</el-dropdown-item>
-              <el-dropdown-item command="latex">LaTeX 压缩包 (.zip)</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <el-button :disabled="!version" :loading="exporting" @click="exportVisible = true">导出</el-button>
         <el-button @click="backToEditor">返回编辑台</el-button>
       </div>
     </el-card>
@@ -406,5 +410,26 @@ function itemNumberOf(item: SnapshotNode): string {
         </div>
       </el-card>
     </template>
+    <el-dialog v-model="exportVisible" title="导出设置" width="480px" append-to-body>
+      <el-form label-width="90px">
+        <el-form-item label="格式">
+          <el-radio-group v-model="exportForm.format">
+            <el-radio-button value="docx">Word</el-radio-button>
+            <el-radio-button value="latex">LaTeX</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="内容">
+          <el-radio-group v-model="exportForm.content">
+            <el-radio-button value="all">题目 + 答案解析</el-radio-button>
+            <el-radio-button value="questions">仅题目</el-radio-button>
+            <el-radio-button value="answers">仅答案解析</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" @click="doExport">下载</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

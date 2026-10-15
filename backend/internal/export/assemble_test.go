@@ -278,3 +278,71 @@ func TestAnswerSpaceEmitsSingleBlock(t *testing.T) {
 		t.Fatalf("第二个块应为 AnswerSpace，实际 %T", doc.Blocks[1])
 	}
 }
+
+func TestAssembleContentModes(t *testing.T) {
+	question := questionNode("q1", 1, nil)
+	module := model.PaperNode{
+		ID:       "m1",
+		NodeKind: model.NodeKindModule,
+		NodeType: model.NodeTypeQuestionDetails,
+		Props:    jsonOf(map[string]any{"scope": "all"}),
+	}
+	moduleID := module.ID
+	answer := model.PaperNode{
+		ID:                   "a1",
+		ParentID:             &moduleID,
+		NodeKind:             model.NodeKindReference,
+		NodeType:             model.NodeTypeAnswerItem,
+		SourceQuestionNodeID: &question.ID,
+	}
+	input := Input{
+		Title:            "内容模式",
+		NumberingEnabled: true,
+		Display:          model.QuestionDisplay{ShowAnalysis: true},
+		Nodes:            []model.PaperNode{question, module, answer},
+		Questions: map[uint]QuestionView{
+			1: {
+				ID:       1,
+				Stem:     stemDoc("题干文本"),
+				Answer:   model.AnswerSpec{Kind: "reference", Reference: stemDoc("答案文本")},
+				Analysis: stemDoc("解析文本"),
+			},
+		},
+	}
+
+	questions := docText(assemblePaper(Input{
+		Title:            input.Title,
+		NumberingEnabled: input.NumberingEnabled,
+		Display:          input.Display,
+		Nodes:            input.Nodes,
+		Questions:        input.Questions,
+		Content:          ContentQuestions,
+	}))
+	if !strings.Contains(questions, "题干文本") || strings.Contains(questions, "答案文本") || strings.Contains(questions, "解析文本") {
+		t.Fatalf("仅题目模式内容不正确:\n%s", questions)
+	}
+
+	answers := docText(assemblePaper(Input{
+		Title:            input.Title,
+		NumberingEnabled: input.NumberingEnabled,
+		Display:          input.Display,
+		Nodes:            input.Nodes,
+		Questions:        input.Questions,
+		Content:          ContentAnswers,
+	}))
+	if strings.Contains(answers, "题干文本") || !strings.Contains(answers, "答案文本") || !strings.Contains(answers, "解析文本") {
+		t.Fatalf("仅答案解析模式内容不正确:\n%s", answers)
+	}
+
+	all := docText(assemblePaper(Input{
+		Title:            input.Title,
+		NumberingEnabled: input.NumberingEnabled,
+		Display:          input.Display,
+		Nodes:            input.Nodes,
+		Questions:        input.Questions,
+		Content:          ContentAll,
+	}))
+	if !strings.Contains(all, "题干文本") || !strings.Contains(all, "答案文本") || !strings.Contains(all, "解析文本") {
+		t.Fatalf("全部模式内容不正确:\n%s", all)
+	}
+}

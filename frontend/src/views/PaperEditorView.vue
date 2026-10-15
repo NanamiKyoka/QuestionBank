@@ -19,11 +19,13 @@ import {
   type PaperPlanResult,
   type PaperBlueprintResult,
   type PaperBlueprintSection,
+  type ExportContent,
 } from '@/api/paper'
 import type { KnowledgePoint, QuestionBrief, Tag } from '@/api/types'
 import RichContent from '@/components/RichContent.vue'
 import CompositionNumberingPanel from '@/components/CompositionNumberingPanel.vue'
 import CompositionTimelineSheet from '@/components/CompositionTimelineSheet.vue'
+import PaperPrintPreview from '@/components/PaperPrintPreview.vue'
 import CompositionAiChangesBar from '@/components/CompositionAiChangesBar.vue'
 import PaperTiptapCanvas from '@/components/editor/PaperTiptapCanvas.vue'
 import { emptyDoc } from '@/lib/richdoc'
@@ -203,6 +205,13 @@ const versions = ref<PaperVersion[]>([])
 const timelineVisible = ref(false)
 
 const staleQuestions = ref<number[]>([])
+const printPreviewVisible = ref(false)
+const exportVisible = ref(false)
+const exportVersionNo = ref<number | null>(null)
+const exportForm = reactive<{ format: 'docx' | 'latex'; content: ExportContent }>({
+  format: 'docx',
+  content: 'all',
+})
 
 const canEdit = computed(() => paper.value?.permissions.can_edit ?? false)
 const canFinalize = computed(() => paper.value?.permissions.can_finalize ?? false)
@@ -428,17 +437,21 @@ function renormalize() {
 }
 
 function appendNode(input: Omit<NodeInput, 'position'>) {
-  const maxPosition = topNodes.value.length
-  nodes.value.push({
+  const next = [...nodes.value]
+  const moduleIndex = next.findIndex(
+    (node) => node.parent_id === null && node.node_type === 'question_details',
+  )
+  const at = moduleIndex >= 0 ? moduleIndex : next.length
+  next.splice(at, 0, {
     ...input,
-    position: maxPosition,
+    position: at,
   } as PaperNode)
-  // 解析模块必须始终排在最后：它是卷末汇总，插在题目中间会打断题序。
-  if (answerModule.value) {
-    answerModule.value.position = topNodes.value.length
-  }
+  nodes.value = next
   renormalize()
   dirty.value = true
+  void nextTick(() => {
+    document.querySelector(`[data-node-id="${input.id}"]`)?.scrollIntoView({ block: 'nearest' })
+  })
 }
 
 function applyQuestionProjections(projections: Record<number, PaperQuestionProjection>) {
@@ -557,10 +570,9 @@ function toggleAnswerModule() {
     )
   } else {
     const content: ModuleContent = { scope: 'all' }
-    nodes.value.push({
+    appendNode({
       id: newID(),
       parent_id: null,
-      position: topNodes.value.length,
       node_kind: 'module',
       node_type: 'question_details',
       content,
@@ -570,8 +582,6 @@ function toggleAnswerModule() {
       anchor_before_node_id: null,
     })
   }
-  renormalize()
-  dirty.value = true
 }
 
 // ---- 画布 ----
@@ -1068,19 +1078,32 @@ function openVersion(versionNo: number) {
   void router.push({ name: 'paper-version', params: { id: paperId.value, versionNo } })
 }
 
-async function exportPaper(format: 'docx' | 'latex', versionNo?: number) {
+function openExport(versionNo: number | null = null) {
   if (!paper.value) return
-  if (dirty.value && !versionNo) {
+  if (dirty.value && versionNo === null) {
     ElMessage.warning('请先保存再导出')
     return
   }
+  exportVersionNo.value = versionNo
+  exportVisible.value = true
+}
+
+async function confirmExport() {
+  if (!paper.value) return
   exporting.value = true
   try {
-    if (versionNo) {
-      await paperApi.exportVersion(paperId.value, versionNo, format, paper.value.title)
+    if (exportVersionNo.value !== null) {
+      await paperApi.exportVersion(
+        paperId.value,
+        exportVersionNo.value,
+        exportForm.format,
+        paper.value.title,
+        exportForm.content,
+      )
     } else {
-      await paperApi.exportPaper(paperId.value, format, paper.value.title)
+      await paperApi.exportPaper(paperId.value, exportForm.format, paper.value.title, exportForm.content)
     }
+    exportVisible.value = false
     ElMessage.success('已开始下载')
   } finally {
     exporting.value = false
@@ -1366,17 +1389,8 @@ function isUsed(row: QuestionBrief): boolean {
           <el-button @click="openSettings">设置</el-button>
           <el-button @click="openVersions">版本</el-button>
           <el-button @click="timelineVisible = true">时间线</el-button>
-          <el-dropdown :disabled="exporting" @command="(f: 'docx' | 'latex') => exportPaper(f)">
-            <el-button :loading="exporting">
-              导出<el-icon class="ml-1"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="docx">Word (.docx)</el-dropdown-item>
-                <el-dropdown-item command="latex">LaTeX 压缩包 (.zip)</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <el-button @click="printPreviewVisible = true">版式预览</el-button>
+          <el-button :loading="exporting" @click="openExport()">导出</el-button>
           <el-button v-if="canFinalize" @click="finalize">定稿</el-button>
         </div>
       </div>
@@ -1577,15 +1591,7 @@ function isUsed(row: QuestionBrief): boolean {
             <span class="num font-medium">v{{ version.version_no }}</span>
             <span class="ml-2 text-xs text-ink-subtle">{{ version.question_count }} 题</span>
           </div>
-          <el-dropdown @command="(f: 'docx' | 'latex') => exportPaper(f, version.version_no)">
-            <el-button text size="small">导出</el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="docx">Word</el-dropdown-item>
-                <el-dropdown-item command="latex">LaTeX</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <el-button text size="small" @click="openExport(version.version_no)">导出</el-button>
           <el-button text size="small" type="primary" @click="openVersion(version.version_no)">
             查看
           </el-button>
@@ -1594,6 +1600,41 @@ function isUsed(row: QuestionBrief): boolean {
         <div class="mt-1 text-xs text-ink-subtle">{{ new Date(version.created_at).toLocaleString('zh-CN') }}</div>
       </div>
     </el-drawer>
+
+    <el-dialog v-model="exportVisible" title="导出设置" width="480px" append-to-body>
+      <el-form label-width="90px">
+        <el-form-item label="格式">
+          <el-radio-group v-model="exportForm.format">
+            <el-radio-button value="docx">Word</el-radio-button>
+            <el-radio-button value="latex">LaTeX</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="内容">
+          <el-radio-group v-model="exportForm.content">
+            <el-radio-button value="all">题目 + 答案解析</el-radio-button>
+            <el-radio-button value="questions">仅题目</el-radio-button>
+            <el-radio-button value="answers">仅答案解析</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" @click="confirmExport">下载</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="printPreviewVisible" title="版式预览" width="92%" top="2vh" append-to-body>
+      <div class="max-h-[84vh] overflow-auto">
+        <PaperPrintPreview
+          :title="paper?.title ?? ''"
+          :nodes="nodes"
+          :questions="questions"
+          :numbering-enabled="numberingEnabled"
+          :scoring-enabled="scoringEnabled"
+          :question-display="settingsForm.question_display"
+        />
+      </div>
+    </el-dialog>
 
     <!-- 操作时间线 -->
     <CompositionTimelineSheet

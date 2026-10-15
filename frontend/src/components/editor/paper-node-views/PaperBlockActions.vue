@@ -28,8 +28,29 @@ const pos = computed(() => {
   return typeof raw === 'number' ? raw : -1
 })
 
+const nodeId = computed(() => {
+  const raw = props.node.attrs.nodeId
+  return typeof raw === 'string' ? raw : ''
+})
 const canMoveUp = computed(() => canMoveTopLevelBlock(props.editor, pos.value, -1))
 const canMoveDown = computed(() => canMoveTopLevelBlock(props.editor, pos.value, 1))
+
+function startDrag(event: DragEvent) {
+  if (!state.value.canEdit || !nodeId.value) return
+  state.value.dragNodeID = nodeId.value
+  state.value.dropIndex = null
+  event.dataTransfer?.setData('text/plain', nodeId.value)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+  props.editor.view.dom.classList.add('qm-canvas--dragging')
+  document.body.classList.add('qm-canvas-dragging-body')
+}
+
+function endDrag() {
+  state.value.dragNodeID = null
+  state.value.dropIndex = null
+  props.editor.view.dom.classList.remove('qm-canvas--dragging')
+  document.body.classList.remove('qm-canvas-dragging-body')
+}
 
 function move(delta: number) {
   if (!state.value.canEdit) return
@@ -48,6 +69,17 @@ function remove() {
 
 <template>
   <div v-if="state.canEdit" class="qm-block-actions" contenteditable="false">
+    <button
+      type="button"
+      class="qm-drag-handle"
+      draggable="true"
+      title="拖动排序"
+      aria-label="拖动排序"
+      @dragstart.stop="startDrag"
+      @dragend.stop="endDrag"
+    >
+      <el-icon><Rank /></el-icon>
+    </button>
     <el-button
       text
       size="small"
@@ -75,6 +107,25 @@ function remove() {
 </template>
 
 <style scoped>
+.qm-drag-handle {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  cursor: grab;
+}
+.qm-drag-handle:active {
+  cursor: grabbing;
+}
+.qm-drag-handle:hover {
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+}
 .qm-block-actions {
   position: absolute;
   top: 0.25rem;

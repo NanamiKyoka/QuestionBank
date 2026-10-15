@@ -44,6 +44,8 @@ function setStyle(next: string) {
     class="qm-canvas-block qm-canvas-answerspace"
     :class="selected ? 'qm-canvas-block--selected' : ''"
     data-qm-node="answer_space"
+    :data-node-id="props.node.attrs.nodeId"
+    data-paper-block
   >
     <PaperBlockActions v-bind="props" />
     <div class="qm-canvas-answerspace__controls" contenteditable="false">

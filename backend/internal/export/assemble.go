@@ -11,6 +11,18 @@ import (
 	"github.com/NanamiKyoka/questionmind/internal/model"
 )
 
+type ContentMode string
+
+const (
+	ContentAll       ContentMode = "all"
+	ContentQuestions ContentMode = "questions"
+	ContentAnswers   ContentMode = "answers"
+)
+
+func (m ContentMode) Valid() bool {
+	return m == ContentAll || m == ContentQuestions || m == ContentAnswers
+}
+
 // QuestionView 导出时需要的题目内容投影。
 type QuestionView struct {
 	ID        uint
@@ -39,6 +51,8 @@ type Input struct {
 	Questions map[uint]QuestionView
 	// TotalScore 分值合计。
 	TotalScore float64
+	// Content 控制导出题目、答案或两者。
+	Content ContentMode
 }
 
 // Assemble 把组卷数据组装为可导出文档。
@@ -46,6 +60,9 @@ type Input struct {
 // 排版规则全部集中在这里，DOCX 与 LaTeX 两个渲染器都消费同一份 IR，
 // 因此两种格式的题号、分值、选项排布不会出现差异。
 func Assemble(in Input, loader ImageLoader) *Document {
+	if in.Content == "" {
+		in.Content = ContentAll
+	}
 	doc := &Document{
 		Title:  in.Title,
 		Meta:   map[string]string{"title": in.Title, "subject": in.SubjectName},
@@ -98,6 +115,11 @@ func Assemble(in Input, loader ImageLoader) *Document {
 		}
 	}
 
+	if in.Content == ContentAnswers {
+		appendAnswers(doc, in, roots, children, loader)
+		return doc
+	}
+
 	counter := newCounter()
 	for i := range roots {
 		root := &roots[i]
@@ -122,15 +144,20 @@ func Assemble(in Input, loader ImageLoader) *Document {
 			doc.Blocks = append(doc.Blocks, answerSpaceOf(root))
 
 		case model.NodeTypeQuestion:
-			blocks := assembleQuestion(root, in, loader, counter)
+			blocks := assembleQuestion(root, in, loader, counter, in.Content == ContentAll)
 			doc.Blocks = append(doc.Blocks, blocks...)
 
 			// scope=before：解析紧跟本题。
-			if item, ok := anchored[root.ID]; ok {
-				doc.Blocks = append(doc.Blocks, assembleAnswerItem(&item, in, loader, sourceQuestionNumber(&item, in, counter.current))...)
+			if in.Content == ContentAll {
+				if item, ok := anchored[root.ID]; ok {
+					doc.Blocks = append(doc.Blocks, assembleAnswerItem(&item, in, loader, sourceQuestionNumber(&item, in, counter.current))...)
+				}
 			}
 
 		case model.NodeTypeQuestionDetails:
+			if in.Content != ContentAll {
+				continue
+			}
 			// scope=all：整卷汇总，全部排在模块所在位置。
 			items := children[root.ID]
 			allAnchored := len(items) > 0
@@ -296,7 +323,7 @@ func sourceQuestionNumber(node *model.PaperNode, in Input, fallback int) string 
 }
 
 // assembleQuestion 渲染一道题。
-func assembleQuestion(node *model.PaperNode, in Input, loader ImageLoader, c *counter) []Block {
+func assembleQuestion(node *model.PaperNode, in Input, loader ImageLoader, c *counter, includeExtras bool) []Block {
 	var ref domain.QuestionRef
 	if !node.Content.IsEmpty() {
 		_ = node.Content.Into(&ref)
@@ -338,8 +365,99 @@ func assembleQuestion(node *model.PaperNode, in Input, loader ImageLoader, c *co
 	}
 
 	// 按显示开关附上解析、思路、小结。
-	blocks = append(blocks, assembleExtras(qv, in.Display, loader)...)
+	if includeExtras {
+		blocks = append(blocks, assembleExtras(qv, in.Display, loader)...)
+	}
 	return blocks
+}
+
+// appendAnswers 只输出每题答案、解析、思路与小结。
+func appendAnswers(
+	doc *Document,
+	in Input,
+	roots []model.PaperNode,
+	children map[string][]model.PaperNode,
+	loader ImageLoader,
+) {
+	itemsBySource := make(map[string]model.PaperNode)
+	for _, root := range roots {
+		if root.NodeType != model.NodeTypeQuestionDetails {
+			continue
+		}
+		for _, child := range children[root.ID] {
+			if child.SourceQuestionNodeID != nil {
+				itemsBySource[*child.SourceQuestionNodeID] = child
+			}
+		}
+	}
+
+	blocks := make([]Block, 0)
+	counter := newCounter()
+	for i := range roots {
+		root := &roots[i]
+		if root.NodeType != model.NodeTypeQuestion {
+			continue
+		}
+		counter.current++
+		number := ""
+		if in.NumberingEnabled {
+			number = questionNumber(root.Props, counter.current)
+		}
+		qv, ok := questionViewOf(root, in)
+		if !ok {
+			continue
+		}
+		if item, ok := itemsBySource[root.ID]; ok {
+			blocks = append(blocks, assembleAnswerItem(&item, in, loader, number)...)
+		} else {
+			blocks = append(blocks, assembleSyntheticAnswer(qv, number, loader)...)
+		}
+		blocks = append(blocks, assembleExtraFields(qv, loader)...)
+	}
+	if len(blocks) == 0 {
+		return
+	}
+	doc.Blocks = append(doc.Blocks, &Heading{
+		Level: 2,
+		Runs:  []Inline{&Text{Value: "参考答案与解析", Bold: true}},
+		Align: AlignCenter,
+	})
+	doc.Blocks = append(doc.Blocks, blocks...)
+}
+
+func questionViewOf(node *model.PaperNode, in Input) (QuestionView, bool) {
+	var ref domain.QuestionRef
+	if node.Content.IsEmpty() || node.Content.Into(&ref) != nil {
+		return QuestionView{}, false
+	}
+	qv, ok := in.Questions[ref.QuestionID]
+	return qv, ok
+}
+
+func assembleSyntheticAnswer(qv QuestionView, number string, loader ImageLoader) []Block {
+	prefix := "【答案】"
+	if number != "" {
+		prefix = fmt.Sprintf("%s．【答案】", number)
+	}
+	out := make([]Block, 0, 2)
+	if answer := AnswerInlines(qv); len(answer) > 0 {
+		out = append(out, &Paragraph{Runs: append([]Inline{&Text{Value: prefix, Bold: true}}, answer...)})
+	}
+	if !qv.Analysis.IsEmpty() {
+		out = append(out, prependRuns(RichDocBlocks(qv.Analysis, loader), []Inline{&Text{Value: "【解析】", Bold: true}})...)
+	}
+	return out
+}
+
+func assembleExtraFields(qv QuestionView, loader ImageLoader) []Block {
+	var out []Block
+	if !qv.Solution.IsEmpty() {
+		out = append(out, prependRuns(RichDocBlocks(qv.Solution, loader), []Inline{&Text{Value: "【思路】", Bold: true}})...)
+	}
+	if !qv.Summary.IsEmpty() {
+		out = append(out, prependRuns(RichDocBlocks(qv.Summary, loader), []Inline{&Text{Value: "【小结】", Bold: true}})...)
+	}
+	return out
 }
 
 // assembleOptions 渲染选项。

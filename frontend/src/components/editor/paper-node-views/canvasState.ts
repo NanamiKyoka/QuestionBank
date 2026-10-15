@@ -33,6 +33,8 @@ export interface PaperCanvasState {
    * 占位符：留空表示"交给自动编号"，占位符就该显示自动编出来的那个号。
    */
   numbers: Map<string, string>
+  dragNodeID: string | null
+  dropIndex: number | null
 }
 
 /** storage 上的键名。取一个不太可能撞车的名字。 */
@@ -46,6 +48,8 @@ export function createPaperCanvasState(): PaperCanvasState {
     numberingEnabled: true,
     scoringEnabled: false,
     numbers: new Map<string, string>(),
+    dragNodeID: null,
+    dropIndex: null,
   })
 }
 
@@ -74,6 +78,8 @@ const FALLBACK: PaperCanvasState = {
   numberingEnabled: true,
   scoringEnabled: false,
   numbers: new Map<string, string>(),
+  dragNodeID: null,
+  dropIndex: null,
 }
 
 /**

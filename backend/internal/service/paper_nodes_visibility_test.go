@@ -249,7 +249,7 @@ func TestPersonalPaperReadPathsAreOwnerOnly(t *testing.T) {
 	if _, err := fx.papers.ListEvents(ctx, fx.peer, paper.ID, 30, 0); !apperr.Is(err, apperr.CodeNotFound) {
 		t.Fatalf("他人读取操作流水应报 404，实际: %v", err)
 	}
-	if _, err := exporter.ExportVersion(ctx, fx.peer, paper.ID, version.VersionNo, FormatLaTeX); !apperr.Is(err, apperr.CodeNotFound) {
+	if _, err := exporter.ExportVersion(ctx, fx.peer, paper.ID, version.VersionNo, FormatLaTeX, ContentAll); !apperr.Is(err, apperr.CodeNotFound) {
 		t.Fatalf("他人导出版本应报 404，实际: %v", err)
 	}
 	// 试卷详情本身同样不给看（GetPaper 早就有这道校验，顺带回归）。
@@ -279,7 +279,7 @@ func TestPersonalPaperReadPathsAreOwnerOnly(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatal("操作流水不应为空（创建、定稿都会留痕）")
 	}
-	if _, err := exporter.ExportVersion(ctx, fx.editor, paper.ID, version.VersionNo, FormatLaTeX); err != nil {
+	if _, err := exporter.ExportVersion(ctx, fx.editor, paper.ID, version.VersionNo, FormatLaTeX, ContentAll); err != nil {
 		t.Fatalf("本人导出版本失败: %v", err)
 	}
 

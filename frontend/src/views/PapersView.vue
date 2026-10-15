@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/http'
-import { paperApi, type PaperBrief, type PaperFolder, type PaperScope, type PaperStatus } from '@/api/paper'
+import { paperApi, type ExportContent, type PaperBrief, type PaperFolder, type PaperScope, type PaperStatus } from '@/api/paper'
 import { useSubjectStore } from '@/stores/subject'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
@@ -17,6 +17,12 @@ const rows = ref<PaperBrief[]>([])
 const total = ref(0)
 const folders = ref<PaperFolder[]>([])
 const collapsedFolders = ref(new Set<number>())
+const exportVisible = ref(false)
+const exportTarget = ref<PaperBrief | null>(null)
+const exportForm = reactive<{ format: 'docx' | 'latex'; content: ExportContent }>({
+  format: 'docx',
+  content: 'all',
+})
 
 const query = reactive({
   keyword: '',
@@ -339,9 +345,17 @@ async function duplicate(row: PaperBrief) {
   }
 }
 
-async function exportPaper(row: PaperBrief, format: 'docx' | 'latex') {
+function openExport(row: PaperBrief) {
+  exportTarget.value = row
+  exportVisible.value = true
+}
+
+async function confirmExport() {
+  const row = exportTarget.value
+  if (!row) return
   try {
-    await paperApi.exportPaper(row.id, format, row.title)
+    await paperApi.exportPaper(row.id, exportForm.format, row.title, exportForm.content)
+    exportVisible.value = false
     ElMessage.success('已开始下载')
   } catch {
     // 错误提示由接口层处理
@@ -552,15 +566,7 @@ function formatTime(value: string): string {
                   编辑
                 </el-button>
                 <el-button text size="small" @click="duplicate(row)">复制</el-button>
-                <el-dropdown trigger="click" @command="(f: 'docx' | 'latex') => exportPaper(row, f)">
-                  <el-button text size="small">导出</el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="docx">导出 Word</el-dropdown-item>
-                      <el-dropdown-item command="latex">导出 LaTeX 压缩包</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
+                <el-button text size="small" @click="openExport(row)">导出</el-button>
                 <el-button
                   v-if="row.status === 'draft'"
                   text
@@ -675,6 +681,28 @@ function formatTime(value: string): string {
       <template #footer>
         <el-button @click="moveVisible = false">取消</el-button>
         <el-button type="primary" @click="submitMoveFolder">移动</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="exportVisible" title="导出设置" width="480px" append-to-body>
+      <el-form label-width="90px">
+        <el-form-item label="格式">
+          <el-radio-group v-model="exportForm.format">
+            <el-radio-button value="docx">Word</el-radio-button>
+            <el-radio-button value="latex">LaTeX</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="内容">
+          <el-radio-group v-model="exportForm.content">
+            <el-radio-button value="all">题目 + 答案解析</el-radio-button>
+            <el-radio-button value="questions">仅题目</el-radio-button>
+            <el-radio-button value="answers">仅答案解析</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmExport">下载</el-button>
       </template>
     </el-dialog>
     </div>

@@ -40,6 +40,8 @@ function setLevel(next: number) {
     class="qm-canvas-block qm-canvas-heading"
     :class="[`qm-canvas-heading--h${level}`, selected ? 'qm-canvas-block--selected' : '']"
     data-qm-node="heading"
+    :data-node-id="props.node.attrs.nodeId"
+    data-paper-block
     :data-level="level"
   >
     <PaperBlockActions v-bind="props" />

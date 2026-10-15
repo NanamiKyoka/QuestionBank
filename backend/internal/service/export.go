@@ -23,6 +23,14 @@ const (
 	FormatLaTeX ExportFormat = "latex"
 )
 
+type ExportContent = export.ContentMode
+
+const (
+	ContentAll       ExportContent = export.ContentAll
+	ContentQuestions ExportContent = export.ContentQuestions
+	ContentAnswers   ExportContent = export.ContentAnswers
+)
+
 // Valid 校验格式。
 func (f ExportFormat) Valid() bool {
 	return f == FormatDocx || f == FormatLaTeX
@@ -55,10 +63,16 @@ func NewExportService(repos *Repos, loader export.ImageLoader) *ExportService {
 }
 
 // ExportPaper 导出当前试卷。
-func (s *ExportService) ExportPaper(ctx context.Context, user *model.User, paperID uint, format ExportFormat) (*ExportResult, error) {
+func (s *ExportService) ExportPaper(ctx context.Context, user *model.User, paperID uint, format ExportFormat, content ExportContent) (*ExportResult, error) {
 	if !format.Valid() {
 		return nil, apperr.New(apperr.CodeInvalidParam, "不支持的导出格式").
 			WithDetail("format=%s", format)
+	}
+	if content == "" {
+		content = ContentAll
+	}
+	if !content.Valid() {
+		return nil, apperr.New(apperr.CodeInvalidParam, "不支持的导出内容")
 	}
 
 	paper, err := s.repos.Papers.Get(ctx, paperID)
@@ -100,6 +114,7 @@ func (s *ExportService) ExportPaper(ctx context.Context, user *model.User, paper
 		Nodes:            nodes,
 		Questions:        views,
 		TotalScore:       paper.TotalScore,
+		Content:          content,
 	}, s.loader)
 
 	return s.render(doc, paper.Title, format)
@@ -110,9 +125,15 @@ func (s *ExportService) ExportPaper(ctx context.Context, user *model.User, paper
 // 关键点：完全基于快照渲染，不查当前的题库内容。
 // 这样即使题目后来被改动或删除，导出的历史版本仍与当初定稿时一致——
 // 这正是"定稿"这个动作的意义。
-func (s *ExportService) ExportVersion(ctx context.Context, user *model.User, paperID uint, versionNo int, format ExportFormat) (*ExportResult, error) {
+func (s *ExportService) ExportVersion(ctx context.Context, user *model.User, paperID uint, versionNo int, format ExportFormat, content ExportContent) (*ExportResult, error) {
 	if !format.Valid() {
 		return nil, apperr.New(apperr.CodeInvalidParam, "不支持的导出格式")
+	}
+	if content == "" {
+		content = ContentAll
+	}
+	if !content.Valid() {
+		return nil, apperr.New(apperr.CodeInvalidParam, "不支持的导出内容")
 	}
 
 	paper, err := s.repos.Papers.Get(ctx, paperID)
@@ -170,6 +191,7 @@ func (s *ExportService) ExportVersion(ctx context.Context, user *model.User, pap
 		Nodes:            snap.Nodes,
 		Questions:        views,
 		TotalScore:       snap.TotalScore,
+		Content:          content,
 	}, s.loader)
 
 	name := fmt.Sprintf("%s-v%d", title, versionNo)
