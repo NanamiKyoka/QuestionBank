@@ -1409,6 +1409,9 @@ func (s *ImportService) extractWithModel(
 			text = chunks[0].Text
 		}
 		out, err := call(text, answerData, 0, len(answerData))
+		if len(chunks) == 1 {
+			assignSourceNumbers(chunks[0], out)
+		}
 		return out, imgWarnings, err
 	}
 
@@ -1429,6 +1432,9 @@ func (s *ImportService) extractWithModel(
 			}
 			defer func() { <-sem }()
 			results[i], errs[i] = call(chunks[i].Text, answerData, 0, len(answerData))
+			if errs[i] == nil {
+				assignSourceNumbers(chunks[i], results[i])
+			}
 		}(i)
 	}
 	wg.Wait()
@@ -1459,6 +1465,28 @@ func (s *ImportService) extractWithModel(
 		merged = append(merged, reidentify(len(merged), results[i])...)
 	}
 	return merged, warnings, nil
+}
+
+func assignSourceNumbers(chunk importing.Chunk, questions []ai.ExtractedQuestion) {
+	if chunk.QuestionFrom <= 0 || chunk.QuestionTo < chunk.QuestionFrom {
+		return
+	}
+	rootIndexes := make([]int, 0, len(questions))
+	for i := range questions {
+		if questions[i].ParentTempID == "" {
+			rootIndexes = append(rootIndexes, i)
+		}
+	}
+	if len(rootIndexes) == 0 {
+		return
+	}
+	for i, qIndex := range rootIndexes {
+		n := chunk.QuestionFrom + i
+		if n > chunk.QuestionTo {
+			n = chunk.QuestionTo
+		}
+		questions[qIndex].SourceNumber = n
+	}
 }
 
 // pageCall 一次页图调用的签名。

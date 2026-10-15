@@ -123,3 +123,15 @@ func TestNormalizeRefinesSentenceBreakQuestion(t *testing.T) {
 		t.Fatalf("应提示题型已修正，实际 %v", drafts[0].Warnings)
 	}
 }
+
+func TestNormalizePrefersExplicitSourceNumber(t *testing.T) {
+	drafts := Normalize([]ai.ExtractedQuestion{{
+		TempID:       "q15",
+		SourceNumber: 15,
+		QuestionType: "essay",
+		Stem:         "阅读诗歌，完成下面小题。",
+	}}, ModeRecord)
+	if drafts[0].SourceNumber != 15 {
+		t.Fatalf("应优先使用分块回填的题号 15，实际 %d", drafts[0].SourceNumber)
+	}
+}

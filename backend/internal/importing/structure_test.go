@@ -80,6 +80,9 @@ func TestSplitStartsNewChunkAtReadingGroup(t *testing.T) {
 		if !strings.Contains(c.Text, "（本段材料组：") {
 			t.Fatalf("第 %d 块没有把材料组传给模型: %q", i, c.Text)
 		}
+		if c.QuestionFrom == 0 || c.QuestionTo < c.QuestionFrom {
+			t.Fatalf("第 %d 块缺少原卷题号范围: %+v", i, c)
+		}
 	}
 }
 

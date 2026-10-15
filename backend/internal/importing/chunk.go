@@ -86,6 +86,9 @@ type Chunk struct {
 	Heading string
 	// Group 是本段所属的阅读/材料组标题；空串表示没有。
 	Group string
+	// QuestionFrom / QuestionTo 是本段覆盖的原卷题号区间；0 表示未知。
+	QuestionFrom int
+	QuestionTo   int
 	// Label 面向用户的短描述，用于失败时说明"缺了哪一段"。
 	Label string
 }
@@ -124,10 +127,12 @@ func splitForExtraction(content string, targetChunks int) []Chunk {
 
 		// heading 是当前看到的大题标题；chunkHeading 是**本块起点处**
 		// 生效的那个（块中途换标题是常事，但块头那一条才是上下文）。
-		heading      string
-		chunkHeading string
-		group        string
-		chunkGroup   string
+		heading         string
+		chunkHeading    string
+		group           string
+		chunkGroup      string
+		curQuestionFrom int
+		curQuestionTo   int
 	)
 
 	flush := func() {
@@ -147,9 +152,14 @@ func splitForExtraction(content string, targetChunks int) []Chunk {
 		if chunkGroup != "" && chunkGroup != chunkHeading {
 			text = "（本段材料组：" + chunkGroup + "）\n" + text
 		}
-		out = append(out, Chunk{Text: text, Heading: chunkHeading, Group: chunkGroup, Label: DescribeChunk(body)})
+		out = append(out, Chunk{
+			Text: text, Heading: chunkHeading, Group: chunkGroup,
+			QuestionFrom: curQuestionFrom, QuestionTo: curQuestionTo,
+			Label: DescribeChunk(body),
+		})
 		chunkHeading = ""
 		chunkGroup = ""
+		curQuestionFrom, curQuestionTo = 0, 0
 	}
 
 	for _, line := range lines {
@@ -187,6 +197,12 @@ func splitForExtraction(content string, targetChunks int) []Chunk {
 		}
 		if startsQuestion {
 			curQ++
+			if n, _, ok := splitLeadingNumber(line); ok {
+				if curQuestionFrom == 0 {
+					curQuestionFrom = n
+				}
+				curQuestionTo = n
+			}
 		}
 
 		cur = append(cur, line)

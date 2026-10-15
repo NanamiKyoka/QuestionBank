@@ -138,7 +138,10 @@ func linkParents(drafts []Draft) {
 func normalizeOne(q *ai.ExtractedQuestion, index int, mode Mode) Draft {
 	// 题号优先从题干开头的「3.」里取：模型经常原样保留原卷编号，
 	// 取不到（下标是最常见的实际情况）才退回数组下标。
-	sourceNumber := captureSourceNumber(q.Stem)
+	sourceNumber := q.SourceNumber
+	if sourceNumber == 0 {
+		sourceNumber = captureSourceNumber(q.Stem)
+	}
 	if sourceNumber == 0 {
 		sourceNumber = index
 	}

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/NanamiKyoka/questionmind/internal/ai"
+	"github.com/NanamiKyoka/questionmind/internal/importing"
 )
 
 // 模型在每一块里都从 1 开始编号。不改的话，入库时 draftDepths
@@ -63,5 +64,20 @@ func TestReidentifyIgnoresDuplicateTempIDs(t *testing.T) {
 	})
 	if got[0].TempID == got[1].TempID {
 		t.Fatalf("重复编号必须被拆开，实际都是 %q", got[0].TempID)
+	}
+}
+
+func TestAssignSourceNumbersUsesChunkRange(t *testing.T) {
+	got := []ai.ExtractedQuestion{
+		{TempID: "m15", Stem: "阅读诗歌，完成下面小题。"},
+		{TempID: "c1", ParentTempID: "m15", Stem: "(1) 小题"},
+		{TempID: "m16", Stem: "有一首歌这样唱道"},
+	}
+	assignSourceNumbers(importing.Chunk{QuestionFrom: 15, QuestionTo: 16}, got)
+	if got[0].SourceNumber != 15 || got[2].SourceNumber != 16 {
+		t.Fatalf("应按分块范围回填题号，实际 %d / %d", got[0].SourceNumber, got[2].SourceNumber)
+	}
+	if got[1].SourceNumber != 0 {
+		t.Fatalf("子题不应单独占用题号，实际 %d", got[1].SourceNumber)
 	}
 }

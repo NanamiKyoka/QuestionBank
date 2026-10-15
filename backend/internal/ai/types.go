@@ -119,6 +119,7 @@ type ExtractedQuestion struct {
 	ParentTempID string `json:"parent_temp_id,omitempty"`
 
 	QuestionType string            `json:"question_type,omitempty"`
+	SourceNumber int               `json:"source_number,omitempty"`
 	Stem         string            `json:"stem"`
 	Options      []ExtractedOption `json:"options,omitempty"`
 	Answer       string            `json:"answer,omitempty"`
